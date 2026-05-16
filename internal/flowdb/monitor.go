@@ -4,6 +4,7 @@ import (
 	"crypto/sha1"
 	"database/sql"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"strings"
 )
@@ -215,6 +216,47 @@ func UpdateNotificationStatus(db *sql.DB, id, status string) error {
 	}
 	_, err := db.Exec(`UPDATE monitor_notifications SET status = ? WHERE id = ?`, status, id)
 	return err
+}
+
+func SetNotificationState(db *sql.DB, id, status string) error {
+	id = strings.TrimSpace(id)
+	if id == "" {
+		return fmt.Errorf("notification id is required")
+	}
+	status = normalizeMonitorPart(status)
+	switch status {
+	case "unread", "read", "dismissed", "actioned":
+	default:
+		return fmt.Errorf("invalid notification status %q", status)
+	}
+	_, err := db.Exec(
+		`INSERT INTO monitor_notification_states (id, status, updated_at)
+		 VALUES (?, ?, ?)
+		 ON CONFLICT(id) DO UPDATE SET status = excluded.status, updated_at = excluded.updated_at`,
+		id, status, NowISO(),
+	)
+	return err
+}
+
+func NotificationStateMap(db *sql.DB, ids []string) (map[string]string, error) {
+	out := map[string]string{}
+	for _, id := range ids {
+		id = strings.TrimSpace(id)
+		if id == "" {
+			continue
+		}
+		var status string
+		err := db.QueryRow(`SELECT status FROM monitor_notification_states WHERE id = ?`, id).Scan(&status)
+		if err == nil {
+			out[id] = status
+			continue
+		}
+		if errors.Is(err, sql.ErrNoRows) {
+			continue
+		}
+		return out, err
+	}
+	return out, nil
 }
 
 func UpdateMonitorEventStatus(db *sql.DB, id, status string) error {

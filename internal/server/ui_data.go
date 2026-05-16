@@ -490,10 +490,21 @@ func (s *Server) uiMonitor(agents []uiAgent) uiMonitor {
 		})
 	}
 	agentNotifications := agentAttentionNotifications(agents)
+	agentNotificationIDs := make([]string, 0, len(agentNotifications))
+	for _, notification := range agentNotifications {
+		agentNotificationIDs = append(agentNotificationIDs, notification.ID)
+	}
+	agentNotificationStates, _ := flowdb.NotificationStateMap(s.cfg.DB, agentNotificationIDs)
 	uiNotifications := make([]uiMonitorNotification, 0, len(notifications)+len(agentNotifications))
 	unread := 0
 	approvals := 0
 	for _, notification := range agentNotifications {
+		if state := agentNotificationStates[notification.ID]; state != "" {
+			if state == "dismissed" {
+				continue
+			}
+			notification.Status = state
+		}
 		if notification.Status == "unread" {
 			unread++
 		}
@@ -814,7 +825,7 @@ func (s *Server) sessionInsightsForTask(tv TaskView, provider string, transcript
 	}
 	if s.terminals != nil {
 		if terminalText, ok := s.terminals.scrollbackText(tv.Slug, 64*1024); ok {
-			if kind, question := attentionFromText(terminalText); kind != "" {
+			if kind, question := terminalAttentionFromText(terminalText); kind != "" {
 				insights.AttentionKind = kind
 				insights.Question = question
 				insights.AskedQuestion = true
@@ -826,6 +837,10 @@ func (s *Server) sessionInsightsForTask(tv TaskView, provider string, transcript
 						insights.LastAction = "asked: " + truncateText(question, 120)
 					}
 				}
+			} else if strings.TrimSpace(terminalText) != "" {
+				insights.AttentionKind = ""
+				insights.Question = ""
+				insights.AskedQuestion = false
 			}
 		}
 	}
@@ -911,19 +926,7 @@ func attentionFromText(text string) (string, string) {
 		return "", ""
 	}
 	lower := strings.ToLower(trimmed)
-	permissionPhrases := []string{
-		"would you like to run the following command",
-		"do you want to allow",
-		"allow this command",
-		"allow command",
-		"yes, proceed",
-		"permission required",
-		"requires approval",
-		"needs approval",
-		"approval required",
-		"press enter to confirm",
-	}
-	for _, phrase := range permissionPhrases {
+	for _, phrase := range terminalPermissionPhrases() {
 		if strings.Contains(lower, phrase) {
 			return "permission", terminalAttentionExcerpt(trimmed, phrase)
 		}
@@ -932,6 +935,107 @@ func attentionFromText(text string) (string, string) {
 		return "question", firstLine(trimmed)
 	}
 	return "", ""
+}
+
+type terminalAttentionCandidate struct {
+	idx      int
+	kind     string
+	question string
+}
+
+func terminalPermissionPhrases() []string {
+	return []string{
+		"would you like to run the following command",
+		"do you want to allow",
+		"allow this command",
+		"allow command",
+		"permission required",
+		"requires approval",
+		"needs approval",
+		"approval required",
+		"press enter to confirm",
+	}
+}
+
+func terminalAttentionFromText(text string) (string, string) {
+	trimmed := strings.TrimSpace(text)
+	if trimmed == "" {
+		return "", ""
+	}
+	lower := strings.ToLower(trimmed)
+	candidate := terminalAttentionCandidate{idx: -1}
+	for _, phrase := range terminalPermissionPhrases() {
+		if idx := strings.LastIndex(lower, phrase); idx > candidate.idx {
+			candidate = terminalAttentionCandidate{idx: idx, kind: "permission"}
+		}
+	}
+	offset := 0
+	for _, line := range strings.Split(trimmed, "\n") {
+		trimmedLine := strings.TrimSpace(line)
+		if trimmedLine != "" && looksLikeQuestion(trimmedLine) {
+			lineIdx := offset + strings.Index(line, trimmedLine)
+			if lineIdx > candidate.idx {
+				candidate = terminalAttentionCandidate{idx: lineIdx, kind: "question", question: trimmedLine}
+			}
+		}
+		offset += len(line) + 1
+	}
+	if candidate.idx < 0 {
+		return "", ""
+	}
+	if terminalAttentionHasProgressAfter(trimmed[candidate.idx:]) {
+		return "", ""
+	}
+	if candidate.kind == "permission" {
+		return "permission", terminalAttentionExcerptAt(trimmed, candidate.idx)
+	}
+	if candidate.question != "" {
+		return "question", truncateText(candidate.question, 180)
+	}
+	return "", ""
+}
+
+func terminalAttentionHasProgressAfter(text string) bool {
+	lower := strings.ToLower(text)
+	progressPhrases := []string{
+		"\nbash(",
+		"\nread(",
+		"\nedit(",
+		"\nwrite(",
+		"\nran ",
+		"\n\u2022 ran ",
+		"\nok \u2713",
+		"ok \u2713",
+		"\nno matches found",
+		"\nfiles changed",
+		"insertions(+)",
+		"deletions(-)",
+		"\nsaving...",
+		"\nsauteing...",
+		"\nsaut\u00e9ing...",
+		"\nthinking...",
+		"\nerror:",
+		"\nwarning:",
+	}
+	for _, phrase := range progressPhrases {
+		if strings.Contains(lower, phrase) {
+			return true
+		}
+	}
+	return false
+}
+
+func terminalAttentionExcerptAt(text string, idx int) string {
+	if idx < 0 || idx >= len(text) {
+		return firstLine(text)
+	}
+	lineStart := strings.LastIndex(text[:idx], "\n") + 1
+	lines := strings.Split(text[lineStart:], "\n")
+	end := 3
+	if end > len(lines) {
+		end = len(lines)
+	}
+	return truncateText(strings.Join(nonEmptyTrimmedLines(lines[:end]), " "), 180)
 }
 
 func terminalAttentionExcerpt(text, phrase string) string {

@@ -27,9 +27,15 @@ const anyProviderAvailable = () => {
   const providers = capabilityList('providers');
   return !providers.length || providers.some(p => p.available);
 };
+const missionGreeting = () => {
+  const hour = new Date().getHours();
+  if (hour < 12) return 'Good morning';
+  if (hour < 17) return 'Good afternoon';
+  return 'Good evening';
+};
 
 // ───────── Mission Control ──────────────────────────────────────────────
-const MissionControl = ({ focus, setFocus, action, sort, setSort }) => {
+const MissionControl = ({ focus, setFocus, action, sort, setSort, goto }) => {
   const sorted = useMemo(() => {
     const list = [...AGENTS];
     const order = { running: 0, waiting: 1, idle: 2, stale: 3, dead: 4 };
@@ -51,10 +57,21 @@ const MissionControl = ({ focus, setFocus, action, sort, setSort }) => {
   const counts = useMemo(() => {
     return AGENTS.reduce((acc, a) => { acc[a.status] = (acc[a.status] || 0) + 1; return acc; }, {});
   }, [AGENTS.length, AGENTS.map(a => a.status).join('|')]);
+  const monitor = monitorState();
+  const unread = (monitor.notifications || []).filter(n => n.status === 'unread').length;
 
   return (
     <div>
-      <div className="hero">
+      <div className="hero mc-landing">
+        <div className="hero-greeting">
+          <div className="overview-kicker mono">Mission Control</div>
+          <h1>{missionGreeting()}, Vishnu</h1>
+          <p>{counts.running || 0} running · {counts.waiting || 0} waiting on you · {unread} unread notifications</p>
+          <div className="hero-actions">
+            <button className="btn sm primary" onClick={() => action('spawn-prompt')}><Icon name="plus" size={11}/>New task</button>
+            <button className="btn sm" onClick={() => goto && goto('monitor')}><Icon name="bell-ring" size={11}/>Notifications</button>
+          </div>
+        </div>
         <div className="hero-stats">
           <div className="stat running">
             <div className="num">{counts.running || 0}</div>
@@ -124,91 +141,8 @@ const MissionControl = ({ focus, setFocus, action, sort, setSort }) => {
   );
 };
 
-// ───────── Overview command center ─────────────────────────────────────
+// ───────── Monitor helpers ─────────────────────────────────────────────
 const monitorState = () => window.MC.MONITOR || { notifications: [], events: [], rules: [], sources: [], unread: 0, approvals: 0 };
-
-const OverviewPage = ({ action, goto }) => {
-  const [prompt, setPrompt] = useState('');
-  const monitor = monitorState();
-  const counts = AGENTS.reduce((acc, a) => { acc[a.status] = (acc[a.status] || 0) + 1; return acc; }, {});
-  const needsMe = (monitor.notifications || []).filter(n => n.status === 'unread').slice(0, 5);
-  const prEvents = (monitor.events || []).filter(e => e.source === 'github').slice(0, 5);
-  const live = AGENTS.filter(a => a.status === 'running' || a.status === 'waiting').slice(0, 5);
-  const nextMeetingText = 'Calendar/Avoma connector pending';
-  const submit = (e) => {
-    e.preventDefault();
-    const text = prompt.trim();
-    if (!text) return;
-    setPrompt('');
-    action('overview-chat', { slug: 'flow-overview', prompt: text });
-  };
-  return (
-    <div className="overview-page">
-      <section className="overview-hero">
-        <div>
-          <div className="overview-kicker mono">Overview</div>
-          <h1>Good morning, Vishnu</h1>
-          <p>{counts.running || 0} live · {counts.idle || 0} idle · {monitor.approvals || 0} approvals · {nextMeetingText}</p>
-        </div>
-        <button className="btn sm" onClick={() => action('monitor-sync', {})}><Icon name="refresh-cw" size={11}/>Sync monitor</button>
-      </section>
-
-      <form className="overview-chat" onSubmit={submit}>
-        <Icon name="sparkles" size={16}/>
-        <input value={prompt} onChange={e => setPrompt(e.target.value)} placeholder="What would you like to do today?"/>
-        <button className="btn primary" disabled={!prompt.trim()}><Icon name="send" size={12}/>Ask</button>
-      </form>
-
-      <div className="overview-grid">
-        <OverviewCard title="Needs me" count={needsMe.length} actionLabel="notifications" onAction={() => goto('monitor')}>
-          {needsMe.length ? needsMe.map(n => (
-            <div key={n.id} className={`overview-row ${n.level}`}>
-              <span className="source mono">{n.source || 'flow'}</span>
-              <div className="body">
-                <div>{n.title}</div>
-                {n.body && <p>{n.body}</p>}
-              </div>
-              <div className="row-actions">
-                {n.url && <a className="btn sm" href={n.url} target="_blank" rel="noreferrer">Open</a>}
-                {n.source !== 'agent' && <button className="btn sm primary" onClick={() => action('notification-start-agent', { event_id: n.event_id })}>Agent</button>}
-              </div>
-            </div>
-          )) : <EmptyLine text="No unread approvals or monitor notifications."/>}
-        </OverviewCard>
-
-        <OverviewCard title="Live / waiting agents" count={live.length} actionLabel="sessions" onAction={() => goto('sessions')}>
-          {live.length ? live.map(a => (
-            <div key={a.slug} className="overview-row">
-              <Dot status={a.status}/>
-              <div className="body">
-                <div className="mono">{a.slug}</div>
-                <p>{a.name}</p>
-              </div>
-              <button className="btn sm" disabled={!isCapabilityAvailable('providers', a.provider || 'claude')} title={isCapabilityAvailable('providers', a.provider || 'claude') ? '' : capabilityReason('providers', a.provider || 'claude')} onClick={() => action('attach', a)}>Open</button>
-            </div>
-          )) : <EmptyLine text="No live or waiting agents right now."/>}
-        </OverviewCard>
-
-        <OverviewCard title="PR review queue" count={prEvents.length} actionLabel="monitor" onAction={() => goto('monitor')}>
-          {prEvents.length ? prEvents.map(e => (
-            <div key={e.id} className="overview-row">
-              <Icon name="git-pull-request" size={12}/>
-              <div className="body">
-                <div>{e.title}</div>
-                {e.body && <p>{e.body}</p>}
-              </div>
-              {e.url && <a className="btn sm" href={e.url} target="_blank" rel="noreferrer">PR</a>}
-            </div>
-          )) : <EmptyLine text="No GitHub PR events synced yet."/>}
-        </OverviewCard>
-
-        <OverviewCard title="Upcoming / meeting context" count={0} actionLabel="settings" onAction={() => goto('monitor')}>
-          <EmptyLine text="Calendar and Avoma can plug into the same monitor event stream next."/>
-        </OverviewCard>
-      </div>
-    </div>
-  );
-};
 
 const OverviewCard = ({ title, count, actionLabel, onAction, children }) => (
   <section className="overview-card">
@@ -299,7 +233,7 @@ const NotificationGroup = ({ group, action }) => {
           <div className="row-actions">
             {n.url && <a className="btn sm" href={n.url} target="_blank" rel="noreferrer">Open</a>}
             {n.source !== 'agent' && <button className="btn sm primary" onClick={() => action('notification-start-agent', { event_id: n.event_id })}>Start agent</button>}
-            {n.source !== 'agent' && <button className="btn sm" onClick={() => action('notification-dismiss', { slug: n.id })}>Dismiss</button>}
+            <button className="btn sm" onClick={() => action('notification-dismiss', { slug: n.id })}>Dismiss</button>
           </div>
         </div>
       ))}
@@ -2646,7 +2580,7 @@ const ShortcutsOverlay = ({ onClose }) => (
 );
 
 window.MC_SCREENS = {
-  MissionControl, OverviewPage, MonitorView, SessionsGrid, SessionDetail, CompletedSessionView, TasksList, ProjectsList, ProjectDetail, PlaybooksList, PlaybookDetail,
+  MissionControl, MonitorView, SessionsGrid, SessionDetail, CompletedSessionView, TasksList, ProjectsList, ProjectDetail, PlaybooksList, PlaybookDetail,
   TrashView, KBView, WorkdirsView,
   CommandPalette, QRModal, ConfirmModal, ShortcutsOverlay, CreateFlowModal,
 };

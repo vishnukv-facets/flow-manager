@@ -110,6 +110,12 @@ CREATE TABLE IF NOT EXISTS monitor_notifications (
     created_at  TEXT NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS monitor_notification_states (
+    id          TEXT PRIMARY KEY,
+    status      TEXT NOT NULL CHECK (status IN ('unread','read','dismissed','actioned')),
+    updated_at  TEXT NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS automation_rules (
     id          TEXT PRIMARY KEY,
     source      TEXT NOT NULL,
@@ -139,6 +145,7 @@ CREATE INDEX IF NOT EXISTS idx_task_tags_tag    ON task_tags(tag);
 CREATE INDEX IF NOT EXISTS idx_monitor_events_seen ON monitor_events(last_seen_at);
 CREATE INDEX IF NOT EXISTS idx_monitor_events_status ON monitor_events(status);
 CREATE INDEX IF NOT EXISTS idx_monitor_notifications_status ON monitor_notifications(status);
+CREATE INDEX IF NOT EXISTS idx_monitor_notification_states_status ON monitor_notification_states(status);
 CREATE INDEX IF NOT EXISTS idx_automation_rules_source_kind ON automation_rules(source, kind);
 CREATE INDEX IF NOT EXISTS idx_task_pr_links_state ON task_pr_links(state);
 CREATE INDEX IF NOT EXISTS idx_task_pr_links_repo_number ON task_pr_links(repo, pr_number);

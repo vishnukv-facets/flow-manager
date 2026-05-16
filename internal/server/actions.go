@@ -928,6 +928,12 @@ func (s *Server) updateNotification(req actionRequest) (actionResponse, int) {
 	if req.Kind == "notification-dismiss" {
 		status = "dismissed"
 	}
+	if strings.HasPrefix(id, "agent-") {
+		if err := flowdb.SetNotificationState(s.cfg.DB, id, status); err != nil {
+			return actionResponse{OK: false, Message: err.Error()}, http.StatusBadRequest
+		}
+		return actionResponse{OK: true, Message: "notification " + status}, http.StatusOK
+	}
 	if err := flowdb.UpdateNotificationStatus(s.cfg.DB, id, status); err != nil {
 		return actionResponse{OK: false, Message: err.Error()}, http.StatusBadRequest
 	}
