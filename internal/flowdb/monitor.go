@@ -54,6 +54,16 @@ type MonitorEventInput struct {
 	RawJSON  string
 }
 
+type AgentRuntimeStateInput struct {
+	Provider  string
+	SessionID string
+	TaskSlug  string
+	Status    string
+	EventKind string
+	Message   string
+	RawJSON   string
+}
+
 var defaultAutomationRules = []AutomationRule{
 	{Source: "github", Kind: "review_requested", Mode: "approval"},
 	{Source: "github", Kind: "ci_failed", Mode: "auto_agent"},
@@ -257,6 +267,63 @@ func NotificationStateMap(db *sql.DB, ids []string) (map[string]string, error) {
 		return out, err
 	}
 	return out, nil
+}
+
+func UpsertAgentRuntimeState(db *sql.DB, input AgentRuntimeStateInput) error {
+	provider := normalizeMonitorPart(input.Provider)
+	switch provider {
+	case "claude", "codex":
+	default:
+		return fmt.Errorf("invalid agent runtime provider %q", input.Provider)
+	}
+	sessionID := strings.TrimSpace(input.SessionID)
+	if sessionID == "" {
+		return fmt.Errorf("agent runtime session_id is required")
+	}
+	status := normalizeMonitorPart(input.Status)
+	switch status {
+	case "running", "waiting", "idle", "dead":
+	default:
+		return fmt.Errorf("invalid agent runtime status %q", input.Status)
+	}
+	eventKind := normalizeMonitorPart(input.EventKind)
+	if eventKind == "" {
+		eventKind = status
+	}
+	_, err := db.Exec(
+		`INSERT INTO agent_runtime_states (
+			provider, session_id, task_slug, status, event_kind, message, updated_at, raw_json
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+		ON CONFLICT(provider, session_id) DO UPDATE SET
+			task_slug = excluded.task_slug,
+			status = excluded.status,
+			event_kind = excluded.event_kind,
+			message = excluded.message,
+			updated_at = excluded.updated_at,
+			raw_json = excluded.raw_json`,
+		provider, sessionID, NullString(input.TaskSlug), status, eventKind,
+		NullString(input.Message), NowISO(), NullString(input.RawJSON),
+	)
+	return err
+}
+
+func AgentRuntimeStateBySessionID(db *sql.DB, provider, sessionID string) (*AgentRuntimeState, error) {
+	provider = normalizeMonitorPart(provider)
+	sessionID = strings.TrimSpace(sessionID)
+	if provider == "" || sessionID == "" {
+		return nil, sql.ErrNoRows
+	}
+	row := db.QueryRow(
+		`SELECT provider, session_id, task_slug, status, event_kind, message, updated_at, raw_json
+		 FROM agent_runtime_states
+		 WHERE provider = ? AND session_id = ?`,
+		provider, sessionID,
+	)
+	var state AgentRuntimeState
+	if err := row.Scan(&state.Provider, &state.SessionID, &state.TaskSlug, &state.Status, &state.EventKind, &state.Message, &state.UpdatedAt, &state.RawJSON); err != nil {
+		return nil, err
+	}
+	return &state, nil
 }
 
 func UpdateMonitorEventStatus(db *sql.DB, id, status string) error {

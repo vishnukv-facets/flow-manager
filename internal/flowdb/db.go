@@ -116,6 +116,18 @@ CREATE TABLE IF NOT EXISTS monitor_notification_states (
     updated_at  TEXT NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS agent_runtime_states (
+    provider     TEXT NOT NULL CHECK (provider IN ('claude','codex')),
+    session_id   TEXT NOT NULL,
+    task_slug    TEXT REFERENCES tasks(slug) ON DELETE SET NULL,
+    status       TEXT NOT NULL CHECK (status IN ('running','waiting','idle','dead')),
+    event_kind   TEXT NOT NULL,
+    message      TEXT,
+    updated_at   TEXT NOT NULL,
+    raw_json     TEXT,
+    PRIMARY KEY (provider, session_id)
+);
+
 CREATE TABLE IF NOT EXISTS automation_rules (
     id          TEXT PRIMARY KEY,
     source      TEXT NOT NULL,
@@ -146,6 +158,8 @@ CREATE INDEX IF NOT EXISTS idx_monitor_events_seen ON monitor_events(last_seen_a
 CREATE INDEX IF NOT EXISTS idx_monitor_events_status ON monitor_events(status);
 CREATE INDEX IF NOT EXISTS idx_monitor_notifications_status ON monitor_notifications(status);
 CREATE INDEX IF NOT EXISTS idx_monitor_notification_states_status ON monitor_notification_states(status);
+CREATE INDEX IF NOT EXISTS idx_agent_runtime_states_task ON agent_runtime_states(task_slug);
+CREATE INDEX IF NOT EXISTS idx_agent_runtime_states_updated ON agent_runtime_states(updated_at);
 CREATE INDEX IF NOT EXISTS idx_automation_rules_source_kind ON automation_rules(source, kind);
 CREATE INDEX IF NOT EXISTS idx_task_pr_links_state ON task_pr_links(state);
 CREATE INDEX IF NOT EXISTS idx_task_pr_links_repo_number ON task_pr_links(repo, pr_number);
@@ -219,6 +233,20 @@ type Workdir struct {
 	GitRemote   sql.NullString
 	LastUsedAt  sql.NullString
 	CreatedAt   string
+}
+
+// AgentRuntimeState is the provider hook-backed runtime state for a session.
+// It is intentionally separate from tasks.status, which is durable workflow
+// state such as backlog/in-progress/done.
+type AgentRuntimeState struct {
+	Provider  string
+	SessionID string
+	TaskSlug  sql.NullString
+	Status    string
+	EventKind string
+	Message   sql.NullString
+	UpdatedAt string
+	RawJSON   sql.NullString
 }
 
 // TaskFilter holds optional filters for ListTasks.

@@ -128,6 +128,11 @@ type uiAgent struct {
 	PermissionMode  string         `json:"permission_mode"`
 	Priority        string         `json:"priority"`
 	Status          string         `json:"status"`
+	TaskStatus      string         `json:"task_status"`
+	RuntimeStatus   string         `json:"runtime_status"`
+	RuntimeEvent    string         `json:"runtime_event,omitempty"`
+	RuntimeSource   string         `json:"runtime_source,omitempty"`
+	HookHealth      *uiHookHealth  `json:"hook_health,omitempty"`
 	SessionID       string         `json:"session_id"`
 	StartedMin      int            `json:"started_min"`
 	LastActivitySec int            `json:"last_activity_sec"`
@@ -152,6 +157,12 @@ type uiWaitingFor struct {
 	Kind string `json:"kind"`
 	Cmd  string `json:"cmd"`
 	Why  string `json:"why"`
+}
+
+type uiHookHealth struct {
+	Status  string `json:"status"`
+	Message string `json:"message"`
+	Action  string `json:"action,omitempty"`
 }
 
 type uiDiff struct {
@@ -505,6 +516,7 @@ func (s *Server) uiMonitor(agents []uiAgent) uiMonitor {
 	}
 	agentNotificationStates, _ := flowdb.NotificationStateMap(s.cfg.DB, agentNotificationIDs)
 	uiNotifications := make([]uiMonitorNotification, 0, len(notifications)+len(agentNotifications))
+	agentByURL, agentByProviderSession := monitorAgentLookup(agents)
 	unread := 0
 	approvals := 0
 	for _, notification := range agentNotifications {
@@ -527,6 +539,9 @@ func (s *Server) uiMonitor(agents []uiAgent) uiMonitor {
 	}
 	for _, notification := range notifications {
 		event := eventByID[notification.EventID]
+		if staleAgentLifecycleNotification(event, agentByURL, agentByProviderSession) {
+			continue
+		}
 		if notification.Status == "unread" {
 			unread++
 		}
@@ -565,20 +580,6 @@ func (s *Server) uiMonitor(agents []uiAgent) uiMonitor {
 func agentAttentionNotifications(agents []uiAgent) []uiMonitorNotification {
 	out := []uiMonitorNotification{}
 	for _, agent := range agents {
-		if agent.Status == "running" {
-			out = append(out, uiMonitorNotification{
-				ID:      "agent-" + agent.Slug + "-running",
-				EventID: agent.Slug,
-				Title:   agent.Name + " is running",
-				Body:    agentSessionLabel(agent.Provider, agent.SessionID) + " is live. Last action: " + agent.LastAction,
-				Level:   "log",
-				Status:  "read",
-				Source:  "agent",
-				Kind:    agent.Provider + " running",
-				URL:     "/session/" + agent.Slug,
-				Mode:    "realtime",
-			})
-		}
 		if agent.Status == "waiting" && agent.WaitingFor != nil && (agent.WaitingFor.Kind == "question" || agent.WaitingFor.Kind == "permission" || agent.WaitingFor.Kind == "agent") {
 			title := agent.Name + " needs your answer"
 			if agent.WaitingFor.Kind == "permission" {
@@ -598,25 +599,46 @@ func agentAttentionNotifications(agents []uiAgent) []uiMonitorNotification {
 			})
 			continue
 		}
-		if agent.SessionID != "" && (agent.Status == "idle" || agent.Status == "stale") {
-			out = append(out, uiMonitorNotification{
-				ID:      "agent-" + agent.Slug + "-stopped",
-				EventID: agent.Slug,
-				Title:   agent.Name + " is not running",
-				Body: truncateText(
-					agent.Provider+" session "+shortSessionID(agent.SessionID)+" is bound to an in-progress task but no live process is attached. Last action: "+agent.LastAction,
-					220,
-				),
-				Level:  "notify",
-				Status: "unread",
-				Source: "agent",
-				Kind:   agent.Provider + " stopped",
-				URL:    "/session/" + agent.Slug,
-				Mode:   "realtime",
-			})
-		}
 	}
 	return out
+}
+
+func monitorAgentLookup(agents []uiAgent) (map[string]uiAgent, map[string]uiAgent) {
+	byURL := map[string]uiAgent{}
+	byProviderSession := map[string]uiAgent{}
+	for _, agent := range agents {
+		if strings.TrimSpace(agent.Slug) != "" {
+			byURL["/session/"+agent.Slug] = agent
+		}
+		if strings.TrimSpace(agent.Provider) != "" && strings.TrimSpace(agent.SessionID) != "" {
+			byProviderSession[agent.Provider+":"+agent.SessionID] = agent
+		}
+	}
+	return byURL, byProviderSession
+}
+
+func staleAgentLifecycleNotification(event flowdb.MonitorEvent, byURL, byProviderSession map[string]uiAgent) bool {
+	if event.Source != agentHookMonitorSource || !agentHookLifecycleKind(event.Kind) {
+		return false
+	}
+	agent, ok := byURL[nullStringValue(event.URL)]
+	if !ok {
+		parts := strings.Split(event.SourceID, ":")
+		if len(parts) >= 2 {
+			agent, ok = byProviderSession[parts[0]+":"+parts[1]]
+		}
+	}
+	if !ok {
+		return false
+	}
+	switch event.Kind {
+	case "stop", "stop_failure", "session_end", "task_completed":
+		return agent.Status == "running" || agent.Status == "waiting"
+	case "session_start", "subagent_start", "subagent_stop", "task_created":
+		return agent.Status == "idle" || agent.Status == "dead"
+	default:
+		return false
+	}
 }
 
 func shortSessionID(id string) string {
@@ -707,20 +729,28 @@ func (s *Server) uiAgent(tv TaskView, live map[string]bool) uiAgent {
 		terminalMode = "native"
 	}
 	insights := s.sessionInsightsForTask(tv, provider, fullTranscript)
+	hookRuntime := s.agentHookRuntimeState(tv, provider)
 	status := "idle"
+	runtimeSource := "task"
+	runtimeEvent := ""
 	switch tv.Status {
 	case "in-progress":
 		switch {
 		case tv.WaitingOn != nil:
 			status = "waiting"
+			runtimeSource = "flow"
 		case bridgeRunning:
 			status = "running"
+			runtimeSource = "browser_terminal"
 		case sessionLive:
 			status = "running"
+			runtimeSource = "process"
 		case tv.StaleDays != nil:
 			status = "stale"
+			runtimeSource = "task"
 		default:
 			status = "idle"
+			runtimeSource = "task"
 		}
 	case "done":
 		status = "idle"
@@ -730,10 +760,24 @@ func (s *Server) uiAgent(tv TaskView, live map[string]bool) uiAgent {
 	if staleOverviewSession {
 		sessionID = ""
 		status = "idle"
+		runtimeSource = "task"
 	}
 	hookWaiting := s.agentHookWaitingFor(tv)
-	if !staleOverviewSession && tv.Status == "in-progress" && hookWaiting != nil {
-		status = "waiting"
+	transcriptWaiting := s.codexTranscriptWaitingFor(tv, provider)
+	if !staleOverviewSession && tv.Status == "in-progress" {
+		if hookRuntime != nil && hookRuntime.Status != "" {
+			status = hookRuntime.Status
+			runtimeSource = "hook"
+			runtimeEvent = hookRuntime.EventKind
+		}
+		if hookWaiting != nil {
+			status = "waiting"
+			runtimeSource = "hook"
+		} else if transcriptWaiting != nil {
+			status = "waiting"
+			runtimeSource = "transcript"
+			runtimeEvent = "request_user_input"
+		}
 	}
 	branches := []string{}
 	branch := "~/.flow"
@@ -795,6 +839,11 @@ func (s *Server) uiAgent(tv TaskView, live map[string]bool) uiAgent {
 		PermissionMode:  permissionMode,
 		Priority:        tv.Priority,
 		Status:          status,
+		TaskStatus:      tv.Status,
+		RuntimeStatus:   status,
+		RuntimeEvent:    runtimeEvent,
+		RuntimeSource:   runtimeSource,
+		HookHealth:      s.agentHookHealth(tv, provider, fullTranscript, hookRuntime),
 		SessionID:       sessionID,
 		StartedMin:      minutesSince(startedAt),
 		LastActivitySec: lastActivity,
@@ -817,8 +866,75 @@ func (s *Server) uiAgent(tv TaskView, live map[string]bool) uiAgent {
 		agent.WaitingFor = &uiWaitingFor{Kind: "flow", Cmd: "flow update task " + tv.Slug + " --clear-waiting", Why: *tv.WaitingOn}
 	} else if hookWaiting != nil {
 		agent.WaitingFor = hookWaiting
+	} else if transcriptWaiting != nil {
+		agent.WaitingFor = transcriptWaiting
 	}
 	return agent
+}
+
+func (s *Server) codexTranscriptWaitingFor(tv TaskView, provider string) *uiWaitingFor {
+	if provider != "codex" || tv.SessionID == nil || strings.TrimSpace(*tv.SessionID) == "" {
+		return nil
+	}
+	task := &flowdb.Task{
+		Slug:            tv.Slug,
+		WorkDir:         tv.WorkDir,
+		SessionProvider: provider,
+		SessionID:       sql.NullString{String: *tv.SessionID, Valid: true},
+	}
+	path, err := sessionJSONLPath(task)
+	if err != nil {
+		return nil
+	}
+	pending, err := pendingCodexUserInput(path)
+	if err != nil || pending == nil {
+		s.clearCodexTranscriptAttention(provider, *tv.SessionID)
+		return nil
+	}
+	s.recordCodexTranscriptAttention(tv, provider, *tv.SessionID, pending)
+	return &uiWaitingFor{
+		Kind: "question",
+		Cmd:  "Open session " + tv.Slug,
+		Why:  pending.Question,
+	}
+}
+
+func (s *Server) recordCodexTranscriptAttention(tv TaskView, provider, sessionID string, pending *codexPendingUserInput) {
+	if s.cfg.DB == nil || pending == nil || strings.TrimSpace(pending.CallID) == "" {
+		return
+	}
+	sourceID := strings.Join([]string{provider, sessionID, "request_user_input", pending.CallID}, ":")
+	id := flowdb.MonitorEventID(agentTranscriptMonitorSource, sourceID)
+	if _, err := flowdb.GetMonitorEvent(s.cfg.DB, id); err == nil {
+		return
+	}
+	title := provider + " " + tv.Slug + " needs input"
+	_, _, _ = flowdb.UpsertMonitorEvent(s.cfg.DB, flowdb.MonitorEventInput{
+		Source:   agentTranscriptMonitorSource,
+		Kind:     "elicitation",
+		SourceID: sourceID,
+		Title:    title,
+		Body:     pending.Question,
+		URL:      agentHookURL(tv.Slug),
+		Severity: "high",
+		RawJSON:  pending.RawJSON,
+	})
+}
+
+func (s *Server) clearCodexTranscriptAttention(provider, sessionID string) {
+	if s.cfg.DB == nil || strings.TrimSpace(sessionID) == "" {
+		return
+	}
+	prefix := strings.Join([]string{provider, sessionID, "request_user_input"}, ":") + ":%"
+	_, _ = s.cfg.DB.Exec(
+		`UPDATE monitor_events
+		    SET status = 'done'
+		  WHERE source = ?
+		    AND kind = 'elicitation'
+		    AND source_id LIKE ?
+		    AND status IN ('new', 'notified')`,
+		agentTranscriptMonitorSource, prefix,
+	)
 }
 
 func withTaskWorkDir(tv TaskView, workDir string) TaskView {

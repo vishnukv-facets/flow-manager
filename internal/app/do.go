@@ -327,7 +327,10 @@ func cmdDo(args []string) int {
 	if *dangerSkip {
 		permissionMode = "bypass"
 	}
-	if changed, err := agenthooks.InstallLocal(cwd); err != nil {
+	if changed, err := agenthooks.InstallLocalWithOptions(cwd, agenthooks.InstallOptions{
+		CommandPath: flowCommandPathForSpawn(),
+		HookURL:     os.Getenv("FLOW_HOOK_URL"),
+	}); err != nil {
 		fmt.Fprintf(os.Stderr, "warning: install local agent hooks: %v\n", err)
 	} else if changed {
 		fmt.Fprintf(os.Stderr, "installed local agent hooks in %s\n", cwd)

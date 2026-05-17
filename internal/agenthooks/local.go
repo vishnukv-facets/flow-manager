@@ -12,9 +12,15 @@ import (
 )
 
 const (
-	ClaudeCommand = "flow hook agent-event --provider claude"
-	CodexCommand  = "flow hook agent-event --provider codex"
+	installedFlowPath = "flow"
+	ClaudeCommand     = installedFlowPath + " hook agent-event --provider claude"
+	CodexCommand      = installedFlowPath + " hook agent-event --provider codex"
 )
+
+type InstallOptions struct {
+	CommandPath string
+	HookURL     string
+}
 
 type spec struct {
 	event   string
@@ -46,13 +52,17 @@ var claudeHooks = []spec{
 var codexHooks = []spec{
 	{event: "SessionStart", matcher: "startup|resume|clear"},
 	{event: "UserPromptSubmit"},
-	{event: "PreToolUse", matcher: "AskUserQuestion|ExitPlanMode|request_user_input|mcp__.*request_user_input"},
+	{event: "PreToolUse"},
 	{event: "PermissionRequest"},
 	{event: "PostToolUse"},
 	{event: "Stop"},
 }
 
 func InstallLocal(workDir string) (bool, error) {
+	return InstallLocalWithOptions(workDir, InstallOptions{})
+}
+
+func InstallLocalWithOptions(workDir string, opts InstallOptions) (bool, error) {
 	root := strings.TrimSpace(workDir)
 	if root == "" {
 		return false, fmt.Errorf("workdir is empty")
@@ -68,9 +78,10 @@ func InstallLocal(workDir string) (bool, error) {
 	}
 
 	changed := false
+	claudeCommand, codexCommand := hookCommands(opts)
 	claudePath := filepath.Join(abs, ".claude", "settings.local.json")
 	for _, hook := range claudeHooks {
-		added, err := installHook(claudePath, hook.event, hook.matcher, ClaudeCommand, nil)
+		added, err := installHook(claudePath, hook.event, hook.matcher, claudeCommand, nil)
 		if err != nil {
 			return changed, err
 		}
@@ -80,7 +91,7 @@ func InstallLocal(workDir string) (bool, error) {
 	codexPath := filepath.Join(abs, ".codex", "hooks.json")
 	codexExtras := map[string]any{"timeout": 3, "statusMessage": "Syncing flow status"}
 	for _, hook := range codexHooks {
-		added, err := installHook(codexPath, hook.event, hook.matcher, CodexCommand, codexExtras)
+		added, err := installHook(codexPath, hook.event, hook.matcher, codexCommand, codexExtras)
 		if err != nil {
 			return changed, err
 		}
@@ -93,6 +104,10 @@ func InstallLocal(workDir string) (bool, error) {
 }
 
 func InstallKnownWorkdirs(db *sql.DB) (int, error) {
+	return InstallKnownWorkdirsWithOptions(db, InstallOptions{})
+}
+
+func InstallKnownWorkdirsWithOptions(db *sql.DB, opts InstallOptions) (int, error) {
 	if db == nil {
 		return 0, nil
 	}
@@ -129,7 +144,7 @@ func InstallKnownWorkdirs(db *sql.DB) (int, error) {
 	changed := 0
 	var errs []error
 	for path := range paths {
-		didChange, err := InstallLocal(path)
+		didChange, err := InstallLocalWithOptions(path, opts)
 		if err != nil {
 			if os.IsNotExist(err) {
 				continue
@@ -144,6 +159,16 @@ func InstallKnownWorkdirs(db *sql.DB) (int, error) {
 	return changed, errors.Join(errs...)
 }
 
+func hookCommands(opts InstallOptions) (string, string) {
+	base := installedFlowPath
+	suffix := ""
+	if hookURL := strings.TrimSpace(opts.HookURL); hookURL != "" {
+		suffix = " --url " + shellQuoteArg(hookURL)
+	}
+	return base + " hook agent-event --provider claude" + suffix,
+		base + " hook agent-event --provider codex" + suffix
+}
+
 func installHook(path, event, matcher, command string, extras map[string]any) (bool, error) {
 	cfg, err := readHookConfig(path)
 	if err != nil {
@@ -154,21 +179,59 @@ func installHook(path, event, matcher, command string, extras map[string]any) (b
 		hooks = map[string]any{}
 	}
 	entries, _ := hooks[event].([]any)
+	keptEntries := make([]any, 0, len(entries))
+	changed := false
+	hasDesired := false
+	desiredMatcher := strings.TrimSpace(matcher)
 	for _, entry := range entries {
 		m, ok := entry.(map[string]any)
 		if !ok {
+			keptEntries = append(keptEntries, entry)
 			continue
 		}
+		entryMatcher, _ := m["matcher"].(string)
+		entryMatcher = strings.TrimSpace(entryMatcher)
 		inner, _ := m["hooks"].([]any)
+		filtered := make([]any, 0, len(inner))
 		for _, h := range inner {
 			hm, ok := h.(map[string]any)
 			if !ok {
+				filtered = append(filtered, h)
 				continue
 			}
-			if cmd, _ := hm["command"].(string); cmd == command {
-				return false, nil
+			cmd, _ := hm["command"].(string)
+			if cmd == command {
+				if entryMatcher != desiredMatcher {
+					changed = true
+					continue
+				}
+				hasDesired = true
+				filtered = append(filtered, h)
+				continue
 			}
+			if sameManagedAgentHookCommand(cmd, command) {
+				changed = true
+				continue
+			}
+			filtered = append(filtered, h)
 		}
+		if len(filtered) != len(inner) {
+			m["hooks"] = filtered
+		}
+		if len(filtered) == 0 {
+			changed = true
+			continue
+		}
+		keptEntries = append(keptEntries, m)
+	}
+	entries = keptEntries
+	if hasDesired {
+		if changed {
+			hooks[event] = entries
+			cfg["hooks"] = hooks
+			return true, writeHookConfig(path, cfg)
+		}
+		return false, nil
 	}
 
 	hookEntry := map[string]any{"type": "command", "command": command}
@@ -183,6 +246,40 @@ func installHook(path, event, matcher, command string, extras map[string]any) (b
 	hooks[event] = entries
 	cfg["hooks"] = hooks
 	return true, writeHookConfig(path, cfg)
+}
+
+func sameManagedAgentHookCommand(existing, desired string) bool {
+	existing = strings.TrimSpace(existing)
+	desired = strings.TrimSpace(desired)
+	if existing == "" || desired == "" {
+		return false
+	}
+	if !strings.Contains(existing, "hook agent-event") || !strings.Contains(desired, "hook agent-event") {
+		return false
+	}
+	return hookProvider(existing) != "" && hookProvider(existing) == hookProvider(desired)
+}
+
+func hookProvider(command string) string {
+	fields := strings.Fields(command)
+	for i, field := range fields {
+		field = strings.Trim(field, `"'`)
+		if field == "--provider" && i+1 < len(fields) {
+			return strings.Trim(fields[i+1], `"'`)
+		}
+		if strings.HasPrefix(field, "--provider=") {
+			return strings.Trim(strings.TrimPrefix(field, "--provider="), `"'`)
+		}
+	}
+	return ""
+}
+
+func shellQuoteArg(s string) string {
+	s = strings.TrimSpace(s)
+	if s == "" {
+		return "''"
+	}
+	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
 }
 
 func readHookConfig(path string) (map[string]any, error) {

@@ -186,12 +186,36 @@ handles the rest.
 
 ## What you get
 
-- **One task, one Claude session, one tab.** `flow do <task>`
-  spawns a dedicated tab in iTerm2, stock macOS Terminal, kitty
-  (requires `allow_remote_control yes` in `kitty.conf`), or your
-  current zellij session (requires zellij ≥ 0.40) — flow picks
-  whichever you launched it from. Tomorrow's `flow do <task>`
-  resumes the same conversation.
+- **One task, one agent session, one tab.** `flow do <task>`
+  spawns a dedicated tab in iTerm2, Warp, stock macOS Terminal,
+  kitty (requires `allow_remote_control yes` in `kitty.conf`), or
+  your current zellij session (requires zellij ≥ 0.40) — flow
+  picks whichever you launched it from. Override with
+  `FLOW_TERM=warp|iterm|terminal|zellij|kitty` when you're on a
+  non-standard host. Tomorrow's `flow do <task>` resumes the same
+  conversation.
+- **Claude or Codex, your call.** Default is Claude. Pass
+  `--agent codex` (or `--codex`) on `flow add task`, `flow do`,
+  or `flow run playbook` to bootstrap a Codex session instead.
+  Provider is per-task — switching is a per-task decision, not a
+  global one. The knowledge base, briefs, and close-out sweep
+  work the same way either way.
+- **Worktrees by default.** `flow do` creates a per-task git
+  worktree at `<repo>/.<agent>/worktrees/<slug>` on branch
+  `flow/<slug>`, so two parallel tasks on the same repo never
+  step on each other's working tree. `--no-worktree` opts out;
+  `flow do --here` (binding the current session) never relocates.
+- **Auto-PR on done.** `flow done` pushes the worktree branch and
+  runs `gh pr create` against the detected base branch with the
+  task brief as the PR body. The PR URL is recorded against the
+  task. `--no-pr` opts out; push or PR failures warn and
+  continue, never block the status flip.
+- **Mission Control, in your browser.** `flow ui serve` boots a
+  local web UI at `127.0.0.1:8787` that browses every task,
+  project, playbook, and run; edits briefs inline; streams live
+  status; embeds an xterm.js terminal bridge to attach to any
+  session from the browser; and offers a Cmd+K switcher. No
+  cloud, no auth — bound to loopback by default.
 - **Interview-driven task capture.** No forms. flow asks
   what / why / where / done-when, then writes a structured brief.
 - **A knowledge base that grows.** Five markdown buckets for
@@ -202,23 +226,104 @@ handles the rest.
   you left off, even after a week away.
 - **Playbooks for cadence work.** Weekly reviews, daily triage,
   on-call rotations — define once, run on demand.
-- **A Claude skill that speaks plain English.** "What should I
-  work on", "resume auth", "save a note" — the skill turns intent
-  into flow commands.
+- **Soft delete, then restore.** `flow delete` hides a task,
+  project, or playbook from normal lists and the UI without
+  touching its markdown. `flow restore` brings it back. Use
+  `--include-deleted` (or `--deleted`) on `flow list` to see
+  what's hidden.
+- **A skill that speaks plain English.** "What should I work
+  on", "resume auth", "save a note" — the bundled Claude skill
+  turns intent into flow commands.
 
 ## How it works under the hood
 
-`flow do <task>` pre-allocates a session UUID, writes it to the
-task row, and spawns a tab in zellij (when `$ZELLIJ` is set), kitty
-(when `$KITTY_WINDOW_ID` is set or `$TERM=xterm-kitty`), iTerm2, or
-stock Terminal.app — chosen in that priority order, with iTerm as
-the historical fallback — running `claude --session-id <uuid>` with
-`FLOW_TASK` / `FLOW_PROJECT` inlined. The jsonl file lands at the deterministic path
-`~/.claude/projects/<encoded-cwd>/<uuid>.jsonl`, so future
-`flow do` calls run `claude --resume <uuid>` to continue the same
-conversation. A SessionStart hook re-injects the task brief,
-updates, and CLAUDE.md context on every resume; a UserPromptSubmit
-hook keeps the flow skill discoverable in ad-hoc Claude sessions.
+`flow do <task>` resolves the task's provider (`claude` by
+default, `codex` when the task was created with `--agent codex`),
+pre-allocates or captures a session id, writes it to the task
+row, and spawns a tab in zellij (when `$ZELLIJ` is set), kitty
+(when `$KITTY_WINDOW_ID` is set or `$TERM=xterm-kitty`), the
+backend named in `$FLOW_TERM` (when set), or Warp / iTerm2 / stock
+Terminal.app (auto-detected from `$TERM_PROGRAM`) — chosen in
+that priority order, with iTerm as the historical fallback —
+running `claude --session-id <uuid>` (or the equivalent
+`codex resume <uuid>`) with `FLOW_PROJECT` inlined. For Claude
+the jsonl file lands at the deterministic path
+`~/.claude/projects/<encoded-cwd>/<uuid>.jsonl`; for Codex it's
+captured back from Codex's own session store. Either way, future
+`flow do` calls resume the same conversation. A SessionStart
+hook re-injects the task brief, updates, and CLAUDE.md context on
+every resume.
+
+### Worktrees, branches, and the close-out PR
+
+By default `flow do` ensures a per-task git worktree at
+`<repo>/.<agent>/worktrees/<slug>` on branch `flow/<slug>`,
+forked from `origin/HEAD` (detected at task start). The agent
+session is launched inside that worktree, so multiple tasks
+against the same repo never collide. `tasks.worktree_path`
+remembers the path; `flow show task` surfaces it. `--no-worktree`
+spawns inside the task's raw `work_dir` instead.
+
+When you `flow done <task>`, flow snapshots the worktree's diff
+against its starting HEAD, runs the close-out sweep, then pushes
+the branch and runs `gh pr create --base <detected> --head
+flow/<slug>` with the task brief as the PR body. The PR URL is
+stored in `task_pr_links`. Pass `--no-pr` to skip; push or PR
+failures warn and keep going (the status flip is the contract).
+
+### One-shot instructions with `--with`
+
+`flow do <task> --with "<instruction>"` resumes (or starts) the
+task's session and injects the instruction as the first user
+message — prefixed with `[via flow do --with]` so the model can
+tell injected input from typed input.
+
+`--with-file <path>` is the same idea for longer instructions:
+instead of embedding the file contents, flow injects `read
+instructions at <absolute path>` and the session uses its Read
+tool to load the file. No size limits. The flags are mutually
+exclusive, and cannot be combined with `--here` (there's no
+spawned session to inject into).
+
+```bash
+# Nudge a parked task without opening the tab.
+flow do auth --with "check if upstream PR merged and update the brief if so"
+
+# --with on a done task auto-rolls it back to in-progress, so playbooks
+# can fire on previously-closed work.
+flow do auth --with "are we still blocked on the security review?"
+
+# Hand the session a longer brief to follow.
+flow do auth --with-file ~/playbooks/triage-checklist.md
+```
+
+This is the lane scheduled playbooks use to fire instructions at
+existing tasks without manual intervention. `flow run playbook
+<slug>` accepts the same flags for ad-hoc per-run instructions.
+
+### Mission Control web UI
+
+`flow ui serve` runs a small Go HTTP server (default
+`127.0.0.1:8787`, override with `--host` / `--port`, background
+with `--bg`) that ships a single-page UI from
+`internal/server/static/`. It reads the same `~/.flow/flow.db` the
+CLI does, so the browser, your terminal sessions, and the skill
+all see one consistent view. The server exposes:
+
+- A Mission Control landing page that aggregates active tasks,
+  recent runs, attention items, and a notification center.
+- Per-entity detail screens for tasks, projects, playbooks, and
+  playbook runs — with inline brief editing.
+- An xterm.js **terminal bridge** that attaches your browser to a
+  running agent session over WebSocket, including native terminal
+  snapshot sync so you don't lose scrollback when you reload.
+- Live status from a repo-local **agent-hooks** integration
+  (`internal/agenthooks/`): when a task's agent is mid-tool-call,
+  waiting for input, or idle, the UI shows it.
+- A global Cmd+K switcher across every entity.
+
+It's a *local* tool — no auth, no TLS, loopback by default. Don't
+expose it on a public network.
 
 The first `flow do` from stock Terminal.app needs macOS Accessibility
 permission for the **app hosting your shell** — not the `flow` binary
@@ -295,20 +400,22 @@ and reinstall the skill + hook.
 
 ## Where flow runs (and where we'd love help)
 
-Today flow runs on **macOS (iTerm2, stock Terminal.app, kitty, or
-zellij) + Claude Code only**. That's the stack we use, and that's
-what the session-spawn layer was built and tested against. zellij
-and kitty work on Linux too as a side effect — both are
-cross-platform and flow's zellij / kitty backends don't depend on
-any macOS APIs. Kitty needs `allow_remote_control yes` (or
-`socket-only`) in `kitty.conf` so flow can drive `kitty @ launch`
-from inside the running kitty instance.
+Today flow runs on **macOS (iTerm2, Warp, stock Terminal.app,
+kitty, or zellij) + Claude Code or Codex**. That's the stack we
+use, and that's what the session-spawn layer was built and
+tested against. zellij and kitty work on Linux too as a side
+effect — both are cross-platform and flow's zellij / kitty
+backends don't depend on any macOS APIs. Kitty needs
+`allow_remote_control yes` (or `socket-only`) in `kitty.conf` so
+flow can drive `kitty @ launch` from inside the running kitty
+instance.
 
 The architecture is portable — session spawning is one small
-package — but other harnesses (Codex, Cursor, plain shell) and other
-terminals (Linux + tmux/wezterm, Windows Terminal) need contributors
-who run those stacks daily and care enough to wire them in. If that's
-you, [a PR is very welcome](CONTRIBUTING.md).
+package, agent providers are pluggable via `internal/agents/` —
+but other harnesses (Cursor, Aider, plain shell) and other
+terminals (Linux + tmux/wezterm, Windows Terminal) need
+contributors who run those stacks daily and care enough to wire
+them in. If that's you, [a PR is very welcome](CONTRIBUTING.md).
 
 ## Where flow came from
 

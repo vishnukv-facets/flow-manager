@@ -122,8 +122,14 @@ const SkeletonRows = ({ rows = 6 }) => (
 const Dot = ({ status }) => <span className={`dot ${status}`}></span>;
 
 const StatusPill = ({ status }) => {
-  const label = { running: 'running', waiting: 'waiting on you', idle: 'idle', stale: 'stale', dead: 'crashed', 'in-progress': 'in-progress', backlog: 'backlog', done: 'done' }[status] || status;
+  const label = { running: 'agent running', waiting: 'needs input', idle: 'agent idle', stale: 'stale', dead: 'crashed', 'in-progress': 'in-progress', backlog: 'backlog', done: 'done' }[status] || status;
   return <span className={`pill ${status}`}>{status === 'waiting' && <span style={{display:'inline-block',width:6,height:6,borderRadius:'50%',background:'currentColor',marginRight:5,animation:'pulse 1.6s ease-in-out infinite'}}></span>}{label}</span>;
+};
+
+const TaskStatePill = ({ status }) => {
+  if (!status) return null;
+  const label = { 'in-progress': 'task in progress', backlog: 'task backlog', done: 'task done' }[status] || `task ${status}`;
+  return <span className={`pill ${status}`}>{label}</span>;
 };
 
 const PriorityPill = ({ priority }) => {
@@ -227,6 +233,7 @@ const AgentTile = ({ agent, onOpen, onAction, big }) => {
         <div className="tile-head">
           <Dot status={agent.status}/>
           <StatusPill status={agent.status}/>
+          <TaskStatePill status={agent.task_status}/>
           <PriorityPill priority={agent.priority}/>
           <span className="tile-spacer"></span>
           <AgentChip provider={agent.provider}/>
@@ -248,6 +255,16 @@ const AgentTile = ({ agent, onOpen, onAction, big }) => {
                 <span className="mono dim">{pr.state}</span>
               </a>
             ))}
+          </div>
+        )}
+        {agent.hook_health && (
+          <div className="hook-health" onClick={(e) => e.stopPropagation()}>
+            <Icon name="shield-alert" size={14}/>
+            <div>
+              <strong>Codex hooks need attention</strong>
+              <p>{agent.hook_health.message}</p>
+              {agent.hook_health.action && <div className="mono">{agent.hook_health.action}</div>}
+            </div>
           </div>
         )}
         {agent.status === 'waiting' && agent.waiting_for && (
@@ -368,6 +385,14 @@ const ActivityHeatmap = ({ data = [] }) => {
       ? date.toLocaleString('en-US', { month: 'short' })
       : '';
   });
+  const dayTip = (day) => {
+    const count = day.count || 0;
+    const label = parseDate(day.date).toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' });
+    const tasks = (day.tasks || []).slice(0, 3).join(', ');
+    const taskSuffix = tasks ? ` · ${tasks}` : '';
+    if (!count) return `No activity on ${label}`;
+    return `${count} action${count === 1 ? '' : 's'} on ${label}${taskSuffix}`;
+  };
 
   return (
     <div className="heatmap gh">
@@ -390,11 +415,15 @@ const ActivityHeatmap = ({ data = [] }) => {
                 {week.map(day => {
                   const count = day.count || 0;
                   const tasks = (day.tasks || []).join(', ');
+                  const tip = dayTip(day);
                   return (
                     <div
                       key={day.date}
                       className="gh-cell"
                       title={`${count} action${count === 1 ? '' : 's'} · ${day.date}${tasks ? ` · ${tasks}` : ''}`}
+                      data-tip={tip}
+                      aria-label={tip}
+                      tabIndex={0}
                       style={{background: colors[level(count)]}}
                     ></div>
                   );
@@ -623,6 +652,7 @@ const FocusDrawer = ({ agent, onClose, goto, action }) => {
           <Dot status={agent.status}/>
           <span className="mono" style={{fontSize: 14, fontWeight: 500}}>{agent.slug}</span>
           <StatusPill status={agent.status}/>
+          <TaskStatePill status={agent.task_status}/>
           <button className="btn sm" style={{marginLeft: 'auto'}} onClick={onClose}><Icon name="x" size={11}/></button>
         </div>
         <div className="drawer-body">
@@ -634,6 +664,16 @@ const FocusDrawer = ({ agent, onClose, goto, action }) => {
             <h4>Last 5 minutes</h4>
             <div className="dim">{agent.summary}</div>
           </div>
+          {agent.hook_health && (
+            <div className="hook-health">
+              <Icon name="shield-alert" size={14}/>
+              <div>
+                <strong>Codex hooks need attention</strong>
+                <p>{agent.hook_health.message}</p>
+                {agent.hook_health.action && <div className="mono">{agent.hook_health.action}</div>}
+              </div>
+            </div>
+          )}
           <div className="drawer-summary">
             <h4>Next step (per the agent)</h4>
             <div>{agent.next_step}</div>
@@ -655,6 +695,7 @@ window.MC.FlowLoader = FlowLoader;
 window.MC.SkeletonRows = SkeletonRows;
 window.MC.Dot = Dot;
 window.MC.StatusPill = StatusPill;
+window.MC.TaskStatePill = TaskStatePill;
 window.MC.PriorityPill = PriorityPill;
 window.MC.AgentChip = AgentChip;
 window.MC.ProviderMark = ProviderMark;

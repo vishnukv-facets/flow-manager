@@ -200,6 +200,7 @@ type codexTranscriptRecord struct {
 	Payload   json.RawMessage `json:"payload"`
 	Name      string          `json:"name"`
 	Arguments string          `json:"arguments"`
+	CallID    string          `json:"call_id"`
 	Output    json.RawMessage `json:"output"`
 	Action    struct {
 		Command []string `json:"command"`
@@ -306,6 +307,122 @@ func rawJSONAsText(raw json.RawMessage) string {
 		return text
 	}
 	return string(raw)
+}
+
+type codexPendingUserInput struct {
+	CallID    string
+	Timestamp string
+	Question  string
+	RawJSON   string
+	Seq       int
+}
+
+func pendingCodexUserInput(path string) (*codexPendingUserInput, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return nil, err
+	}
+	defer f.Close()
+
+	scanner := bufio.NewScanner(f)
+	scanner.Buffer(make([]byte, 0, 64*1024), 10*1024*1024)
+	pending := map[string]codexPendingUserInput{}
+	seq := 0
+	for scanner.Scan() {
+		line := append([]byte(nil), scanner.Bytes()...)
+		seq++
+		rec, ok := codexPayloadRecord(line)
+		if !ok {
+			continue
+		}
+		switch rec.Type {
+		case "message":
+			if rec.Role == "user" {
+				pending = map[string]codexPendingUserInput{}
+			}
+		case "function_call":
+			if !codexRequestUserInputTool(rec.Name) {
+				continue
+			}
+			pending = map[string]codexPendingUserInput{}
+			callID := strings.TrimSpace(rec.CallID)
+			if callID == "" {
+				callID = fmt.Sprintf("offset-%d", seq)
+			}
+			question := codexUserInputQuestion(rec.Arguments)
+			if question == "" {
+				question = "The Codex session is waiting for your input."
+			}
+			pending[callID] = codexPendingUserInput{
+				CallID:    callID,
+				Timestamp: rec.Timestamp,
+				Question:  question,
+				RawJSON:   string(line),
+				Seq:       seq,
+			}
+		case "function_call_output":
+			if callID := strings.TrimSpace(rec.CallID); callID != "" {
+				delete(pending, callID)
+			}
+		}
+	}
+	if err := scanner.Err(); err != nil {
+		return nil, err
+	}
+	var latest *codexPendingUserInput
+	for _, item := range pending {
+		item := item
+		if latest == nil || item.Seq > latest.Seq {
+			latest = &item
+		}
+	}
+	return latest, nil
+}
+
+func codexPayloadRecord(line []byte) (codexTranscriptRecord, bool) {
+	var rec codexTranscriptRecord
+	if err := json.Unmarshal(line, &rec); err != nil {
+		return codexTranscriptRecord{}, false
+	}
+	if rec.Type == "response_item" {
+		var payload codexTranscriptRecord
+		if err := json.Unmarshal(rec.Payload, &payload); err != nil {
+			return codexTranscriptRecord{}, false
+		}
+		if payload.Timestamp == "" {
+			payload.Timestamp = rec.Timestamp
+		}
+		return payload, true
+	}
+	return rec, true
+}
+
+func codexRequestUserInputTool(name string) bool {
+	tool := normalizeAgentHookPart(name)
+	return tool == "request_user_input" || strings.Contains(tool, "request_user_input")
+}
+
+func codexUserInputQuestion(arguments string) string {
+	var args struct {
+		Questions []struct {
+			Header   string `json:"header"`
+			Question string `json:"question"`
+		} `json:"questions"`
+	}
+	if err := json.Unmarshal([]byte(arguments), &args); err != nil {
+		return ""
+	}
+	for i, question := range args.Questions {
+		text := strings.TrimSpace(question.Question)
+		if text == "" {
+			continue
+		}
+		if remaining := len(args.Questions) - i - 1; remaining > 0 {
+			return truncateText(fmt.Sprintf("%s (+%d more)", text, remaining), 220)
+		}
+		return truncateText(text, 220)
+	}
+	return ""
 }
 
 func parseUserRecord(raw json.RawMessage, offset int64) []TranscriptEntry {

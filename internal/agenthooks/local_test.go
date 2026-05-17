@@ -35,6 +35,9 @@ func TestInstallLocalWritesRepoScopedHookFiles(t *testing.T) {
 	if !hookFileReferences(codex, "PreToolUse", CodexCommand) {
 		t.Fatalf("Codex local hook missing PreToolUse command: %#v", codex["hooks"])
 	}
+	if matcher, ok := hookMatcherForCommand(codex, "PreToolUse", CodexCommand); !ok || matcher != "" {
+		t.Fatalf("Codex PreToolUse matcher = %q found=%v, want broad managed hook without matcher", matcher, ok)
+	}
 	if !hookFileReferences(codex, "PostToolUse", CodexCommand) {
 		t.Fatalf("Codex local hook missing PostToolUse command: %#v", codex["hooks"])
 	}
@@ -73,6 +76,104 @@ func TestInstallLocalPreservesExistingHooks(t *testing.T) {
 	}
 	if got, _ := claude["theme"].(string); got != "dark" {
 		t.Fatalf("top-level field = %q, want dark", got)
+	}
+}
+
+func TestInstallLocalWithOptionsUsesPathIndependentHookCommand(t *testing.T) {
+	dir := t.TempDir()
+	bin := filepath.Join(dir, "bin", "flow")
+	hookURL := "http://127.0.0.1:8788/api/hooks/agent"
+
+	changed, err := InstallLocalWithOptions(dir, InstallOptions{CommandPath: bin, HookURL: hookURL})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !changed {
+		t.Fatal("InstallLocalWithOptions changed=false, want true on first install")
+	}
+
+	codex := readHookTestFile(t, filepath.Join(dir, ".codex", "hooks.json"))
+	want := "flow hook agent-event --provider codex --url '" + hookURL + "'"
+	if !hookFileReferences(codex, "PreToolUse", want) {
+		t.Fatalf("Codex hook missing path-independent command %q: %#v", want, codex["hooks"])
+	}
+	if hookFileReferences(codex, "PreToolUse", "'"+bin+"' hook agent-event --provider codex --url '"+hookURL+"'") {
+		t.Fatalf("Codex hook used absolute binary path: %#v", codex["hooks"])
+	}
+}
+
+func TestInstallLocalWithOptionsReplacesStaleManagedCommand(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, ".codex", "hooks.json")
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	raw := []byte(`{"hooks":{"PreToolUse":[{"matcher":"request_user_input","hooks":[{"type":"command","command":"flow hook agent-event --provider codex --url 'http://old.invalid/api/hooks/agent'"}]}]}}`)
+	if err := os.WriteFile(path, raw, 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	bin := filepath.Join(dir, "bin", "flow")
+	if changed, err := InstallLocalWithOptions(dir, InstallOptions{CommandPath: bin}); err != nil || !changed {
+		t.Fatalf("InstallLocalWithOptions changed=%v err=%v, want replacement", changed, err)
+	}
+	codex := readHookTestFile(t, path)
+	if hookFileReferences(codex, "PreToolUse", "flow hook agent-event --provider codex --url 'http://old.invalid/api/hooks/agent'") {
+		t.Fatalf("stale command was not removed: %#v", codex["hooks"])
+	}
+	want := "flow hook agent-event --provider codex"
+	if !hookFileReferences(codex, "PreToolUse", want) {
+		t.Fatalf("replacement command missing %q: %#v", want, codex["hooks"])
+	}
+}
+
+func TestInstallLocalWithOptionsReplacesStaleManagedMatcher(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, ".codex", "hooks.json")
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	raw := []byte(`{"hooks":{"PreToolUse":[{"matcher":"AskUserQuestion|ExitPlanMode|request_user_input|mcp__.*request_user_input","hooks":[{"type":"command","command":"flow hook agent-event --provider codex --url 'http://127.0.0.1:8787/api/hooks/agent'"}]}]}}`)
+	if err := os.WriteFile(path, raw, 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	if changed, err := InstallLocalWithOptions(dir, InstallOptions{HookURL: "http://127.0.0.1:8787/api/hooks/agent"}); err != nil || !changed {
+		t.Fatalf("InstallLocalWithOptions changed=%v err=%v, want matcher replacement", changed, err)
+	}
+	codex := readHookTestFile(t, path)
+	want := "flow hook agent-event --provider codex --url 'http://127.0.0.1:8787/api/hooks/agent'"
+	matcher, ok := hookMatcherForCommand(codex, "PreToolUse", want)
+	if !ok || matcher != "" {
+		t.Fatalf("Codex PreToolUse matcher = %q found=%v, want stale matcher removed: %#v", matcher, ok, codex["hooks"])
+	}
+	if changed, err := InstallLocalWithOptions(dir, InstallOptions{HookURL: "http://127.0.0.1:8787/api/hooks/agent"}); err != nil || changed {
+		t.Fatalf("second install changed=%v err=%v, want idempotent", changed, err)
+	}
+}
+
+func TestInstallLocalWithOptionsReplacesAbsoluteManagedCommand(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, ".claude", "settings.local.json")
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	raw := []byte(`{"hooks":{"SessionStart":[{"matcher":"startup|resume","hooks":[{"type":"command","command":"'/Users/vishnukv/facets/codebases/awesome-flow/bin/flow' hook agent-event --provider claude --url 'http://127.0.0.1:8787/api/hooks/agent'"}]}]}}`)
+	if err := os.WriteFile(path, raw, 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	if changed, err := InstallLocalWithOptions(dir, InstallOptions{CommandPath: "/Users/vishnukv/facets/codebases/awesome-flow/bin/flow", HookURL: "http://127.0.0.1:8787/api/hooks/agent"}); err != nil || !changed {
+		t.Fatalf("InstallLocalWithOptions changed=%v err=%v, want replacement", changed, err)
+	}
+	claude := readHookTestFile(t, path)
+	oldCommand := "'/Users/vishnukv/facets/codebases/awesome-flow/bin/flow' hook agent-event --provider claude --url 'http://127.0.0.1:8787/api/hooks/agent'"
+	if hookFileReferences(claude, "SessionStart", oldCommand) {
+		t.Fatalf("absolute command was not removed: %#v", claude["hooks"])
+	}
+	want := "flow hook agent-event --provider claude --url 'http://127.0.0.1:8787/api/hooks/agent'"
+	if !hookFileReferences(claude, "SessionStart", want) {
+		t.Fatalf("replacement command missing %q: %#v", want, claude["hooks"])
 	}
 }
 
@@ -176,17 +277,23 @@ func readHookTestFile(t *testing.T, path string) map[string]any {
 }
 
 func hookFileReferences(cfg map[string]any, event, command string) bool {
+	_, ok := hookMatcherForCommand(cfg, event, command)
+	return ok
+}
+
+func hookMatcherForCommand(cfg map[string]any, event, command string) (string, bool) {
 	hooks, _ := cfg["hooks"].(map[string]any)
 	entries, _ := hooks[event].([]any)
 	for _, entry := range entries {
 		m, _ := entry.(map[string]any)
+		matcher, _ := m["matcher"].(string)
 		inner, _ := m["hooks"].([]any)
 		for _, hook := range inner {
 			hm, _ := hook.(map[string]any)
 			if cmd, _ := hm["command"].(string); cmd == command {
-				return true
+				return matcher, true
 			}
 		}
 	}
-	return false
+	return "", false
 }

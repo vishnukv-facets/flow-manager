@@ -3,7 +3,7 @@ const {
   AGENTS, DEAD_AGENT, DONE_AGENTS = [], BACKLOG, DONE_TASKS = [], KB_FILES, WORKDIRS, PLAYBOOKS_MC, PROJECTS_MC, ACTIVITY_HEATMAP, TRASH,
   SAMPLE_TRANSCRIPT, TERMINAL_SAMPLES, SAMPLE_DIFF_FILES,
   formatAge, formatActivity, fmtTokens, shortUUID, rerenderIcons,
-  Icon, FlowMark, FlowLogo, SkeletonRows, StatusPill, PriorityPill, AgentChip, ProviderMark, BranchChip, Dot, PixelIndicator, Sparkline,
+  Icon, FlowMark, FlowLogo, SkeletonRows, StatusPill, TaskStatePill, PriorityPill, AgentChip, ProviderMark, BranchChip, Dot, PixelIndicator, Sparkline,
   AgentTile, TranscriptView, ActivityHeatmap, FocusDrawer, ClockProvider, ClockCtx,
 } = window.MC;
 
@@ -833,7 +833,7 @@ const NativeTranscriptPanel = ({ agent }) => (
   </div>
 );
 
-const SessionDetail = ({ agent, goto, action }) => {
+const SessionDetail = ({ agent, goto, action, gitDiffOpen = false, toggleGitDiff = () => {} }) => {
   const [liveAgent, setLiveAgent] = useState(agent);
   const [terminalStatus, setTerminalStatus] = useState('connecting');
   const [terminalRestartKey, setTerminalRestartKey] = useState(0);
@@ -883,6 +883,7 @@ const SessionDetail = ({ agent, goto, action }) => {
         <span className="mono" style={{fontSize: 14, fontWeight: 500}}>{current.slug}</span>
         <span style={{color: 'var(--text-dim)'}}>{current.name}</span>
         <StatusPill status={current.status}/>
+        <TaskStatePill status={current.task_status}/>
         <AgentChip provider={current.provider}/>
         <BranchSwitcher agent={current} action={action}/>
         {(current.pr_links || []).map(pr => (
@@ -894,12 +895,27 @@ const SessionDetail = ({ agent, goto, action }) => {
         ))}
         <span className="bridge-poll mono">live snapshot stream</span>
         <div style={{marginLeft: 'auto', display: 'flex', gap: 6}}>
+          <button className={`btn sm ${gitDiffOpen ? 'primary' : ''}`} onClick={toggleGitDiff} title={gitDiffOpen ? 'Hide git diff panel' : 'Show git diff panel'}>
+            <Icon name="git-compare" size={11}/>
+            Git diff
+            {(current.diff?.files || 0) > 0 && <span className="mono" style={{marginLeft: 4, opacity: 0.75}}>{current.diff.files}</span>}
+          </button>
           <button className="btn sm" onClick={() => goto('mc')}><Icon name="arrow-left" size={11}/>Detach</button>
           <button className="btn sm" onClick={restartTerminal} disabled={!canRestartTerminal} title={restartTitle}><Icon name="refresh-cw" size={11}/>Restart</button>
           <TerminalDropdown action={action} agent={current}/>
         </div>
       </div>
-      <div className="bridge-layout">
+      {current.hook_health && (
+        <div className="hook-health">
+          <Icon name="shield-alert" size={14}/>
+          <div>
+            <strong>Codex hooks need attention</strong>
+            <p>{current.hook_health.message}</p>
+            {current.hook_health.action && <div className="mono">{current.hook_health.action}</div>}
+          </div>
+        </div>
+      )}
+      <div className={`bridge-layout${gitDiffOpen ? '' : ' single'}`}>
         {providerAvailable ? (
           nativeTranscriptMode
             ? <NativeTranscriptPanel agent={current}/>
@@ -921,17 +937,19 @@ const SessionDetail = ({ agent, goto, action }) => {
             </div>
           </div>
         )}
-        <div className="bridge-side">
-          <CollapsiblePanel icon="git-compare" title="Git diff" count={`${current.diff?.files || 0} files · +${current.diff?.add || 0} / -${current.diff?.rem || 0}`} defaultOpen>
-            <DiffSidecar agent={current}/>
-          </CollapsiblePanel>
-        </div>
+        {gitDiffOpen && (
+          <div className="bridge-side">
+            <CollapsiblePanel icon="git-compare" title="Git diff" count={`${current.diff?.files || 0} files · +${current.diff?.add || 0} / -${current.diff?.rem || 0}`} defaultOpen>
+              <DiffSidecar agent={current}/>
+            </CollapsiblePanel>
+          </div>
+        )}
       </div>
     </div>
   );
 };
 
-const CompletedSessionView = ({ agent, goto }) => (
+const CompletedSessionView = ({ agent, goto, gitDiffOpen = false, toggleGitDiff = () => {} }) => (
   <div>
     <div className="action-bar">
       <Icon name="check-circle" size={14} style={{color: 'var(--running)'}}/>
@@ -949,11 +967,16 @@ const CompletedSessionView = ({ agent, goto }) => (
       ))}
       <span className="bridge-poll mono">completed task snapshot</span>
       <div style={{marginLeft: 'auto', display: 'flex', gap: 6}}>
+        <button className={`btn sm ${gitDiffOpen ? 'primary' : ''}`} onClick={toggleGitDiff} title={gitDiffOpen ? 'Hide git diff panel' : 'Show git diff panel'}>
+          <Icon name="git-compare" size={11}/>
+          Git diff
+          {(agent.diff?.files || 0) > 0 && <span className="mono" style={{marginLeft: 4, opacity: 0.75}}>{agent.diff.files}</span>}
+        </button>
         <button className="btn sm primary" onClick={() => goto('sessions')}><Icon name="arrow-left" size={11}/>Sessions</button>
         <button className="btn sm" onClick={() => goto('tasks')}><Icon name="list" size={11}/>Tasks</button>
       </div>
     </div>
-    <div className="completed-layout">
+    <div className={`completed-layout${gitDiffOpen ? '' : ' single'}`}>
       <div className="pane">
         <div className="pane-head">
           <Icon name="message-square-text" size={11}/>
@@ -964,14 +987,16 @@ const CompletedSessionView = ({ agent, goto }) => (
           <TranscriptView entries={agent.transcript || []} live={false} provider={agent.provider}/>
         </div>
       </div>
-      <div className="bridge-side">
-        <CollapsiblePanel icon="layers" title="Metadata" count={agent.provider || 'agent'} defaultOpen>
-          <ContextSummary agent={agent}/>
-        </CollapsiblePanel>
-        <CollapsiblePanel icon="git-compare" title="Git diff" count={`${agent.diff?.files || 0} files · +${agent.diff?.add || 0} / -${agent.diff?.rem || 0}`} defaultOpen>
-          <DiffSidecar agent={agent}/>
-        </CollapsiblePanel>
-      </div>
+      {gitDiffOpen && (
+        <div className="bridge-side">
+          <CollapsiblePanel icon="layers" title="Metadata" count={agent.provider || 'agent'} defaultOpen>
+            <ContextSummary agent={agent}/>
+          </CollapsiblePanel>
+          <CollapsiblePanel icon="git-compare" title="Git diff" count={`${agent.diff?.files || 0} files · +${agent.diff?.add || 0} / -${agent.diff?.rem || 0}`} defaultOpen>
+            <DiffSidecar agent={agent}/>
+          </CollapsiblePanel>
+        </div>
+      )}
     </div>
   </div>
 );

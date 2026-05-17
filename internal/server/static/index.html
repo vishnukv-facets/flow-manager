@@ -374,11 +374,11 @@ code { font-family: var(--mono); background: var(--surface-2); padding: 1px 5px;
 .flow-wordmark .wordmark-dot { color: var(--primary); }
 
 /* ── Brand loaders ───────────────────────────────────────── */
-.boot-splash { position: fixed; inset: 0; z-index: 1000; display: grid; place-items: center; padding: 2px 4px; background: #050506; color: var(--text); transition: opacity 180ms ease, transform 180ms ease; }
+.boot-splash { position: fixed; inset: 0; z-index: 1000; display: grid; place-items: center; padding: 0; background: #050506; color: var(--text); transition: opacity 180ms ease, transform 180ms ease; }
 .boot-splash-out { opacity: 0; transform: scale(0.995); pointer-events: none; }
-.boot-splash-panel { position: relative; width: 100%; height: 100%; min-height: 280px; padding: 20px; border: 1px solid var(--border); border-radius: 8px; background: #0c0c0c; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 18px; overflow: hidden; }
-.boot-splash-panel::before { content: ''; position: absolute; top: 50%; left: 50%; width: 420px; height: 420px; transform: translate(-50%, -50%); background: radial-gradient(circle, rgba(100,93,246,0.15), transparent 60%); pointer-events: none; }
-.boot-splash-cap { position: absolute; top: 28px; left: 32px; z-index: 1; font-family: var(--mono); font-size: 10px; color: var(--text-faint); text-transform: uppercase; letter-spacing: 0.08em; }
+.boot-splash-panel { position: relative; width: min(440px, calc(100vw - 48px)); padding: 0; border: 0; border-radius: 0; background: transparent; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 18px; overflow: visible; }
+.boot-splash-panel::before { content: ''; position: absolute; top: 50%; left: 50%; width: 420px; height: 420px; transform: translate(-50%, -50%); background: radial-gradient(circle, rgba(100,93,246,0.12), transparent 62%); pointer-events: none; }
+.boot-splash-cap { display: none; }
 .boot-splash-lockup { position: relative; z-index: 1; display: inline-flex; align-items: center; gap: 14px; }
 .boot-splash-lockup .flow-mark { width: 44px; height: 44px; animation: splash-pulse 2.6s ease-in-out infinite; }
 .boot-splash-lockup .flow-wordmark { font-size: 30px; }
@@ -458,9 +458,14 @@ code { font-family: var(--mono); background: var(--surface-2); padding: 1px 5px;
 .notif-badge { position: absolute; top: -5px; right: -5px; min-width: 16px; height: 16px; padding: 0 4px; border-radius: 8px; background: var(--waiting); color: #0a0a0d; font-size: 10px; font-weight: 600; display: inline-flex; align-items: center; justify-content: center; border: 1px solid var(--surface); }
 .notif-pop { position: absolute; top: calc(100% + 8px); right: 0; width: 380px; max-height: 480px; background: var(--surface); border: 1px solid var(--border); border-radius: 4px; box-shadow: 0 16px 48px rgba(0,0,0,0.6); display: flex; flex-direction: column; z-index: 70; }
 .notif-head { display: flex; align-items: center; padding: 10px 12px; border-bottom: 1px solid var(--border); }
-.notif-list { flex: 1; overflow-y: auto; padding: 4px; }
+.notif-list { flex: 1; overflow-y: auto; padding: 6px; }
 .notif-empty { padding: 32px 12px; text-align: center; color: var(--text-faint); font-size: 11.5px; }
+.notif-section { border-bottom: 1px solid var(--border); padding-bottom: 6px; margin-bottom: 6px; }
+.notif-section:last-child { border-bottom: 0; margin-bottom: 0; padding-bottom: 0; }
+.notif-section-head { display: flex; align-items: center; gap: 7px; padding: 6px 4px 7px; color: var(--text-dim); font-size: 10.5px; text-transform: uppercase; letter-spacing: 0.06em; }
+.notif-section-head .count { margin-left: auto; color: var(--text-faint); letter-spacing: 0; text-transform: none; }
 .notif-row { width: 100%; display: grid; grid-template-columns: 6px 18px 1fr auto auto; align-items: start; gap: 10px; padding: 10px 10px 10px 8px; background: transparent; border: 0; border-radius: 3px; cursor: pointer; text-align: left; }
+.notif-row.event { grid-template-columns: 6px 18px 1fr auto; cursor: default; opacity: 0.9; }
 .notif-row:hover { background: var(--surface-2); }
 .notif-row-dot { width: 6px; height: 6px; border-radius: 50%; margin-top: 6px; opacity: 0.4; }
 .notif-row.unread .notif-row-dot { opacity: 1; box-shadow: 0 0 6px currentColor; }
@@ -473,6 +478,10 @@ code { font-family: var(--mono); background: var(--surface-2); padding: 1px 5px;
 .notif-dismiss { border: 1px solid var(--border); background: transparent; color: var(--text-faint); width: 22px; height: 22px; border-radius: 3px; display: inline-flex; align-items: center; justify-content: center; cursor: pointer; }
 .notif-dismiss:hover { color: var(--text); border-color: var(--primary); background: var(--surface); }
 .notif-foot { display: flex; gap: 6px; padding: 8px; border-top: 1px solid var(--border); background: var(--surface); }
+.hook-health { display: flex; align-items: flex-start; gap: 8px; padding: 9px 10px; border: 1px solid rgba(245,166,35,0.3); background: rgba(245,166,35,0.08); color: var(--text-mid); border-radius: 4px; margin: 8px 0; font-size: 12px; }
+.hook-health strong { display: block; color: var(--waiting); font-size: 11px; text-transform: uppercase; letter-spacing: 0.04em; margin-bottom: 2px; }
+.hook-health p { margin: 0; color: var(--text-dim); line-height: 1.35; }
+.hook-health .mono { color: var(--text-mid); font-size: 10.5px; margin-top: 4px; }
 
 /* Terminal launcher (split button + menu) */
 .term-launcher { position: relative; display: inline-flex; }
@@ -702,21 +711,23 @@ select.form-input { appearance: none; background-image: linear-gradient(45deg, t
 .ribbon-chip .meta { font-family: var(--mono); font-size: 10px; color: var(--text-dim); margin-top: 5px; }
 
 	/* ── Action bar ─────────────────────────────────────────── */
-	.heatmap.gh { padding: 12px 14px; background: var(--surface); border: 1px solid var(--border); border-radius: 6px; min-width: 0; width: fit-content; justify-self: start; }
-	.heatmap.gh .heatmap-head { display: flex; align-items: center; gap: 7px; font-size: 12px; color: var(--text-mid); margin-bottom: 10px; font-weight: 500; width: max-content; white-space: nowrap; }
-	.gh-action-count { margin-left: 12px; }
-		.gh-grid { display: grid; grid-template-columns: 24px max-content; gap: 8px; align-items: start; }
-		.gh-days { display: grid; grid-template-rows: repeat(7, 12px); gap: 3px; padding-top: 17px; color: var(--text-dim); }
-	.gh-day-label { height: 12px; font-size: 9px; line-height: 12px; }
+	.heatmap.gh { padding: 18px 22px; background: var(--surface); border: 1px solid var(--border); border-radius: 7px; min-width: 0; width: fit-content; justify-self: start; overflow: visible; }
+	.heatmap.gh .heatmap-head { display: flex; align-items: center; gap: 8px; font-size: 12px; color: var(--text-mid); margin-bottom: 14px; font-weight: 500; width: max-content; white-space: nowrap; }
+	.gh-action-count { margin-left: 14px; color: var(--text-faint); }
+		.gh-grid { display: grid; grid-template-columns: 34px max-content; gap: 12px; align-items: start; }
+		.gh-days { display: grid; grid-template-rows: repeat(7, 16px); gap: 5px; padding-top: 23px; color: var(--text-dim); }
+	.gh-day-label { height: 16px; font-size: 10px; line-height: 16px; }
 		.gh-chart { width: max-content; overflow: visible; padding-bottom: 1px; }
-	.gh-months { display: grid; grid-template-columns: repeat(12, 12px); gap: 3px; height: 15px; }
-	.gh-month-cell { font-size: 9px; color: var(--text-dim); line-height: 12px; white-space: nowrap; text-transform: uppercase; overflow: visible; }
-	.gh-weeks { display: grid; grid-template-columns: repeat(12, 12px); gap: 3px; }
-	.gh-week { display: grid; grid-template-rows: repeat(7, 12px); gap: 3px; }
-	.gh-cell { width: 12px; height: 12px; border-radius: 2px; border: 1px solid rgba(255,255,255,0.025); transition: outline-color 80ms, transform 80ms; cursor: default; }
-	.gh-cell:hover { outline: 1px solid var(--running); outline-offset: 1px; transform: scale(1.08); }
-	.gh-legend { display: flex; align-items: center; justify-content: flex-end; gap: 4px; margin-top: 8px; color: var(--text-dim); font-size: 10px; }
-	.gh-legend .gh-cell { width: 10px; height: 10px; }
+	.gh-months { display: grid; grid-template-columns: repeat(12, 16px); gap: 5px; height: 18px; }
+	.gh-month-cell { font-size: 10px; color: var(--text-dim); line-height: 14px; white-space: nowrap; text-transform: uppercase; overflow: visible; }
+	.gh-weeks { display: grid; grid-template-columns: repeat(12, 16px); gap: 5px; }
+	.gh-week { display: grid; grid-template-rows: repeat(7, 16px); gap: 5px; }
+	.gh-cell { position: relative; width: 16px; height: 16px; border-radius: 3px; border: 1px solid rgba(255,255,255,0.035); transition: outline-color 80ms, transform 80ms, border-color 80ms; cursor: default; }
+	.gh-cell:hover { outline: 1px solid var(--running); outline-offset: 2px; transform: scale(1.08); border-color: rgba(255,255,255,0.16); z-index: 5; }
+	.gh-cell[data-tip]:hover::after, .gh-cell[data-tip]:focus-visible::after { content: attr(data-tip); position: absolute; left: 50%; bottom: calc(100% + 9px); z-index: 20; width: max-content; max-width: 220px; transform: translateX(-50%); padding: 8px 10px; border: 1px solid var(--border-strong); border-radius: 4px; background: #101013; box-shadow: 0 10px 28px rgba(0,0,0,0.35); color: var(--text); font-family: var(--mono); font-size: 10.5px; line-height: 1.35; white-space: normal; pointer-events: none; }
+	.gh-cell[data-tip]:hover::before, .gh-cell[data-tip]:focus-visible::before { content: ''; position: absolute; left: 50%; bottom: calc(100% + 4px); z-index: 21; width: 8px; height: 8px; transform: translateX(-50%) rotate(45deg); background: #101013; border-right: 1px solid var(--border-strong); border-bottom: 1px solid var(--border-strong); pointer-events: none; }
+	.gh-legend { display: flex; align-items: center; justify-content: flex-end; gap: 6px; margin-top: 12px; color: var(--text-dim); font-size: 10px; }
+	.gh-legend .gh-cell { width: 13px; height: 13px; }
 .action-bar { display: flex; align-items: center; gap: 6px; padding: 8px 0; margin-bottom: 12px; border-bottom: 1px solid var(--border); }
 
 /* ── Project / playbook detail pages ───────────────────── */
@@ -830,6 +841,8 @@ select.form-input { appearance: none; background-image: linear-gradient(45deg, t
 /* ── Session detail 3-pane ──────────────────────────────── */
 .three-pane { display: grid; grid-template-columns: 1fr 1fr 320px; gap: 10px; height: calc(100vh - 44px - 90px); }
 .bridge-layout { display: grid; grid-template-columns: minmax(480px, 1.15fr) minmax(360px, 0.85fr); gap: 10px; height: calc(100vh - 44px - 90px); min-height: 520px; }
+.bridge-layout.single { grid-template-columns: minmax(0, 1fr); }
+.completed-layout.single { grid-template-columns: minmax(0, 1fr); }
 .completed-layout { display: grid; grid-template-columns: minmax(480px, 1.05fr) minmax(360px, 0.95fr); gap: 10px; height: calc(100vh - 44px - 90px); min-height: 520px; }
 .completed-layout .pane { min-height: 0; }
 .completed-layout .transcript { min-height: 100%; }
@@ -883,7 +896,7 @@ select.form-input { appearance: none; background-image: linear-gradient(45deg, t
 		  .hero-stats { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 		  .heatmap.gh { width: 100%; box-sizing: border-box; }
 		  .heatmap.gh .heatmap-head { min-width: 0; white-space: normal; }
-		  .gh-grid { grid-template-columns: 24px minmax(0, 1fr); }
+		  .gh-grid { grid-template-columns: 34px minmax(0, 1fr); }
 		  .gh-chart { width: auto; overflow-x: auto; }
 		  .agent-grid { grid-template-columns: 1fr; }
 		}
@@ -1237,7 +1250,6 @@ select.form-input { appearance: none; background-image: linear-gradient(45deg, t
 
 <div id="boot-splash" class="boot-splash" role="status" aria-live="polite">
   <div class="boot-splash-panel">
-    <span class="boot-splash-cap">08 · SPLASH</span>
     <div class="boot-splash-lockup">
       <svg class="flow-mark" viewBox="0 0 36 36" width="44" height="44" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
         <defs><linearGradient id="boot-flow-grad" x1="0" y1="0" x2="36" y2="36" gradientUnits="userSpaceOnUse"><stop offset="0" stop-color="#645df6"/><stop offset="1" stop-color="#8b87f8"/></linearGradient></defs>
@@ -1254,7 +1266,7 @@ select.form-input { appearance: none; background-image: linear-gradient(45deg, t
     <div class="boot-l-bar" aria-hidden="true"></div>
   </div>
 </div>
-<noscript><div class="boot-splash"><div class="boot-splash-panel"><span class="boot-splash-cap">08 · SPLASH</span><span class="flow-wordmark">flow<span class="wordmark-dot">.</span></span><div class="boot-splash-status">JavaScript is required to run Mission Control.</div></div></div></noscript>
+<noscript><div class="boot-splash"><div class="boot-splash-panel"><span class="flow-wordmark">flow<span class="wordmark-dot">.</span></span><div class="boot-splash-status">JavaScript is required to run Mission Control.</div></div></div></noscript>
 <div id="root"></div>
 
 <script src="/assets/c4534820-6c7b-4ce6-92a7-2cd375baae76.js" integrity="sha384-hD6/rw4ppMLGNu3tX5cjIb+uRZ7UkRJ6BPkLpg4hAu/6onKUg4lLsHAs9EBPT82L" crossorigin="anonymous"></script>
@@ -1314,19 +1326,62 @@ const routeFromLocation = () => {
 };
 const pathForRoute = (route) => route === 'mc' || route === 'overview' ? '/' : `/${route}`;
 
+const notificationLifecycleKinds = new Set(['stop','stop_failure','session_start','session_end','task_completed','task_created','subagent_start','subagent_stop']);
+const classifyNotification = (n) => {
+  const source = (n.source || '').toLowerCase();
+  const kind = String(n.kind || '').toLowerCase();
+  const level = String(n.level || '').toLowerCase();
+  if (level === 'approval' || kind.includes('permission') || kind.includes('elicitation') || kind.includes('question') || kind.includes('input')) return 'attention';
+  if (source === 'agent' || source === 'agent_hook' || notificationLifecycleKinds.has(kind)) return 'lifecycle';
+  return 'notification';
+};
+const notificationSectionMeta = {
+  attention: { title: 'Needs attention', icon: 'alert-circle' },
+  notification: { title: 'Notifications', icon: 'bell' },
+  lifecycle: { title: 'Agent lifecycle', icon: 'activity' },
+  events: { title: 'Event log', icon: 'list-filter' },
+};
+const compactNotificationRows = (items) => {
+  const seenLifecycle = new Set();
+  return (items || []).filter(n => {
+    if (n.category !== 'lifecycle') return true;
+    const key = `${n.source || ''}:${n.title || ''}:${n.url || ''}`;
+    if (seenLifecycle.has(key)) return false;
+    seenLifecycle.add(key);
+    return true;
+  });
+};
+const lifecycleNotificationIsStale = (n, agentByURL) => {
+  if (classifyNotification(n) !== 'lifecycle') return false;
+  const agent = agentByURL.get(n.url || '');
+  if (!agent) return false;
+  const kind = String(n.kind || '').toLowerCase();
+  if (['stop','stop_failure','session_end','task_completed'].includes(kind)) {
+    return agent.status === 'running' || agent.status === 'waiting';
+  }
+  if (['session_start','subagent_start','subagent_stop','task_created'].includes(kind)) {
+    return agent.status === 'idle' || agent.status === 'dead';
+  }
+  return false;
+};
+
 // ── Notifications bell ─────────────────────────────────────────
-const NotificationsBell = ({ waitingCount, liveCount, goto, action }) => {
+const NotificationsBell = ({ waitingCount, liveCount, goto, action, agents = [] }) => {
   const [open, setOpen] = useState(false);
   const ref = useRef(null);
 
   const monitor = window.MC.MONITOR || { notifications: [] };
 
-  // Build notification list
-  const notifs = [
-    ...(monitor.notifications || []).filter(n => n.status !== 'dismissed').map(n => ({
+  const agentByURL = new Map((agents || []).filter(a => a && a.slug).map(a => [`/session/${a.slug}`, a]));
+  const visibleNotificationInputs = (monitor.notifications || [])
+    .filter(n => n.status !== 'dismissed')
+    .filter(n => !lifecycleNotificationIsStale(n, agentByURL));
+  const eventIdsWithNotifications = new Set(visibleNotificationInputs.map(n => n.event_id).filter(Boolean));
+  const notifs = compactNotificationRows(visibleNotificationInputs.map(n => ({
       id: n.id,
       event_id: n.event_id,
-      kind: n.level || 'info',
+      kind: n.level || n.kind || 'info',
+      level: n.level || 'info',
       icon: n.level === 'approval' ? 'alert-circle' : n.source === 'github' ? 'git-pull-request' : n.source === 'slack' ? 'message-square' : n.source === 'agent' ? 'bot' : 'bell',
       title: n.title,
       sub: n.body || `${n.source || 'flow'} · ${n.kind || ''}`,
@@ -1335,9 +1390,30 @@ const NotificationsBell = ({ waitingCount, liveCount, goto, action }) => {
       source: n.source,
       slug: n.source === 'agent' ? n.event_id : null,
       unread: n.status === 'unread',
-      monitor: n.source !== 'agent',
-    })),
-  ];
+      dismissable: true,
+      category: classifyNotification(n),
+    })));
+  const events = (monitor.events || [])
+    .filter(e => !eventIdsWithNotifications.has(e.id))
+    .slice(0, 8)
+    .map(e => ({
+      id: `event-${e.id}`,
+      event_id: e.id,
+      kind: e.severity || e.kind || 'event',
+      level: e.severity || 'info',
+      icon: e.source === 'github' ? 'git-pull-request' : e.source === 'slack' ? 'message-square' : e.source === 'agent_hook' ? 'activity' : 'bell',
+      title: e.title,
+      sub: e.body || `${e.source || 'flow'} · ${e.kind || ''}`,
+      time: e.last_seen_at ? e.last_seen_at.slice(11, 16) : 'now',
+      url: e.url,
+      source: e.source,
+      unread: false,
+      dismissable: false,
+      category: 'events',
+    }));
+  const sectionItems = ['attention','notification','lifecycle','events']
+    .map(key => ({ key, ...notificationSectionMeta[key], items: (key === 'events' ? events : notifs.filter(n => n.category === key)) }))
+    .filter(section => section.items.length > 0);
 
   const unreadCount = notifs.filter(n => n.unread).length;
 
@@ -1352,18 +1428,26 @@ const NotificationsBell = ({ waitingCount, liveCount, goto, action }) => {
 
   const handleClick = (n) => {
     setOpen(false);
-    if (n.monitor) {
-      goto('monitor');
+    if (n.url && n.url.startsWith('/session/')) {
+      goto(n.url.replace(/^\/+/, ''));
+      return;
+    }
+    if (n.url && n.url.startsWith('/')) {
+      goto(n.url.replace(/^\/+/, ''));
       return;
     }
     if (n.slug) {
       const agent = AGENTS.find(a => a.slug === n.slug);
       if (agent) action('attach', agent);
       else goto(`session/${n.slug}`);
+      return;
     }
+    goto('monitor');
   };
 
-  const colorFor = (kind) => kind === 'approval' ? 'var(--waiting)' : kind === 'success' || kind === 'done' ? 'var(--running)' : kind === 'warning' || kind === 'pr' ? 'var(--primary-hi)' : 'var(--text-mid)';
+  const colorFor = (kind) => kind === 'approval' || kind === 'high' ? 'var(--waiting)' : kind === 'success' || kind === 'done' || kind === 'low' ? 'var(--running)' : kind === 'warning' || kind === 'medium' || kind === 'pr' ? 'var(--primary-hi)' : 'var(--text-mid)';
+  const dismissableNotifs = notifs.filter(n => n.dismissable);
+  const unreadNotifs = dismissableNotifs.filter(n => n.unread);
 
   return (
     <div className="notif-wrap" ref={ref}>
@@ -1378,25 +1462,37 @@ const NotificationsBell = ({ waitingCount, liveCount, goto, action }) => {
             <span className="mono" style={{marginLeft: 'auto', fontSize: 10.5, color: 'var(--text-faint)'}}>{liveCount} live · {waitingCount} waiting</span>
           </div>
           <div className="notif-list">
-            {notifs.length === 0 ? (
+            {sectionItems.length === 0 ? (
               <div className="notif-empty mono">all clear</div>
-            ) : notifs.map(n => (
-              <div key={n.id} className={`notif-row ${n.unread ? 'unread' : ''}`} role="button" tabIndex={0} onClick={() => handleClick(n)} onKeyDown={(e) => { if (e.key === 'Enter') handleClick(n); }}>
-                <span className="notif-row-dot" style={{background: colorFor(n.kind)}}></span>
-                <span className="notif-row-ic" style={{color: colorFor(n.kind)}}><Icon name={n.icon} size={13}/></span>
-                <div className="notif-row-body">
-                  <div className="notif-row-title">{n.title}</div>
-                  <div className="notif-row-sub mono">{n.sub}</div>
+            ) : sectionItems.map(section => (
+              <div key={section.key} className={`notif-section ${section.key}`}>
+                <div className="notif-section-head mono">
+                  <Icon name={section.icon} size={12}/>
+                  <span>{section.title}</span>
+                  <span className="count">{section.items.length}</span>
                 </div>
-                <span className="notif-row-time mono">{n.time}</span>
-                <button className="notif-dismiss" title="Dismiss notification" aria-label={`Dismiss ${n.title}`} onClick={(e) => { e.stopPropagation(); action('notification-dismiss', { slug: n.id }); }}>
-                  <Icon name="x" size={12}/>
-                </button>
+                {section.items.map(n => (
+                  <div key={n.id} className={`notif-row ${n.unread ? 'unread' : ''} ${n.dismissable ? '' : 'event'}`} role={n.dismissable || n.url || n.slug ? 'button' : undefined} tabIndex={n.dismissable || n.url || n.slug ? 0 : -1} onClick={() => handleClick(n)} onKeyDown={(e) => { if (e.key === 'Enter') handleClick(n); }}>
+                    <span className="notif-row-dot" style={{background: colorFor(n.kind)}}></span>
+                    <span className="notif-row-ic" style={{color: colorFor(n.kind)}}><Icon name={n.icon} size={13}/></span>
+                    <div className="notif-row-body">
+                      <div className="notif-row-title">{n.title}</div>
+                      <div className="notif-row-sub mono">{n.sub}</div>
+                    </div>
+                    <span className="notif-row-time mono">{n.time}</span>
+                    {n.dismissable && (
+                      <button className="notif-dismiss" title="Dismiss notification" aria-label={`Dismiss ${n.title}`} onClick={(e) => { e.stopPropagation(); action('notification-dismiss', { slug: n.id }); }}>
+                        <Icon name="x" size={12}/>
+                      </button>
+                    )}
+                  </div>
+                ))}
               </div>
             ))}
           </div>
           <div className="notif-foot">
-            <button className="btn sm" onClick={() => { notifs.forEach(n => action('notification-dismiss', { slug: n.id })); setOpen(false); }} disabled={!notifs.length} style={{flex: 1, justifyContent: 'center'}}>Dismiss all</button>
+            <button className="btn sm" onClick={() => { action('notification-read-all', { notification_ids: unreadNotifs.map(n => n.id) }); }} disabled={!unreadNotifs.length} style={{flex: 1, justifyContent: 'center'}}>Mark all read</button>
+            <button className="btn sm" onClick={() => { action('notification-dismiss-all', { notification_ids: dismissableNotifs.map(n => n.id) }); setOpen(false); }} disabled={!dismissableNotifs.length} style={{flex: 1, justifyContent: 'center'}}>Dismiss all</button>
             <button className="btn sm" onClick={() => { setOpen(false); goto('monitor'); }} style={{flex: 1, justifyContent: 'center'}}>Open monitor</button>
           </div>
         </div>
@@ -1489,6 +1585,13 @@ const App = () => {
 	  const [sort, setSort] = useState('priority');
 	  const [dataTick, setDataTick] = useState(0);
 	  const [bridgeAgents, setBridgeAgents] = useState({});
+	  const [gitDiffOpen, setGitDiffOpen] = useState(() => {
+	    try { return localStorage.getItem('flow.gitDiffOpen') === '1'; } catch (_) { return false; }
+	  });
+
+	  useEffect(() => {
+	    try { localStorage.setItem('flow.gitDiffOpen', gitDiffOpen ? '1' : '0'); } catch (_) {}
+	  }, [gitDiffOpen]);
 
 	  useEffect(() => {
 	    const splash = document.getElementById('boot-splash');
@@ -1582,6 +1685,7 @@ const App = () => {
       entity_kind: target.kind,
       provider: target.provider,
       permission_mode: target.permission_mode,
+      notification_ids: target.notification_ids,
     };
     const resp = await fetch('/api/actions', {
       method: 'POST',
@@ -1669,7 +1773,7 @@ const App = () => {
     if (kind === 'spawn-prompt') { setPalette(false); setCreateOpen(true); return; }
     if (kind === 'create-flow') { openBridge('create-flow', target); return; }
     if (kind === 'overview-chat') { openBridge('overview-chat', target); return; }
-    if (kind === 'monitor-sync' || kind === 'notification-dismiss' || kind === 'notification-read' || kind === 'set-rule-mode') {
+    if (kind === 'monitor-sync' || kind === 'notification-dismiss' || kind === 'notification-dismiss-all' || kind === 'notification-read' || kind === 'notification-read-all' || kind === 'set-rule-mode') {
       serverAction(kind, target).then(refreshUIData).catch(err => setToast(err.message));
       return;
     }
@@ -1755,6 +1859,15 @@ const App = () => {
   const sessionAgent = rawSessionAgent && bridgeAgent
     ? { ...rawSessionAgent, ...bridgeAgent, terminal: { ...(rawSessionAgent.terminal || {}), ...(bridgeAgent.terminal || {}), mode: nativeSessionSnapshot ? 'native' : (bridgeAgent.terminal?.mode || rawSessionAgent.terminal?.mode) } }
     : rawSessionAgent || (!doneAgent ? bridgeAgent : null);
+  const displayAgents = AGENTS.map(agent => {
+    const bridge = bridgeAgents[agent.slug];
+    if (!bridge) return agent;
+    const nativeSnapshot = agent?.terminal?.mode === 'native' || bridge?.terminal?.mode === 'native';
+    return { ...agent, ...bridge, terminal: { ...(agent.terminal || {}), ...(bridge.terminal || {}), mode: nativeSnapshot ? 'native' : (bridge.terminal?.mode || agent.terminal?.mode) } };
+  });
+  Object.values(bridgeAgents).forEach(agent => {
+    if (agent && agent.slug && !displayAgents.some(existing => existing.slug === agent.slug)) displayAgents.push(agent);
+  });
   const isPlaybook = route.startsWith('playbook/');
   const playbookSlug = isPlaybook ? route.slice(9) : null;
   const isProject = route.startsWith('project/');
@@ -1768,8 +1881,8 @@ const App = () => {
     setCreateOpen(false);
     setCreatePreselect(null);
   };
-  const liveRunning = AGENTS.filter(a => a.status === 'running').length;
-  const waiting = AGENTS.filter(a => a.status === 'waiting').length;
+  const liveRunning = displayAgents.filter(a => a.status === 'running').length;
+  const waiting = displayAgents.filter(a => a.status === 'waiting').length;
   const doneTranscriptCount = (doneAgent?.transcript || []).length;
   const completedAgent = doneAgent ? (bridgeTranscriptCount > doneTranscriptCount ? bridgeAgent : doneAgent) : null;
 
@@ -1789,7 +1902,7 @@ const App = () => {
             const nextMode = agent?.terminal?.mode;
             const existingWait = existing?.waiting_for ? JSON.stringify(existing.waiting_for) : '';
             const nextWait = agent?.waiting_for ? JSON.stringify(agent.waiting_for) : '';
-            if (existing && existingCount >= nextCount && existingMode === nextMode && existing.status === agent.status && existingWait === nextWait && existing.last_action === agent.last_action && existing.last_activity_sec === agent.last_activity_sec) return prev;
+            if (existing && existingCount >= nextCount && existingMode === nextMode && existing.status === agent.status && existing.task_status === agent.task_status && existing.runtime_event === agent.runtime_event && existingWait === nextWait && existing.last_action === agent.last_action && existing.last_activity_sec === agent.last_activity_sec) return prev;
             return { ...prev, [agent.slug]: agent };
           });
           const doneIdx = DONE_AGENTS.findIndex(a => a.slug === agent.slug);
@@ -1869,7 +1982,7 @@ const App = () => {
           <span className="kbd">Cmd/Ctrl K</span>
         </div>
         <div className="right">
-          <NotificationsBell waitingCount={waiting} liveCount={liveRunning} goto={goto} action={action}/>
+          <NotificationsBell waitingCount={waiting} liveCount={liveRunning} goto={goto} action={action} agents={displayAgents}/>
           <button className="icon-btn" onClick={() => setHelp(true)} title="Shortcuts">?</button>
         </div>
       </header>
@@ -1877,8 +1990,8 @@ const App = () => {
       <main className="main">
         {route === 'mc' && <MissionControl focus={focus} setFocus={setFocus} action={action} sort={sort} setSort={setSort} goto={goto}/>}
         {route === 'sessions' && <SessionsGrid setFocus={setFocus} action={action} goto={goto}/>}
-        {isSession && sessionAgent && <SessionDetail key={`session-${sessionAgent.slug}`} agent={sessionAgent} goto={goto} action={action}/>}
-        {isSession && !sessionAgent && completedAgent && <CompletedSessionView key={`done-${completedAgent.slug}`} agent={completedAgent} goto={goto} action={action}/>}
+        {isSession && sessionAgent && <SessionDetail key={`session-${sessionAgent.slug}`} agent={sessionAgent} goto={goto} action={action} gitDiffOpen={gitDiffOpen} toggleGitDiff={() => setGitDiffOpen(v => !v)}/>}
+        {isSession && !sessionAgent && completedAgent && <CompletedSessionView key={`done-${completedAgent.slug}`} agent={completedAgent} goto={goto} action={action} gitDiffOpen={gitDiffOpen} toggleGitDiff={() => setGitDiffOpen(v => !v)}/>}
         {isSession && !sessionAgent && !completedAgent && <SessionFallback slug={sessionSlug} goto={goto} action={action}/>}
         {route === 'tasks' && <TasksList setFocus={setFocus} action={action} goto={goto}/>}
         {route === 'projects' && <ProjectsList goto={goto} action={action}/>}

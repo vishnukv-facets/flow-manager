@@ -27,24 +27,25 @@ import (
 )
 
 type actionRequest struct {
-	Kind           string `json:"kind"`
-	Target         string `json:"target"`
-	Slug           string `json:"slug"`
-	Name           string `json:"name"`
-	Project        string `json:"project"`
-	WorkDir        string `json:"work_dir"`
-	Priority       string `json:"priority"`
-	Prompt         string `json:"prompt"`
-	SessionID      string `json:"session_id"`
-	Branch         string `json:"branch"`
-	EventID        string `json:"event_id"`
-	Mode           string `json:"mode"`
-	Source         string `json:"source"`
-	RuleKind       string `json:"rule_kind"`
-	PRURL          string `json:"pr_url"`
-	EntityKind     string `json:"entity_kind"`
-	Provider       string `json:"provider"`
-	PermissionMode string `json:"permission_mode"`
+	Kind            string   `json:"kind"`
+	Target          string   `json:"target"`
+	Slug            string   `json:"slug"`
+	Name            string   `json:"name"`
+	Project         string   `json:"project"`
+	WorkDir         string   `json:"work_dir"`
+	Priority        string   `json:"priority"`
+	Prompt          string   `json:"prompt"`
+	SessionID       string   `json:"session_id"`
+	Branch          string   `json:"branch"`
+	EventID         string   `json:"event_id"`
+	Mode            string   `json:"mode"`
+	Source          string   `json:"source"`
+	RuleKind        string   `json:"rule_kind"`
+	PRURL           string   `json:"pr_url"`
+	EntityKind      string   `json:"entity_kind"`
+	Provider        string   `json:"provider"`
+	PermissionMode  string   `json:"permission_mode"`
+	NotificationIDs []string `json:"notification_ids"`
 }
 
 type actionResponse struct {
@@ -150,6 +151,10 @@ func (s *Server) runAction(req actionRequest) (actionResponse, int) {
 		return s.monitorSync()
 	case "notification-dismiss", "notification-read":
 		return s.updateNotification(req)
+	case "notification-dismiss-all":
+		return s.dismissNotifications(req)
+	case "notification-read-all":
+		return s.markNotificationsRead(req)
 	case "notification-start-agent":
 		return s.startAgentForNotification(req)
 	case "set-rule-mode":
@@ -937,16 +942,51 @@ func (s *Server) updateNotification(req actionRequest) (actionResponse, int) {
 	if req.Kind == "notification-dismiss" {
 		status = "dismissed"
 	}
-	if strings.HasPrefix(id, "agent-") {
-		if err := flowdb.SetNotificationState(s.cfg.DB, id, status); err != nil {
-			return actionResponse{OK: false, Message: err.Error()}, http.StatusBadRequest
-		}
-		return actionResponse{OK: true, Message: "notification " + status}, http.StatusOK
-	}
-	if err := flowdb.UpdateNotificationStatus(s.cfg.DB, id, status); err != nil {
+	if err := s.setNotificationStatus(id, status); err != nil {
 		return actionResponse{OK: false, Message: err.Error()}, http.StatusBadRequest
 	}
 	return actionResponse{OK: true, Message: "notification " + status}, http.StatusOK
+}
+
+func (s *Server) dismissNotifications(req actionRequest) (actionResponse, int) {
+	return s.updateNotifications(req, "dismissed")
+}
+
+func (s *Server) markNotificationsRead(req actionRequest) (actionResponse, int) {
+	return s.updateNotifications(req, "read")
+}
+
+func (s *Server) updateNotifications(req actionRequest, status string) (actionResponse, int) {
+	seen := map[string]bool{}
+	ids := []string{}
+	for _, id := range req.NotificationIDs {
+		id = strings.TrimSpace(id)
+		if id != "" && !seen[id] {
+			seen[id] = true
+			ids = append(ids, id)
+		}
+	}
+	if len(ids) == 0 {
+		if id := strings.TrimSpace(firstNonEmpty(req.Target, req.EventID)); id != "" {
+			ids = append(ids, id)
+		}
+	}
+	if len(ids) == 0 {
+		return actionResponse{OK: false, Message: "notification ids are required"}, http.StatusBadRequest
+	}
+	for _, id := range ids {
+		if err := s.setNotificationStatus(id, status); err != nil {
+			return actionResponse{OK: false, Message: err.Error()}, http.StatusBadRequest
+		}
+	}
+	return actionResponse{OK: true, Message: fmt.Sprintf("%s %d notification(s)", status, len(ids))}, http.StatusOK
+}
+
+func (s *Server) setNotificationStatus(id, status string) error {
+	if strings.HasPrefix(id, "agent-") {
+		return flowdb.SetNotificationState(s.cfg.DB, id, status)
+	}
+	return flowdb.UpdateNotificationStatus(s.cfg.DB, id, status)
 }
 
 func (s *Server) setRuleMode(req actionRequest) (actionResponse, int) {

@@ -475,7 +475,10 @@ func (s *Server) prepareTerminalLaunch(slug string) (terminalLaunch, error) {
 	if err := workdirreg.Touch(s.cfg.DB, task.WorkDir); err != nil {
 		fmt.Fprintf(os.Stderr, "warning: bump workdir last_used_at: %v\n", err)
 	}
-	if _, err := agenthooks.InstallLocal(task.WorkDir); err != nil {
+	if _, err := agenthooks.InstallLocalWithOptions(task.WorkDir, agenthooks.InstallOptions{
+		CommandPath: s.cfg.CommandPath,
+		HookURL:     s.cfg.HookURL,
+	}); err != nil {
 		fmt.Fprintf(os.Stderr, "warning: install local agent hooks: %v\n", err)
 	}
 

@@ -13,7 +13,6 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strconv"
-	"strings"
 	"syscall"
 )
 
@@ -85,11 +84,6 @@ func serveUI(host string, port int) int {
 	if _, err := workdirreg.SyncGitRemotes(db); err != nil {
 		fmt.Fprintf(os.Stderr, "warning: sync workdir remotes: %v\n", err)
 	}
-	if changed, err := agenthooks.InstallKnownWorkdirs(db); err != nil {
-		fmt.Fprintf(os.Stderr, "warning: install local agent hooks for existing workdirs: %v\n", err)
-	} else if changed > 0 {
-		fmt.Fprintf(os.Stderr, "installed local agent hooks in %d existing workdir(s)\n", changed)
-	}
 
 	exe, err := os.Executable()
 	if err != nil {
@@ -101,12 +95,21 @@ func serveUI(host string, port int) int {
 	if hookHost == "0.0.0.0" || hookHost == "::" {
 		hookHost = "127.0.0.1"
 	}
+	hookURL := "http://" + net.JoinHostPort(hookHost, strconv.Itoa(port)) + "/api/hooks/agent"
+	if changed, err := agenthooks.InstallKnownWorkdirsWithOptions(db, agenthooks.InstallOptions{
+		CommandPath: commandPath,
+		HookURL:     hookURL,
+	}); err != nil {
+		fmt.Fprintf(os.Stderr, "warning: install local agent hooks for existing workdirs: %v\n", err)
+	} else if changed > 0 {
+		fmt.Fprintf(os.Stderr, "installed local agent hooks in %d existing workdir(s)\n", changed)
+	}
 	srv := server.New(server.Config{
 		DB:          db,
 		FlowRoot:    root,
 		Version:     Version,
 		CommandPath: commandPath,
-		HookURL:     "http://" + net.JoinHostPort(hookHost, strconv.Itoa(port)) + "/api/hooks/agent",
+		HookURL:     hookURL,
 	})
 	addr := net.JoinHostPort(host, strconv.Itoa(port))
 	fmt.Fprintf(os.Stderr, "flow ui listening on http://%s\n", addr)
@@ -163,46 +166,5 @@ func startUIBackground(host string, port int) int {
 }
 
 func preferredUIFlowBinary(fallback string) string {
-	if override := strings.TrimSpace(os.Getenv("FLOW_UI_FLOW_BIN")); override != "" {
-		if isExecutableFile(override) {
-			return override
-		}
-	}
-	if cwd, err := os.Getwd(); err == nil {
-		if found := findNearestBinFlow(cwd); found != "" {
-			return found
-		}
-	}
-	if fallback != "" {
-		if found := findNearestBinFlow(filepath.Dir(fallback)); found != "" {
-			return found
-		}
-	}
-	return fallback
-}
-
-func findNearestBinFlow(start string) string {
-	dir, err := filepath.Abs(start)
-	if err != nil {
-		return ""
-	}
-	for {
-		candidate := filepath.Join(dir, "bin", "flow")
-		if isExecutableFile(candidate) {
-			return candidate
-		}
-		parent := filepath.Dir(dir)
-		if parent == dir {
-			return ""
-		}
-		dir = parent
-	}
-}
-
-func isExecutableFile(path string) bool {
-	info, err := os.Stat(path)
-	if err != nil || info.IsDir() {
-		return false
-	}
-	return info.Mode()&0o111 != 0
+	return "flow"
 }
