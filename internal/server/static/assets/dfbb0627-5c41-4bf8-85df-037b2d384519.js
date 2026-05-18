@@ -196,7 +196,7 @@ const Sparkline = ({ data, color = 'var(--accent)', height = 24, width = 120 }) 
 };
 
 const ACTIVITY_ESTIMATE_TITLE = 'Session activity from provider transcript and terminal state, with flow task timestamps as fallback.';
-const TOKEN_ESTIMATE_TITLE = 'Provider-reported context usage when available; otherwise estimated from transcript text and flow updates.';
+const TOKEN_ESTIMATE_TITLE = 'Provider-reported context usage from the session JSONL (input + cache_creation + cache_read + output for Claude; total_tokens for Codex).';
 
 // Pixel-indicator: 60 cells, each cell is 1 minute of estimated activity
 const PixelIndicator = ({ data, status, height = 18 }) => {
@@ -224,6 +224,7 @@ const AgentTile = ({ agent, onOpen, onAction, big }) => {
   const tick = useContext(ClockCtx);
   const liveSec = agent.status === 'running' ? Math.max(0, agent.last_activity_sec - (tick % 30)) : agent.last_activity_sec + (tick > 0 ? tick : 0);
   const tokens_pct = Math.max(0, Math.min(100, (agent.tokens_used / Math.max(1, agent.tokens_max)) * 100));
+  const tokens_tier = tokens_pct >= 90 ? 'danger' : tokens_pct >= 70 ? 'warn' : 'ok';
   const waitingKind = agent.waiting_for?.kind || '';
   const permissionWaiting = agent.status === 'waiting' && waitingKind === 'permission';
   return (
@@ -284,9 +285,9 @@ const AgentTile = ({ agent, onOpen, onAction, big }) => {
           <PixelIndicator data={agent.activity} status={agent.status}/>
           <div className="pixel-foot">
             <span className="mono">last action: {formatActivity(liveSec)}</span>
-            <span className="mono dim" style={{marginLeft: 'auto'}} title={TOKEN_ESTIMATE_TITLE}>{fmtTokens(agent.tokens_used)} / {fmtTokens(agent.tokens_max)} est ctx</span>
+            <span className={`mono ctx-text ctx-${tokens_tier}`} style={{marginLeft: 'auto'}} title={TOKEN_ESTIMATE_TITLE}>{fmtTokens(agent.tokens_used)} / {fmtTokens(agent.tokens_max)} ctx · {Math.round(tokens_pct)}%</span>
           </div>
-          <div className="tokens-bar"><span style={{width: `${tokens_pct}%`}}></span></div>
+          <div className={`tokens-bar ctx-${tokens_tier}`}><span style={{width: `${tokens_pct}%`}}></span></div>
         </div>
         <div className="tile-action-row" onClick={(e) => e.stopPropagation()}>
           {agent.last_action && <span className="tile-last mono">{agent.last_action}</span>}

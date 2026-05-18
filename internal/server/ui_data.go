@@ -769,6 +769,15 @@ func (s *Server) uiAgent(tv TaskView, live map[string]bool) uiAgent {
 			status = hookRuntime.Status
 			runtimeSource = "hook"
 			runtimeEvent = hookRuntime.EventKind
+			// If the hook says "running" but neither the hook nor the
+			// transcript has moved in a while, the hook layer is stale
+			// (a Stop hook may have failed to fire on interrupt, or
+			// hooks aren't reaching the server). Demote to "idle" so
+			// the UI reflects what the user observes in the terminal.
+			if status == "running" && runtimeStateStaleForRunning(hookRuntime.UpdatedAt, insights.ActivityAt) {
+				status = "idle"
+				runtimeEvent = hookRuntime.EventKind + ":stale"
+			}
 		}
 		if hookWaiting != nil {
 			status = "waiting"
@@ -852,7 +861,7 @@ func (s *Server) uiAgent(tv TaskView, live map[string]bool) uiAgent {
 		DiffFiles:       files,
 		TokensUsed:      tokensUsed,
 		TokensMax:       tokensMax,
-		Activity:        activitySeries(tv.Slug, lastActivity, status),
+		Activity:        toolCallActivitySeries(fullTranscript, time.Now()),
 		Tags:            tv.Tags,
 		Summary:         summary,
 		NextStep:        nextStep,
@@ -975,13 +984,60 @@ func (s *Server) sessionInsightsForTask(tv TaskView, provider string, transcript
 	if stats.TokensUsed > 0 {
 		insights.TokensUsed = stats.TokensUsed
 	}
-	if insights.TokensMax <= 0 && stats.TokensMax > 0 {
+	if stats.TokensMax > 0 {
 		insights.TokensMax = stats.TokensMax
+	} else if stats.Model != "" {
+		insights.TokensMax = contextWindowForModel(provider, stats.Model)
+	}
+	if insights.TokensUsed > insights.TokensMax {
+		insights.TokensMax = insights.TokensUsed
 	}
 	for _, entry := range transcript {
 		insights.ActivityAt = laterTimestamp(insights.ActivityAt, entry.Time)
 	}
 	return insights
+}
+
+// runtimeStateStaleForRunning returns true when a hook-driven "running"
+// status has gone quiet — i.e., no hook events and no transcript activity
+// for long enough that the running claim is no longer trustworthy. We
+// require BOTH the hook updated_at and the transcript ActivityAt to be old
+// before demoting to idle, so a long-running tool call (which holds the
+// hook in "running" but pauses transcript writes) isn't mistakenly idled.
+//
+// Thresholds: hook hasn't ticked in >= 90s AND transcript hasn't moved in
+// >= 30s. Cases like user-interrupt-then-walk-away land here quickly;
+// genuine tool runs (Bash, web fetch, etc.) update the transcript far
+// more often than every 30s.
+const (
+	runtimeHookStaleAfter       = 90 * time.Second
+	runtimeTranscriptStaleAfter = 30 * time.Second
+)
+
+func runtimeStateStaleForRunning(hookUpdatedAt, transcriptActivityAt string) bool {
+	hookAge := ageSince(hookUpdatedAt)
+	if hookAge < runtimeHookStaleAfter {
+		return false
+	}
+	if transcriptActivityAt == "" {
+		return true
+	}
+	return ageSince(transcriptActivityAt) >= runtimeTranscriptStaleAfter
+}
+
+func ageSince(ts string) time.Duration {
+	if strings.TrimSpace(ts) == "" {
+		return time.Duration(1<<62 - 1)
+	}
+	parsed, err := time.Parse(time.RFC3339, ts)
+	if err != nil {
+		return time.Duration(1<<62 - 1)
+	}
+	delta := time.Since(parsed)
+	if delta < 0 {
+		return 0
+	}
+	return delta
 }
 
 func contextWindowForProvider(provider string) int {
@@ -993,6 +1049,25 @@ func contextWindowForProvider(provider string) int {
 	default:
 		return 200000
 	}
+}
+
+// contextWindowForModel returns the provider's context cap, refined by model
+// when known. Claude Opus 4.6+ ships with a 1M context window; Sonnet, Haiku,
+// and older Opus default to 200k unless the model itself signals otherwise via
+// the JSONL (handled separately for Codex via model_context_window).
+func contextWindowForModel(provider, model string) int {
+	m := strings.ToLower(strings.TrimSpace(model))
+	if m == "" {
+		return contextWindowForProvider(provider)
+	}
+	switch strings.ToLower(strings.TrimSpace(provider)) {
+	case "claude", "claude-code", "claudecode":
+		if strings.Contains(m, "opus-4-6") || strings.Contains(m, "opus-4-7") {
+			return 1000000
+		}
+		return 200000
+	}
+	return contextWindowForProvider(provider)
 }
 
 func latestTranscriptAction(transcript []uiTranscript) string {
@@ -1421,34 +1496,37 @@ func formatActivity(seconds int) string {
 	}
 }
 
-// activitySeries is a synthetic last-60-minute activity hint derived from flow state.
-func activitySeries(slug string, lastActivitySec int, status string) []int {
+// toolCallActivitySeries returns a 60-cell activity series for the agent
+// tile, where each cell counts tool_use entries observed in the
+// corresponding minute of the last hour. Cell 0 is 59 minutes ago;
+// cell 59 is the current minute. Anything older than 60 minutes is
+// dropped. This replaces the older synthetic activitySeries with real
+// per-minute data from the provider transcript.
+func toolCallActivitySeries(transcript []uiTranscript, now time.Time) []int {
 	out := make([]int, 60)
-	if lastActivitySec < 0 {
-		lastActivitySec = 0
+	if len(transcript) == 0 {
+		return out
 	}
-	lastMinute := lastActivitySec / 60
-	for i := range out {
-		minuteAgo := len(out) - 1 - i
-		switch {
-		case status == "running" && minuteAgo < 12:
-			out[i] = 5 + (12-minuteAgo)/3
-		case status == "waiting" && minuteAgo < 8:
-			out[i] = 3
+	cutoff := now.Add(-time.Duration(len(out)) * time.Minute)
+	for _, e := range transcript {
+		if e.Type != "tool_use" || strings.TrimSpace(e.Time) == "" {
+			continue
 		}
-		delta := minuteAgo - lastMinute
-		if delta < 0 {
-			delta = -delta
+		t, err := time.Parse(time.RFC3339, e.Time)
+		if err != nil {
+			continue
 		}
-		if lastMinute < len(out) && delta <= 2 {
-			level := 5 - delta
-			if level > out[i] {
-				out[i] = level
-			}
+		if t.Before(cutoff) || t.After(now.Add(time.Minute)) {
+			continue
 		}
-	}
-	if status == "idle" && lastMinute >= len(out) && lastActivitySec < 6*3600 {
-		out[0] = 1
+		minutesAgo := int(now.Sub(t) / time.Minute)
+		if minutesAgo < 0 {
+			minutesAgo = 0
+		}
+		if minutesAgo >= len(out) {
+			continue
+		}
+		out[len(out)-1-minutesAgo]++
 	}
 	return out
 }

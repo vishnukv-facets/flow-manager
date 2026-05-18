@@ -296,7 +296,7 @@ const MonitorView = ({ action }) => {
 
 // ───────── Sessions grid ────────────────────────────────────────────────
 const SessionsGrid = ({ setFocus, action, goto }) => {
-  const allSessions = AGENTS.concat(DEAD_AGENT ? [DEAD_AGENT] : []);
+  const allSessions = AGENTS;
   const projects = Array.from(new Set(PROJECTS_MC.map(p => p.slug).concat(allSessions.map(a => a.project).filter(Boolean))));
   const [filter, setFilter] = useState({
     status: new Set(['running','waiting','idle','stale','dead']),
@@ -1097,7 +1097,7 @@ const ContextSummary = ({ agent }) => (
       <dl className="kv">
         <dt>session</dt><dd>{shortUUID(agent.session_id)}</dd>
         <dt>started</dt><dd>{formatAge(agent.started_min)} ago</dd>
-        <dt>est. tokens</dt><dd title="Estimated from transcript text and flow updates. Not exact Claude/Codex context usage.">{fmtTokens(agent.tokens_used)} / {fmtTokens(agent.tokens_max)}</dd>
+        <dt>context</dt><dd title="Provider-reported context usage from the session JSONL.">{fmtTokens(agent.tokens_used)} / {fmtTokens(agent.tokens_max)} ({Math.min(100, Math.round((agent.tokens_used / Math.max(1, agent.tokens_max)) * 100))}%)</dd>
         <dt>work_dir</dt><dd style={{fontSize: 10.5}}>{agent.work_dir}</dd>
       </dl>
     </div>
@@ -1419,7 +1419,7 @@ const ContextDrawer = ({ agent }) => (
         <dl className="kv">
           <dt>session</dt><dd>{shortUUID(agent.session_id)}</dd>
           <dt>started</dt><dd>{formatAge(agent.started_min)} ago</dd>
-          <dt>est. tokens</dt><dd title="Estimated from transcript text and flow updates. Not exact Claude/Codex context usage.">{fmtTokens(agent.tokens_used)} / {fmtTokens(agent.tokens_max)}</dd>
+          <dt>context</dt><dd title="Provider-reported context usage from the session JSONL.">{fmtTokens(agent.tokens_used)} / {fmtTokens(agent.tokens_max)} ({Math.min(100, Math.round((agent.tokens_used / Math.max(1, agent.tokens_max)) * 100))}%)</dd>
           <dt>work_dir</dt><dd style={{fontSize: 10.5}}>{agent.work_dir}</dd>
         </dl>
       </div>

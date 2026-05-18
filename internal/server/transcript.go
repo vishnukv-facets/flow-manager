@@ -92,6 +92,7 @@ func parseTranscriptFile(path string) ([]TranscriptEntry, error) {
 type transcriptUsageStats struct {
 	TokensUsed    int
 	TokensMax     int
+	Model         string
 	LastTimestamp string
 }
 
@@ -100,6 +101,7 @@ type transcriptUsageRecord struct {
 	Timestamp string          `json:"timestamp"`
 	Payload   json.RawMessage `json:"payload"`
 	Message   struct {
+		Model string               `json:"model"`
 		Usage transcriptTokenUsage `json:"usage"`
 	} `json:"message"`
 }
@@ -135,6 +137,9 @@ func sessionTranscriptUsageStats(path string) transcriptUsageStats {
 			continue
 		}
 		stats.LastTimestamp = laterTimestamp(stats.LastTimestamp, rec.Timestamp)
+		if m := strings.TrimSpace(rec.Message.Model); m != "" {
+			stats.Model = m
+		}
 		if used := rec.Message.Usage.total(); used > 0 {
 			stats.TokensUsed = used
 		}

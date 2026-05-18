@@ -584,6 +584,12 @@ code { font-family: var(--mono); background: var(--surface-2); padding: 1px 5px;
 .pixel-foot { display: flex; align-items: center; font-size: 10.5px; color: var(--text-dim); margin-top: 5px; }
 .tokens-bar { height: 2px; background: var(--surface-3); border-radius: 1px; margin-top: 4px; overflow: hidden; }
 .tokens-bar span { display: block; height: 100%; background: var(--accent); opacity: 0.6; }
+.tokens-bar.ctx-ok span { background: var(--running, #4caf50); opacity: 0.7; }
+.tokens-bar.ctx-warn span { background: #d8a017; opacity: 0.85; }
+.tokens-bar.ctx-danger span { background: #d8504a; opacity: 0.95; }
+.ctx-text.ctx-ok { color: var(--text-dim); }
+.ctx-text.ctx-warn { color: #d8a017; }
+.ctx-text.ctx-danger { color: #d8504a; font-weight: 600; }
 
 .tile-action-row { display: flex; align-items: center; gap: 8px; margin-top: 2px; }
 .tile-last { font-size: 10.5px; color: var(--text-dim); flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

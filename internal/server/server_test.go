@@ -253,19 +253,74 @@ func TestUIEventsStreamSendsInitialSnapshot(t *testing.T) {
 	}
 }
 
-func TestActivitySeriesReflectsRecency(t *testing.T) {
-	running := activitySeries("build-ui", 30, "running")
-	if len(running) != 60 {
-		t.Fatalf("len = %d", len(running))
+func TestToolCallActivitySeriesBucketsByMinute(t *testing.T) {
+	now := time.Date(2026, 5, 18, 12, 0, 0, 0, time.UTC)
+	ts := func(minutesAgo int) string {
+		return now.Add(-time.Duration(minutesAgo) * time.Minute).Format(time.RFC3339)
 	}
-	if running[59] == 0 {
-		t.Fatalf("recent running activity should light the latest bucket: %#v", running[55:])
+	transcript := []uiTranscript{
+		{Type: "tool_use", Tool: "Bash", Time: ts(0)},
+		{Type: "tool_use", Tool: "Read", Time: ts(0)},
+		{Type: "tool_use", Tool: "Edit", Time: ts(5)},
+		{Type: "assistant", Text: "ignored", Time: ts(2)},
+		{Type: "tool_use", Tool: "Old", Time: ts(120)},
+		{Type: "tool_use", Tool: "Empty"},
 	}
-	old := activitySeries("build-ui", 2*24*3600, "stale")
-	for _, v := range old {
-		if v != 0 {
-			t.Fatalf("old stale activity should not be synthetic: %#v", old)
+
+	series := toolCallActivitySeries(transcript, now)
+	if len(series) != 60 {
+		t.Fatalf("len = %d, want 60", len(series))
+	}
+	if series[59] != 2 {
+		t.Fatalf("current minute bucket = %d, want 2 (two tool_use entries at minute 0)", series[59])
+	}
+	if series[54] != 1 {
+		t.Fatalf("minute -5 bucket = %d, want 1 (one Edit tool_use 5 min ago)", series[54])
+	}
+	for i, v := range series {
+		if i == 54 || i == 59 {
+			continue
 		}
+		if v != 0 {
+			t.Fatalf("bucket %d = %d, want 0 (no events; assistant text and >60min entries excluded)", i, v)
+		}
+	}
+}
+
+func TestToolCallActivitySeriesEmpty(t *testing.T) {
+	series := toolCallActivitySeries(nil, time.Now())
+	if len(series) != 60 {
+		t.Fatalf("len = %d, want 60", len(series))
+	}
+	for _, v := range series {
+		if v != 0 {
+			t.Fatalf("empty transcript should yield all-zero series, got non-zero")
+		}
+	}
+}
+
+// TestToolCallActivitySeriesCodexShape exercises the function with the
+// transcript shape produced by parseCodexTranscriptLine: function_call and
+// local_shell_call records both flatten to uiTranscript{Type: "tool_use"},
+// with Time stamped from the outer payload by stampTranscriptEntries.
+func TestToolCallActivitySeriesCodexShape(t *testing.T) {
+	now := time.Date(2026, 5, 18, 12, 0, 0, 0, time.UTC)
+	ts := func(minutesAgo int) string {
+		return now.Add(-time.Duration(minutesAgo) * time.Minute).Format(time.RFC3339)
+	}
+	// Codex flow: function_call → Tool: name, local_shell_call → Tool: local_shell.
+	transcript := []uiTranscript{
+		{Type: "tool_use", Tool: "apply_patch", Input: `{"path":"foo"}`, Time: ts(0)},
+		{Type: "tool_use", Tool: "local_shell", Input: "ls -la", Time: ts(3)},
+		{Type: "tool_result", Tool: "result", Summary: "ok", Time: ts(3)},
+		{Type: "user", Text: "ignored", Time: ts(1)},
+	}
+	series := toolCallActivitySeries(transcript, now)
+	if series[59] != 1 {
+		t.Fatalf("current minute bucket = %d, want 1 (codex function_call)", series[59])
+	}
+	if series[56] != 1 {
+		t.Fatalf("minute -3 bucket = %d, want 1 (codex local_shell_call)", series[56])
 	}
 }
 
