@@ -136,8 +136,10 @@ func TestCmdRunPlaybookCreatesRunTask(t *testing.T) {
 		t.Errorf("run brief should be verbatim copy of playbook brief")
 	}
 
-	// iTerm should have been called with a 'claude' command.
-	script := lastScript()
+	// iTerm should have been called with a 'claude' command. The actual
+	// command lives in the spawner's wrapper.sh; the osascript only
+	// types `/bin/sh '<wrapper>'`. readWrapper resolves and reads it.
+	script := readWrapper(t, lastScript())
 	if !strings.Contains(script, "claude --session-id ") {
 		t.Errorf("expected claude session-id in spawn script, got: %q", script)
 	}

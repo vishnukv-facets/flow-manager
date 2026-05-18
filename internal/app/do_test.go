@@ -5,11 +5,41 @@ import (
 	"flow/internal/flowdb"
 	"flow/internal/iterm"
 	"flow/internal/spawner"
+	"os"
+	"regexp"
 	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
 )
+
+// wrapperPathRE matches the wrapper-script path inside the captured
+// iTerm osascript. iterm.SpawnTab writes the actual command (claude
+// --session-id, env exports, etc.) to a temp file matching this name
+// pattern and the osascript only types `/bin/sh '<that-path>'` into
+// the new tab.
+var wrapperPathRE = regexp.MustCompile(`/bin/sh '([^']+flow-iterm-[^']+\.sh)'`)
+
+// readWrapper extracts the temp wrapper-script path from a captured
+// iTerm osascript and returns the wrapper's file contents. Use this
+// in tests that previously asserted against the osascript itself —
+// the spawner refactor moved the actual claude/codex invocation, env
+// exports, and bootstrap prompt out of the osascript and into a
+// per-spawn `/tmp/flow-iterm-*.sh` wrapper. Because iterm.Runner is
+// stubbed in tests, the wrapper never executes (and never
+// self-deletes), so the file persists on disk and is readable here.
+func readWrapper(t *testing.T, script string) string {
+	t.Helper()
+	m := wrapperPathRE.FindStringSubmatch(script)
+	if m == nil {
+		t.Fatalf("no wrapper-script reference in captured osascript:\n%s", script)
+	}
+	data, err := os.ReadFile(m[1])
+	if err != nil {
+		t.Fatalf("read wrapper %s: %v", m[1], err)
+	}
+	return string(data)
+}
 
 // stubITerm replaces iterm.Runner with a counter + captured-script
 // recorder. Returns the counter pointer and a function that reads the
@@ -140,7 +170,7 @@ func TestCmdDoFreshAllocatesSessionID(t *testing.T) {
 		t.Errorf("status: got %q, want in-progress", task.Status)
 	}
 
-	script := getScript()
+	script := readWrapper(t, getScript())
 	if strings.Contains(script, "--resume") {
 		t.Errorf("fresh spawn should not use --resume: %s", script)
 	}
@@ -275,7 +305,7 @@ func TestCmdDoResumesExistingSession(t *testing.T) {
 	if !task.SessionLastResumed.Valid {
 		t.Error("session_last_resumed should be set on resume")
 	}
-	script := getScript()
+	script := readWrapper(t, getScript())
 	if !strings.Contains(script, "--resume existing-sid") {
 		t.Errorf("resume spawn should use --resume: %s", script)
 	}
@@ -308,7 +338,7 @@ func TestCmdDoFreshRotatesStaleSession(t *testing.T) {
 	if task.SessionID.String != pinnedSID {
 		t.Errorf("session_id after --fresh: got %q, want %s", task.SessionID.String, pinnedSID)
 	}
-	script := getScript()
+	script := readWrapper(t, getScript())
 	if strings.Contains(script, "--resume") {
 		t.Errorf("--fresh should not spawn --resume: %s", script)
 	}
@@ -382,7 +412,7 @@ func TestCmdDoSpawnsClaudeNotFlowde(t *testing.T) {
 	if rc := cmdDo([]string{"wrap-fresh"}); rc != 0 {
 		t.Fatalf("fresh rc=%d", rc)
 	}
-	script := getScript()
+	script := readWrapper(t, getScript())
 	if !strings.Contains(script, " claude --session-id ") {
 		t.Errorf("fresh spawn must invoke claude --session-id, got:\n%s", script)
 	}
@@ -400,7 +430,7 @@ func TestCmdDoSpawnsClaudeNotFlowde(t *testing.T) {
 	if rc := cmdDo([]string{"wrap-fresh"}); rc != 0 {
 		t.Fatalf("resume rc=%d", rc)
 	}
-	script = getScript()
+	script = readWrapper(t, getScript())
 	if !strings.Contains(script, " claude --resume resume-sid") {
 		t.Errorf("resume spawn must invoke claude --resume <uuid>, got:\n%s", script)
 	}
@@ -433,7 +463,7 @@ func TestCmdDoCodexFreshUsesInteractiveWrapper(t *testing.T) {
 		t.Fatalf("task after codex launch = %+v", task)
 	}
 
-	script := getScript()
+	script := readWrapper(t, getScript())
 	for _, want := range []string{"hook codex-run", "--task", "codex-fresh", "--mode", "fresh", "--permission-mode", "default"} {
 		if !strings.Contains(script, want) {
 			t.Fatalf("codex spawn script missing %q:\n%s", want, script)
@@ -602,7 +632,7 @@ func TestCmdDoSetsFirstRunBannerForFirstPlaybookRun(t *testing.T) {
 	if rc := cmdRun([]string{"playbook", "tri-fr"}); rc != 0 {
 		t.Fatal()
 	}
-	script := lastScript()
+	script := readWrapper(t, lastScript())
 	if !strings.Contains(script, "FIRST RUN OF THIS PLAYBOOK") {
 		t.Errorf("expected first-run banner in spawn script, got:\n%s", script)
 	}
@@ -619,15 +649,16 @@ func TestCmdDoOmitsFirstRunBannerForSecondPlaybookRun(t *testing.T) {
 	if rc := cmdRun([]string{"playbook", "tri-2"}); rc != 0 {
 		t.Fatal()
 	}
-	if !strings.Contains(lastScript(), "FIRST RUN OF THIS PLAYBOOK") {
+	if !strings.Contains(readWrapper(t, lastScript()), "FIRST RUN OF THIS PLAYBOOK") {
 		t.Fatal("expected first-run banner on first invocation")
 	}
 	// Second run.
 	if rc := cmdRun([]string{"playbook", "tri-2"}); rc != 0 {
 		t.Fatal()
 	}
-	if strings.Contains(lastScript(), "FIRST RUN OF THIS PLAYBOOK") {
-		t.Errorf("second run should NOT have first-run banner; got:\n%s", lastScript())
+	secondWrapper := readWrapper(t, lastScript())
+	if strings.Contains(secondWrapper, "FIRST RUN OF THIS PLAYBOOK") {
+		t.Errorf("second run should NOT have first-run banner; got:\n%s", secondWrapper)
 	}
 }
 
@@ -645,7 +676,7 @@ func TestCmdDoEmitsPlaybookVariantForPlaybookRun(t *testing.T) {
 		t.Fatal()
 	}
 
-	script := lastScript()
+	script := readWrapper(t, lastScript())
 	if !strings.Contains(script, "playbook `tri`") {
 		t.Errorf("expected playbook prompt variant in spawn script, got:\n%s", script)
 	}
@@ -669,7 +700,7 @@ func TestCmdDoPropagatesFlowRootEnv(t *testing.T) {
 	if rc := cmdDo([]string{"env-prop"}); rc != 0 {
 		t.Fatalf("rc=%d", rc)
 	}
-	script := getScript()
+	script := readWrapper(t, getScript())
 	if !strings.Contains(script, "FLOW_ROOT=") {
 		t.Errorf("spawn script missing FLOW_ROOT propagation; got:\n%s", script)
 	}
