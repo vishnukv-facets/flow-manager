@@ -1,4 +1,4 @@
-// Package app implements the flow CLI — personal task and Claude session
+// Package app implements the flow CLI — personal task and agent session
 // manager backed by SQLite.
 package app
 
@@ -131,7 +131,7 @@ Edit / mutate:
   flow update project  <ref> [--slug <new>] [--name <new>] [--work-dir <path>] [--mkdir] [--priority h|m|l]
   flow update playbook <ref> [--slug <new>] [--name <new>] [--work-dir <path>] [--mkdir]
   flow do        <ref> [--agent claude|codex] [--fresh] [--dangerously-skip-permissions] [--force]   (spawn a new tab; --force overrides the live-session guard)
-  flow do --here <ref> [--force]                                              (bind THIS Claude session to the task; --force overwrites a prior binding)
+  flow do --here <ref> [--force]                                              (bind THIS Claude/Codex session to the task; --force overwrites a prior binding)
   flow archive   <ref>
   flow unarchive <ref>
   flow delete    <ref>   (soft-delete; hides from normal lists/UI)

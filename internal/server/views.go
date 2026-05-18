@@ -39,6 +39,7 @@ func BuildTaskView(db *sql.DB, root string, t *flowdb.Task, live map[string]bool
 	view.SessionID = nullStringPtr(t.SessionID)
 	view.SessionStarted = nullStringPtr(t.SessionStarted)
 	view.SessionLastResumed = nullStringPtr(t.SessionLastResumed)
+	view.SessionPath = nullStringPtr(t.SessionPath)
 	view.InboxSeenAt = nullStringPtr(t.InboxSeenAt)
 	view.ArchivedAt = nullStringPtr(t.ArchivedAt)
 	view.DeletedAt = nullStringPtr(t.DeletedAt)
@@ -57,7 +58,7 @@ func BuildTaskView(db *sql.DB, root string, t *flowdb.Task, live map[string]bool
 		if live[strings.ToLower(t.SessionID.String)] {
 			view.Live = true
 		}
-		if _, err := sessionJSONLPath(t); err == nil {
+		if _, err := sessionJSONLPath(db, t); err == nil {
 			view.TranscriptAvailable = true
 		}
 	}
@@ -420,6 +421,13 @@ func nullStringPtr(ns sql.NullString) *string {
 		return nil
 	}
 	return &ns.String
+}
+
+func nullStringFromPtr(s *string) sql.NullString {
+	if s == nil || *s == "" {
+		return sql.NullString{}
+	}
+	return sql.NullString{String: *s, Valid: true}
 }
 
 func projectTaskCounts(db *sql.DB, projectSlug string) (TaskCounts, error) {

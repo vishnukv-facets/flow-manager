@@ -64,7 +64,7 @@ func cmdDo(args []string) int {
 	claudeAgent := fs.Bool("claude", false, "shortcut for --agent claude")
 	dangerSkip := fs.Bool("dangerously-skip-permissions", false, "pass low-friction permissions flag through to the selected agent")
 	force := fs.Bool("force", false, "open even if the task's Claude session is already running elsewhere")
-	here := fs.Bool("here", false, "bind THIS Claude session to the task (no new tab); requires running inside a Claude Code session")
+	here := fs.Bool("here", false, "bind THIS Claude/Codex session to the task (no new tab); requires running inside an agent session")
 	noWorktree := fs.Bool("no-worktree", false, "spawn the agent in the task's work_dir directly instead of a per-task git worktree")
 	// Two-pass parse so the slug positional may appear before OR after
 	// the flags: first absorb any leading flags, then take the next
@@ -87,11 +87,7 @@ func cmdDo(args []string) int {
 	}
 
 	if *here {
-		if requestedProvider != "" && requestedProvider != sessionProviderClaude {
-			fmt.Fprintln(os.Stderr, "error: --here can only bind a Claude session; remove --codex/--agent codex")
-			return 2
-		}
-		return cmdDoHere(query, *force)
+		return cmdDoHere(query, *force, requestedProvider)
 	}
 
 	dbPath, err := flowDBPath()
@@ -574,13 +570,13 @@ func findTask(db *sql.DB, query string) (*flowdb.Task, int) {
 }
 
 // cmdDoHere is the `--here` branch of `flow do`. Instead of spawning
-// a new tab with a fresh Claude session, it binds the CURRENT Claude
-// session (discovered via $CLAUDE_CODE_SESSION_ID) to the named task
-// and flips the task to in-progress.
+// a new tab, it binds the CURRENT agent session to the named task and flips
+// the task to in-progress. Claude sessions are discovered through
+// $CLAUDE_CODE_SESSION_ID; Codex sessions are discovered through
+// $CODEX_THREAD_ID.
 //
 // Safety:
-//   - Refuses if not running inside a Claude Code session
-//     (CLAUDE_CODE_SESSION_ID unset).
+//   - Refuses if not running inside a supported agent session.
 //   - Refuses if the target task already has a different session_id
 //     bound. The constraint guards against silent overwrites that
 //     would orphan the prior session. --force overrides.
@@ -592,17 +588,29 @@ func findTask(db *sql.DB, query string) (*flowdb.Task, int) {
 //
 // The DB write is the only side effect — no terminal spawn, no env
 // var injection. Subsequent `flow do <slug>` from elsewhere will
-// resume this session via `claude --resume`.
-func cmdDoHere(query string, force bool) int {
-	sid := currentSessionID()
-	if sid == "" {
+// resume this session via the task's provider-specific resume path.
+func cmdDoHere(query string, force bool, requestedProvider string) int {
+	session := currentSessionForProvider(requestedProvider)
+	if session.ID == "" {
 		fmt.Fprintln(os.Stderr,
-			"error: --here requires running inside a Claude Code session ($CLAUDE_CODE_SESSION_ID is unset)")
+			"error: --here requires running inside a Claude Code or Codex session ($CLAUDE_CODE_SESSION_ID or $CODEX_THREAD_ID is unset)")
 		return 1
 	}
-	if !sessionUUIDRe.MatchString(sid) {
+	if requestedProvider != "" && requestedProvider != session.Provider {
 		fmt.Fprintf(os.Stderr,
-			"error: $CLAUDE_CODE_SESSION_ID is not a valid v4 UUID (got %q)\n", sid)
+			"error: --agent %s was requested, but the current session is %s via $%s\n",
+			requestedProvider, session.Provider, session.EnvVar)
+		return 1
+	}
+	if session.Provider == sessionProviderClaude {
+		if !sessionUUIDRe.MatchString(session.ID) {
+			fmt.Fprintf(os.Stderr,
+				"error: $%s is not a valid v4 UUID (got %q)\n", session.EnvVar, session.ID)
+			return 1
+		}
+	} else if !sessionAnyUUIDRe.MatchString(session.ID) {
+		fmt.Fprintf(os.Stderr,
+			"error: $%s is not a valid UUID (got %q)\n", session.EnvVar, session.ID)
 		return 1
 	}
 
@@ -637,28 +645,28 @@ func cmdDoHere(query string, force bool) int {
 	// the user must explicitly release the prior binding (or open the
 	// target in a new tab) — silent rebinding loses the original
 	// transcript's task association.
-	priorBinding, lookupErr := flowdb.TaskBySessionID(db, sid)
+	priorBinding, lookupErr := flowdb.TaskBySessionID(db, session.ID)
 	if lookupErr == nil && priorBinding.Slug != task.Slug {
 		fmt.Fprintf(os.Stderr,
-			"error: this Claude session is already bound to task %q. binding it to %q would orphan %q's transcript and is rejected by the session_id uniqueness invariant. --force does not override this.\n"+
+			"error: this %s session is already bound to task %q. binding it to %q would orphan %q's transcript and is rejected by the session_id uniqueness invariant. --force does not override this.\n"+
 				"  to start work on %q in a separate session: flow do %s\n",
-			priorBinding.Slug, task.Slug, priorBinding.Slug, task.Slug, task.Slug)
+			session.Provider, priorBinding.Slug, task.Slug, priorBinding.Slug, task.Slug, task.Slug)
 		return 1
 	}
 
 	if task.SessionID.Valid && task.SessionID.String != "" {
-		if task.SessionID.String == sid {
+		if task.SessionID.String == session.ID && task.SessionProvider == session.Provider {
 			// Already bound to this same session — idempotent no-op.
 			if err := captureTaskGitStartSnapshot(task, false); err != nil {
 				fmt.Fprintf(os.Stderr, "warning: git start snapshot: %v\n", err)
 			}
-			fmt.Printf("%s already bound to this session (%s)\n", task.Slug, sid)
+			fmt.Printf("%s already bound to this %s session (%s)\n", task.Slug, session.Provider, session.ID)
 			return 0
 		}
 		if !force {
 			fmt.Fprintf(os.Stderr,
-				"error: task %q is already bound to session %s — pass --force to overwrite (this orphans the prior session)\n",
-				task.Slug, task.SessionID.String)
+				"error: task %q is already bound to %s session %s — pass --force to overwrite (this orphans the prior session)\n",
+				task.Slug, task.SessionProvider, task.SessionID.String)
 			return 1
 		}
 	}
@@ -666,14 +674,14 @@ func cmdDoHere(query string, force bool) int {
 	now := flowdb.NowISO()
 	res, err := db.Exec(
 		`UPDATE tasks SET
-			session_provider = 'claude',
+			session_provider = ?,
 			session_id      = ?,
 			session_started = COALESCE(session_started, ?),
 			status          = 'in-progress',
 			status_changed_at = CASE WHEN status != 'in-progress' THEN ? ELSE status_changed_at END,
 			updated_at      = ?
 		WHERE slug = ?`,
-		sid, now, now, now, task.Slug,
+		session.Provider, session.ID, now, now, now, task.Slug,
 	)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "error: bind session: %v\n", err)
@@ -686,6 +694,6 @@ func cmdDoHere(query string, force bool) int {
 	if err := captureTaskGitStartSnapshot(task, force); err != nil {
 		fmt.Fprintf(os.Stderr, "warning: git start snapshot: %v\n", err)
 	}
-	fmt.Printf("Bound %s to this session (%s)\n", task.Slug, sid)
+	fmt.Printf("Bound %s to this %s session (%s)\n", task.Slug, session.Provider, session.ID)
 	return 0
 }

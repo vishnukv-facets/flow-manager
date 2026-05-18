@@ -188,7 +188,7 @@ Create
 
 Sessions
   flow do               <ref> [--agent claude|codex] [--fresh] [--dangerously-skip-permissions] [--force]
-  flow do --here        <ref> [--force]   (bind THIS Claude session to the task — no new tab)
+  flow do --here        <ref> [--force]   (bind THIS Claude/Codex session to the task — no new tab)
   flow done             <ref>
 
 Playbook runs
@@ -196,7 +196,7 @@ Playbook runs
   flow list runs [<playbook-slug>]  list playbook runs (filter by playbook optional)
 
 Read
-  flow show task    [<ref>]     (no arg → $FLOW_TASK, then Claude session reverse-lookup)
+  flow show task    [<ref>]     (no arg → $FLOW_TASK, then current-session reverse-lookup)
   flow show project [<ref>]     (no arg → project of current/bound task)
   flow show playbook    [<ref>]
   flow transcript   [<ref>] [--compact]    (readable transcript from session jsonl)
@@ -468,7 +468,7 @@ turn. Otherwise, ask. Don't second-guess; preserve their right to
 skip by giving them the click, not by pre-deciding for them.
 
 Finally, offer how to proceed with the new task. The shape of the
-question depends on whether THIS Claude session is already bound to
+question depends on whether THIS Claude/Codex session is already bound to
 another flow task. Probe with `flow show task` (no arg). If it
 errors with `not bound to a task`, the current session is unbound
 (dispatch); otherwise it already belongs to the task it resolved.
@@ -485,7 +485,7 @@ errors with `not bound to a task`, the current session is unbound
   the task has already begun in this session — which is the
   common case when intake was triggered by §4.14 from the
   SessionStart hook intercept. Run **`flow do --here <slug>`**
-  immediately (the binary reads `$CLAUDE_CODE_SESSION_ID`, binds,
+  immediately (the binary reads the current agent session id, binds,
   and flips status to in-progress in one shot).
 - **No, keep in backlog** — save and stop. Pick for future work
   the user won't touch today.
@@ -524,7 +524,7 @@ On "Yes", proceed to §4.4. On "No", stop.
 > **Different-tab hint.** "Continue here" only ever applies in
 > dispatch sessions and only ever attaches the *current* session.
 > If the user is creating a task to track work that happened in
-> a *different* Claude session they have open elsewhere, they
+> a *different* Claude/Codex session they have open elsewhere, they
 > need to switch to that other tab and run `flow do --here
 > <slug>` there.
 
@@ -769,7 +769,7 @@ closure is a silent loss of durable knowledge.
    "Yes, save a note first" / "No, just mark done") to offer.
    On "Yes", run the §4.5 recipe first, then continue.
 3. Run `flow done <ref>`. **Do not close the terminal tab** and **do
-   not kill the Claude session** — `flow done` deliberately leaves
+   not kill the agent session** — `flow done` deliberately leaves
    both intact. The session_id stays on the task row so a future
    reopen can still resume it. The close-out sweep runs after the
    status flip; relay any NUDGE block `flow done` prints back to
@@ -1484,12 +1484,12 @@ rule as "tag values are unprefixed strings").
   tags they didn't explicitly name. The exception is when the user's
   request literally names the tag ("tag this `#frontend`").
 
-### 4.16 Bind an in-flight Claude session to a task
+### 4.16 Bind an in-flight Claude/Codex session to a task
 
 **Triggers:** "bind this session to <task>", "track this session
 under <task>", "attach this conversation to <task>", "this session is
 for <task>". Also fires when the user manually creates a flow task
-while already deep in an ad-hoc Claude session and wants future
+while already deep in an ad-hoc Claude or Codex session and wants future
 `flow do <slug>` to resume *this* conversation rather than start a
 new one. The §4.2 "Continue here" option is the most common entry
 point.
@@ -1501,18 +1501,19 @@ it via §4.2), run:
 flow do --here <slug>
 ```
 
-`flow do --here` reads the current session's UUID from
-`$CLAUDE_CODE_SESSION_ID` (Claude Code injects this into every
-session), validates it, and writes it to `tasks.session_id`. Side
-effects: status flips backlog → in-progress (the session-id
-invariant requires it). No terminal spawn happens; the binding is
-the only mutation.
+`flow do --here` reads the current session id from the active agent
+host (`$CLAUDE_CODE_SESSION_ID` for Claude Code, `$CODEX_THREAD_ID`
+for Codex), validates it, stores the matching `session_provider`,
+and writes the id to `tasks.session_id`. Side effects: status flips
+backlog → in-progress (the session-id invariant requires it). No
+terminal spawn happens; the binding is the only mutation.
 
 **Safety properties enforced by the binary** (you don't have to
 police these):
 
-- Refuses if `$CLAUDE_CODE_SESSION_ID` is unset (not a Claude Code
-  session) or not a v4 UUID.
+- Refuses if no supported current-session env var is set, or if the
+  exposed id is malformed. Claude ids must be v4 UUIDs; Codex thread
+  ids must be UUID-shaped.
 - Refuses if **THIS session** is already bound to a different task.
   `--force` does NOT override this — session_id uniqueness is
   structural. The user must release the prior binding first or
@@ -1530,7 +1531,7 @@ police these):
 
 **Anti-patterns:**
 
-- **Do not invent or guess the session UUID.** The env var is the
+- **Do not invent or guess the session id.** The host env var is the
   only authoritative source.
 - **Do not bind without confirming the task slug.** If multiple
   tasks could plausibly own this conversation, AskUserQuestion to
@@ -2063,8 +2064,8 @@ When to use which flag:
   to `in-progress` so `flow do` will reopen it (the do-from-done path
   is gated). Also handy for in-progress → backlog to "demote" a task
   you're not actively working on. Setting backlog → in-progress on a
-  Claude task with NULL session_id errors with a pointer at `flow do` /
-  `flow do --here` — those are the paths that attach a Claude session.
+  non-Codex task with NULL session_id errors with a pointer at `flow do` /
+  `flow do --here` — those are the paths that attach an agent session.
   Codex may briefly have NULL session_id only while flow is capturing the
   id after a fresh Codex launch. Setting status to a value it already has
   is a no-op.
@@ -2083,7 +2084,7 @@ When to use which flag:
 There is **no** `--session-id` flag. The session_id is owned by
 `flow do`, Codex capture, or `flow do --here`; manual rewriting was a
 foot-gun (silent overwrite of an existing binding) and the lane is gone.
-Use `flow do --here <slug>` from inside the Claude session you want to bind.
+Use `flow do --here <slug>` from inside the Claude or Codex session you want to bind.
 
 At least one field-changing flag must be given. `--work-dir` is an
 escape hatch — do not run it as a workaround for a bug in `flow do`;
@@ -2092,10 +2093,10 @@ surface the bug instead.
 ## 10. How "what task am I on?" gets answered
 
 `tasks.session_provider` plus `tasks.session_id` is the source of truth.
-Every Claude Code session has `$CLAUDE_CODE_SESSION_ID` in its env (Claude
-Code injects it), and flow reverse-lookups that value against
+Every Claude Code session has `$CLAUDE_CODE_SESSION_ID` in its env, and Codex
+sessions expose `$CODEX_THREAD_ID`. Flow reverse-lookups those values against
 `tasks.session_id`. Browser/Codex launches may also set `$FLOW_TASK`, which
-`flow show task` uses as a direct fallback before Claude reverse-lookup.
+`flow show task` uses as a direct fallback before current-session reverse-lookup.
 Two implications:
 
 - `flow show task` with no argument resolves the bound task via
@@ -2106,7 +2107,7 @@ Two implications:
   `not bound to a task`, ask the user which task to attribute it to.
 
 Do not invent your own task binding. Prefer `flow show task` with no
-argument; it already handles `$FLOW_TASK` when present and Claude
+argument; it already handles `$FLOW_TASK` when present and Claude/Codex
 reverse-lookup when available.
 
 A session is "bound" when some task carries its session_id (set by

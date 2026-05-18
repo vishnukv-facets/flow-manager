@@ -14,6 +14,8 @@ import (
 	"time"
 )
 
+var agentHookPost = postAgentHook
+
 // cmdHook dispatches `flow hook <subcommand>`. Main subcommands:
 //
 //   - session-start: wired as a Claude Code SessionStart hook so that
@@ -269,13 +271,13 @@ func appendStaleVersionHint() string {
 	)
 }
 
-// lookupBoundTaskSlug returns the slug of the task whose session_id
-// matches $CLAUDE_CODE_SESSION_ID, or "" if no such task exists, the
-// env var is unset, or the DB lookup fails. Hook code must never
+// lookupBoundTaskSlug returns the slug of the task whose session_id matches
+// the current Claude/Codex session id, or "" if no such task exists, no
+// supported session env var is set, or the DB lookup fails. Hook code must never
 // fail loud — a hook error blocks the user's session — so all errors
 // are swallowed and treated as "unbound".
 func lookupBoundTaskSlug() string {
-	sid := os.Getenv("CLAUDE_CODE_SESSION_ID")
+	sid := currentSessionID()
 	if sid == "" {
 		return ""
 	}
@@ -396,6 +398,9 @@ func cmdHookAgentEvent(args []string) int {
 		debugAgentHook("invalid hook JSON")
 		return 0
 	}
+	if isAmbientCodexHook(*provider) {
+		return 0
+	}
 
 	// Inject side-band metadata into the payload before forwarding:
 	//   - flow_seq: monotonic time.UnixNano() for causal ordering on the
@@ -408,24 +413,33 @@ func cmdHookAgentEvent(args []string) int {
 	raw = injectHookMetadata(raw, *hookVersion)
 
 	endpoint := agentHookEndpoint(*apiURL, *provider)
+	if err := agentHookPost(endpoint, raw, *timeout); err != nil {
+		debugAgentHook("%v", err)
+	}
+	return 0
+}
+
+func postAgentHook(endpoint string, raw []byte, timeout time.Duration) error {
 	req, err := http.NewRequest(http.MethodPost, endpoint, bytes.NewReader(raw))
 	if err != nil {
-		debugAgentHook("build request: %v", err)
-		return 0
+		return fmt.Errorf("build request: %w", err)
 	}
 	req.Header.Set("Content-Type", "application/json")
-	client := &http.Client{Timeout: *timeout}
+	client := &http.Client{Timeout: timeout}
 	resp, err := client.Do(req)
 	if err != nil {
-		debugAgentHook("post hook event: %v", err)
-		return 0
+		return fmt.Errorf("post hook event: %w", err)
 	}
 	defer resp.Body.Close()
 	_, _ = io.Copy(io.Discard, resp.Body)
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		debugAgentHook("hook endpoint returned %s", resp.Status)
+		return fmt.Errorf("hook endpoint returned %s", resp.Status)
 	}
-	return 0
+	return nil
+}
+
+func isAmbientCodexHook(provider string) bool {
+	return strings.EqualFold(strings.TrimSpace(provider), sessionProviderCodex) && os.Getenv("FLOW_HOOK_OWNED") != "1"
 }
 
 // injectHookMetadata stamps flow_seq, flow_hook_owned, and flow_hook_version

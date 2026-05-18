@@ -204,7 +204,8 @@ handles the rest.
   worktree at `<repo>/.<agent>/worktrees/<slug>` on branch
   `flow/<slug>`, so two parallel tasks on the same repo never
   step on each other's working tree. `--no-worktree` opts out;
-  `flow do --here` (binding the current session) never relocates.
+  `flow do --here` binds the current Claude or Codex session and
+  never relocates.
 - **Auto-PR on done.** `flow done` pushes the worktree branch and
   runs `gh pr create` against the detected base branch with the
   task brief as the PR body. The PR URL is recorded against the
@@ -319,7 +320,9 @@ all see one consistent view. The server exposes:
   snapshot sync so you don't lose scrollback when you reload.
 - Live status from a repo-local **agent-hooks** integration
   (`internal/agenthooks/`): when a task's agent is mid-tool-call,
-  waiting for input, or idle, the UI shows it.
+  waiting for input, or idle, the UI shows it. Codex hooks are
+  gated to Flow-owned terminals (`FLOW_HOOK_OWNED=1`) so ordinary
+  Codex sessions opened in the same repo do not forward Flow events.
 - A global Cmd+K switcher across every entity.
 
 It's a *local* tool — no auth, no TLS, loopback by default. Don't

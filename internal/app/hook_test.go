@@ -3,8 +3,11 @@ package app
 import (
 	"encoding/json"
 	"flow/internal/flowdb"
+	"io"
+	"os"
 	"strings"
 	"testing"
+	"time"
 )
 
 // TestHookSessionStartUnboundEmitsAmbientHint pins the contract for
@@ -138,6 +141,77 @@ func TestHookUserPromptSubmitIsNoOp(t *testing.T) {
 			t.Errorf("CLAUDE_CODE_SESSION_ID=%q: expected empty stdout, got:\n%s", sid, out)
 		}
 	}
+}
+
+func TestHookAgentEventSkipsAmbientCodexSession(t *testing.T) {
+	t.Setenv("FLOW_HOOK_OWNED", "")
+	called := false
+	oldPost := agentHookPost
+	agentHookPost = func(endpoint string, raw []byte, timeout time.Duration) error {
+		called = true
+		return nil
+	}
+	t.Cleanup(func() { agentHookPost = oldPost })
+
+	out := withStdin(t, `{"hook_event_name":"PreToolUse","thread_id":"019e3c18-1149-7532-a1c0-31a4cfedb296"}`, func() string {
+		return captureStdout(t, func() {
+			if rc := cmdHookAgentEvent([]string{"--provider", "codex", "--url", "http://127.0.0.1:1/hook"}); rc != 0 {
+				t.Fatalf("rc=%d", rc)
+			}
+		})
+	})
+	if called {
+		t.Fatal("ambient codex hook should not forward to the Flow UI")
+	}
+	if strings.TrimSpace(out) != "" {
+		t.Fatalf("ambient codex hook should emit no stdout/stderr, got %q", out)
+	}
+}
+
+func TestHookAgentEventForwardsFlowOwnedCodexSession(t *testing.T) {
+	t.Setenv("FLOW_HOOK_OWNED", "1")
+	called := false
+	oldPost := agentHookPost
+	agentHookPost = func(endpoint string, raw []byte, timeout time.Duration) error {
+		called = true
+		if !strings.Contains(string(raw), `"flow_hook_owned":true`) {
+			t.Fatalf("forwarded payload missing flow_hook_owned=true: %s", raw)
+		}
+		return nil
+	}
+	t.Cleanup(func() { agentHookPost = oldPost })
+
+	_ = withStdin(t, `{"hook_event_name":"PreToolUse","thread_id":"019e3c18-1149-7532-a1c0-31a4cfedb296"}`, func() string {
+		return captureStdout(t, func() {
+			if rc := cmdHookAgentEvent([]string{"--provider", "codex", "--url", "http://127.0.0.1:1/hook"}); rc != 0 {
+				t.Fatalf("rc=%d", rc)
+			}
+		})
+	})
+	if !called {
+		t.Fatal("flow-owned codex hook should forward to the Flow UI")
+	}
+}
+
+func withStdin(t *testing.T, input string, f func() string) string {
+	t.Helper()
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatalf("pipe: %v", err)
+	}
+	old := os.Stdin
+	os.Stdin = r
+	done := make(chan struct{})
+	go func() {
+		_, _ = io.WriteString(w, input)
+		_ = w.Close()
+		close(done)
+	}()
+	out := f()
+	<-done
+	os.Stdin = old
+	_ = r.Close()
+	return out
 }
 
 // TestBuildBootstrapPromptInvokesSkill pins the same invariant for the

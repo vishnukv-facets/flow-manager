@@ -27,10 +27,9 @@ const (
 // when the server ingests a hook payload tagged with a lower version it
 // surfaces an upgrade hint at the next SessionStart.
 //
-// Bumped to 3 when the SessionStart hook added inbox-message detection
-// (appendInboxHint in internal/app/hook.go) — old installs still work,
-// they just don't surface the INBOX UPDATED nudge.
-const CurrentHookVersion = 3
+// Bumped to 4 when Codex repo-local hooks became Flow-owned-only so
+// ordinary Codex terminals in the same workdir do not forward hook events.
+const CurrentHookVersion = 4
 
 type agentHookIngestResponse struct {
 	OK             bool   `json:"ok"`
@@ -386,7 +385,10 @@ func hookCommandUsesBareFlow(command string) bool {
 	if len(fields) == 0 {
 		return false
 	}
-	return strings.Trim(fields[0], `"'`) == "flow"
+	if strings.Trim(fields[0], `"'`) == "flow" {
+		return true
+	}
+	return strings.Contains(command, "FLOW_HOOK_OWNED") && strings.Contains(command, "exec flow hook agent-event")
 }
 
 func codexHookStatesTrusted(configPath string, entries []codexHookEntry) bool {

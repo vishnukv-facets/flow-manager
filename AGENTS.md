@@ -2,7 +2,7 @@
 
 ## What this is
 
-A Go CLI (`flow`) that manages personal tasks and bootstraps per-task Claude Code or Codex sessions. SQLite via `modernc.org/sqlite` (pure Go, no CGO).
+A Go CLI (`flow`) that manages personal tasks and bootstraps per-task Codex sessions. SQLite via `modernc.org/sqlite` (pure Go, no CGO).
 
 ## Build and test
 
@@ -14,7 +14,7 @@ make build
 # Full install (build + PATH + init + skill + hook)
 make install
 
-# Run all tests (fast — no network, no real iTerm/Claude)
+# Run all tests (fast — no network, no real iTerm/Codex)
 make test
 # or: go test ./...
 
@@ -22,7 +22,7 @@ make test
 go test -run TestE2EFullRoundtrip -v ./internal/app/
 ```
 
-Tests use `$FLOW_ROOT` pointed at a temp directory and override `$HOME` so nothing touches real `~/.flow/` or `~/.claude/`. External dependencies (osascript, claude CLI) are mocked via package-level function vars.
+Tests use `$FLOW_ROOT` pointed at a temp directory and override `$HOME` so nothing touches real `~/.flow/` or `~/.Codex/`. External dependencies (osascript, Codex CLI) are mocked via package-level function vars.
 
 ## Project structure
 
@@ -60,7 +60,7 @@ flow/
 │       └── iterm.go
 ├── Makefile
 ├── README.md
-├── CLAUDE.md
+├── AGENTS.md
 ├── .gitignore
 ├── go.mod
 └── go.sum
@@ -80,7 +80,7 @@ flow/
 - **Timestamps:** RFC3339 strings everywhere (never Unix timestamps).
 - **Tests:** Table-driven where possible. Command tests live alongside source in `internal/app/`. `e2e_test.go` exercises the full command surface in sequence.
 - **No mocks for DB.** Tests use real SQLite in a temp directory. Only osascript is mocked (via `iterm.Runner` function var).
-- **Skill file is the source of truth** for how Claude/Codex sessions interact with flow. If the skill says something, the code must support it.
+- **Skill file is the source of truth** for how Codex sessions interact with flow. If the skill says something, the code must support it.
 - **Skill embed path:** `internal/app/skill/SKILL.md` is embedded at compile time via `//go:embed` in `internal/app/skill.go`. After editing, rebuild for `flow skill update` to pick up changes.
 
 ## Data directory layout
@@ -97,6 +97,6 @@ flow/
 
 ## Things to watch out for
 
-- `hookCommand` in `internal/app/skill.go` is the exact string matched in `~/.claude/settings.json`. Changing it orphans existing installations.
+- `hookCommand` in `internal/app/skill.go` is the exact string matched in `~/.Codex/settings.json`. Changing it orphans existing installations.
 - `do.go` uses `openConcurrentDB` with `busy_timeout(30000)` and `_txlock=immediate` for safe concurrent access.
 - Tests override `$HOME` — any code that calls `os.UserHomeDir()` will see the test's temp dir, not the real home.

@@ -15,6 +15,9 @@ import (
 // inside the test sandbox.
 func setupFlowRoot(t *testing.T) string {
 	t.Helper()
+	t.Setenv("CLAUDE_CODE_SESSION_ID", "")
+	t.Setenv("CODEX_THREAD_ID", "")
+	t.Setenv("CODEX_SESSION_ID", "")
 	root := initTempFlowRoot(t)
 	if rc := cmdInit(nil); rc != 0 {
 		t.Fatalf("cmdInit rc=%d", rc)

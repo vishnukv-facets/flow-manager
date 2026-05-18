@@ -24,6 +24,7 @@ func New(cfg Config) *Server {
 	s.terminals = newTerminalHub(s)
 	s.events = newEventHub()
 	s.reconcile = newLivenessReconciler(s)
+	s.transcripts = newTranscriptCache()
 	return s
 }
 
@@ -69,6 +70,11 @@ func (s *Server) ListenAndServe(addr string) int {
 		s.reconcile.start()
 		defer s.reconcile.stop()
 	}
+	// One-shot async backfill of tasks.session_path for pre-existing
+	// Codex sessions captured before the column was added. Skipped if
+	// the DB is unset (tests, healthchecks). Errors are swallowed
+	// inside; we never want a slow ~/.codex to block startup.
+	go s.backfillSessionPaths()
 	errCh := make(chan error, 1)
 	go func() {
 		errCh <- httpSrv.ListenAndServe()

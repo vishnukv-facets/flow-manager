@@ -20,7 +20,7 @@ const (
 	// as `--hook-version N`; the server reads it back from the hook
 	// payload and surfaces an upgrade hint at the next SessionStart
 	// when a session's command is below this value.
-	CurrentHookVersion = 3
+	CurrentHookVersion = 4
 	ClaudeCommand      = installedFlowPath + " hook agent-event --provider claude"
 	CodexCommand       = installedFlowPath + " hook agent-event --provider codex"
 )

@@ -11,10 +11,11 @@ type Config struct {
 }
 
 type Server struct {
-	cfg       Config
-	terminals *terminalHub
-	events    *eventHub
-	reconcile *livenessReconciler
+	cfg         Config
+	terminals   *terminalHub
+	events      *eventHub
+	reconcile   *livenessReconciler
+	transcripts *transcriptCache
 }
 
 type HealthView struct {
@@ -80,6 +81,7 @@ type TaskView struct {
 	SessionProvider     *string       `json:"session_provider"`
 	SessionStarted      *string       `json:"session_started"`
 	SessionLastResumed  *string       `json:"session_last_resumed"`
+	SessionPath         *string       `json:"session_path,omitempty"`
 	Live                bool          `json:"live"`
 	RuntimeStatus       *string       `json:"runtime_status,omitempty"`
 	DaysInStatus        int           `json:"days_in_status"`
@@ -107,11 +109,11 @@ type InboxEntry struct {
 
 // InboxView is the GET /api/tasks/<slug>/inbox response shape.
 type InboxView struct {
-	Slug         string       `json:"slug"`
-	Path         string       `json:"path"`
-	UnreadCount  int          `json:"unread_count"`
-	SeenAt       *string      `json:"seen_at,omitempty"`
-	Entries      []InboxEntry `json:"entries"`
+	Slug        string       `json:"slug"`
+	Path        string       `json:"path"`
+	UnreadCount int          `json:"unread_count"`
+	SeenAt      *string      `json:"seen_at,omitempty"`
+	Entries     []InboxEntry `json:"entries"`
 }
 
 // LifecycleEvent is one row of the per-session event timeline.

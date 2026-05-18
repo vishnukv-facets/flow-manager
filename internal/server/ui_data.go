@@ -890,13 +890,18 @@ func (s *Server) codexTranscriptWaitingFor(tv TaskView, provider string) *uiWait
 		WorkDir:         tv.WorkDir,
 		SessionProvider: provider,
 		SessionID:       sql.NullString{String: *tv.SessionID, Valid: true},
+		SessionPath:     nullStringFromPtr(tv.SessionPath),
 	}
-	path, err := sessionJSONLPath(task)
+	path, err := sessionJSONLPath(s.cfg.DB, task)
 	if err != nil {
 		return nil
 	}
-	pending, err := pendingCodexUserInput(path)
-	if err != nil || pending == nil {
+	entry, err := s.transcripts.get(path)
+	if err != nil {
+		return nil
+	}
+	pending := entry.pending
+	if pending == nil {
 		s.clearCodexTranscriptAttention(provider, *tv.SessionID)
 		return nil
 	}
@@ -971,15 +976,18 @@ func (s *Server) sessionInsightsForTask(tv TaskView, provider string, transcript
 		WorkDir:         tv.WorkDir,
 		SessionProvider: provider,
 		SessionID:       sql.NullString{String: *tv.SessionID, Valid: true},
+		SessionPath:     nullStringFromPtr(tv.SessionPath),
 	}
-	path, err := sessionJSONLPath(task)
+	path, err := sessionJSONLPath(s.cfg.DB, task)
 	if err != nil {
 		return insights
 	}
-	if st, err := os.Stat(path); err == nil {
-		insights.ActivityAt = st.ModTime().Format(time.RFC3339)
+	entry, err := s.transcripts.get(path)
+	if err != nil {
+		return insights
 	}
-	stats := sessionTranscriptUsageStats(path)
+	insights.ActivityAt = entry.mtime.Format(time.RFC3339)
+	stats := entry.usage
 	insights.ActivityAt = laterTimestamp(insights.ActivityAt, stats.LastTimestamp)
 	if stats.TokensUsed > 0 {
 		insights.TokensUsed = stats.TokensUsed
@@ -1269,15 +1277,17 @@ func (s *Server) uiTranscriptForTaskLimit(tv TaskView, limit int) []uiTranscript
 		WorkDir:         tv.WorkDir,
 		SessionProvider: provider,
 		SessionID:       sql.NullString{String: *tv.SessionID, Valid: true},
+		SessionPath:     nullStringFromPtr(tv.SessionPath),
 	}
-	path, err := sessionJSONLPath(t)
+	path, err := sessionJSONLPath(s.cfg.DB, t)
 	if err != nil {
 		return nil
 	}
-	entries, err := parseTranscriptFile(path)
+	entry, err := s.transcripts.get(path)
 	if err != nil {
 		return nil
 	}
+	entries := entry.entries
 	var out []uiTranscript
 	for _, e := range entries {
 		switch e.Type {

@@ -37,8 +37,17 @@ func TestProviderHookCommandStampsVersion(t *testing.T) {
 		if !strings.Contains(cmd, "--provider "+p.Name()) {
 			t.Errorf("%s command missing --provider %s: %q", p.Name(), p.Name(), cmd)
 		}
-		if !strings.Contains(cmd, "--url 'http://127.0.0.1:8787/api/hooks/agent'") {
+		if !strings.Contains(cmd, "http://127.0.0.1:8787/api/hooks/agent") {
 			t.Errorf("%s command missing --url stamping: %q", p.Name(), cmd)
+		}
+	}
+}
+
+func TestCodexHookCommandRequiresFlowOwnedSession(t *testing.T) {
+	cmd := codexProvider{}.HookCommand(InstallOptions{HookURL: "http://127.0.0.1:8787/api/hooks/agent"})
+	for _, want := range []string{"FLOW_HOOK_OWNED", "exec flow hook agent-event", "--provider codex"} {
+		if !strings.Contains(cmd, want) {
+			t.Fatalf("codex hook command missing %q: %q", want, cmd)
 		}
 	}
 }
@@ -85,5 +94,5 @@ func (s stubProvider) HookCommand(opts InstallOptions) string {
 	return fmt.Sprintf("flow hook agent-event --provider %s --hook-version %d",
 		s.name, CurrentHookVersion)
 }
-func (s stubProvider) Events() []HookSpec    { return s.events }
+func (s stubProvider) Events() []HookSpec     { return s.events }
 func (s stubProvider) Extras() map[string]any { return nil }

@@ -746,6 +746,62 @@ func TestCmdDoHereHappyPath(t *testing.T) {
 	}
 }
 
+// TestCmdDoHereCodexHappyPath pins the Codex equivalent of the
+// in-session bind contract: inside Codex, $CODEX_THREAD_ID identifies
+// the current transcript. --here should bind that thread id to the
+// task as a Codex session without spawning a terminal.
+func TestCmdDoHereCodexHappyPath(t *testing.T) {
+	setupFlowRoot(t)
+	seedTask(t, "codex-here-task")
+	const sid = "019e3c18-1149-7532-a1c0-31a4cfedb296"
+	t.Setenv("CLAUDE_CODE_SESSION_ID", "")
+	t.Setenv("CODEX_THREAD_ID", sid)
+
+	count, _ := stubITerm(t)
+	if rc := cmdDo([]string{"codex-here-task", "--here"}); rc != 0 {
+		t.Fatalf("rc=%d", rc)
+	}
+	if *count != 0 {
+		t.Errorf("--here should not spawn; got %d spawns", *count)
+	}
+
+	db := openFlowDB(t)
+	task, err := flowdb.GetTask(db, "codex-here-task")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if task.SessionProvider != sessionProviderCodex {
+		t.Errorf("session_provider = %q, want codex", task.SessionProvider)
+	}
+	if !task.SessionID.Valid || task.SessionID.String != sid {
+		t.Errorf("session_id = %+v, want %s", task.SessionID, sid)
+	}
+	if task.Status != "in-progress" {
+		t.Errorf("status = %q, want in-progress", task.Status)
+	}
+}
+
+func TestCmdDoHereCodexExplicitAgentHappyPath(t *testing.T) {
+	setupFlowRoot(t)
+	seedTask(t, "codex-explicit-task")
+	const sid = "019e3c18-1149-7532-a1c0-31a4cfedb296"
+	t.Setenv("CLAUDE_CODE_SESSION_ID", "")
+	t.Setenv("CODEX_THREAD_ID", sid)
+
+	if rc := cmdDo([]string{"codex-explicit-task", "--here", "--agent", "codex"}); rc != 0 {
+		t.Fatalf("rc=%d", rc)
+	}
+
+	db := openFlowDB(t)
+	task, err := flowdb.GetTask(db, "codex-explicit-task")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if task.SessionProvider != sessionProviderCodex || !task.SessionID.Valid || task.SessionID.String != sid {
+		t.Fatalf("task binding = provider %q session %+v, want codex %s", task.SessionProvider, task.SessionID, sid)
+	}
+}
+
 // TestCmdDoHereNoEnvVar pins that --here errors when no Claude Code
 // session is in the env (no session UUID to bind).
 func TestCmdDoHereNoEnvVar(t *testing.T) {

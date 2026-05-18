@@ -23,6 +23,9 @@ func withTempFlowRoot(t *testing.T) string {
 	t.Helper()
 	dir := t.TempDir()
 	t.Setenv("FLOW_ROOT", dir)
+	t.Setenv("CLAUDE_CODE_SESSION_ID", "")
+	t.Setenv("CODEX_THREAD_ID", "")
+	t.Setenv("CODEX_SESSION_ID", "")
 	return dir
 }
 

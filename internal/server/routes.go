@@ -320,17 +320,17 @@ func (s *Server) handleTaskRoute(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleTaskTranscript(w http.ResponseWriter, task *flowdb.Task) {
-	path, err := sessionJSONLPath(task)
+	path, err := sessionJSONLPath(s.cfg.DB, task)
 	if err != nil {
 		writeJSON(w, TranscriptResponse{Available: false, Message: err.Error(), Entries: []TranscriptEntry{}})
 		return
 	}
-	entries, err := parseTranscriptFile(path)
+	entry, err := s.transcripts.get(path)
 	if err != nil {
 		writeError(w, err, http.StatusInternalServerError)
 		return
 	}
-	writeJSON(w, TranscriptResponse{Available: true, Entries: entries})
+	writeJSON(w, TranscriptResponse{Available: true, Entries: entry.entries})
 }
 
 func (s *Server) handleProjects(w http.ResponseWriter, r *http.Request) {

@@ -465,6 +465,26 @@ func TestCodexHookHealthUsesTrustedStateNotTranscriptWarning(t *testing.T) {
 	}
 }
 
+func TestCodexHookHealthAcceptsFlowOwnedGuardedCommand(t *testing.T) {
+	root, db := testRootDB(t)
+	insertProjectTask(t, db, root)
+	codexHome := t.TempDir()
+	t.Setenv("CODEX_HOME", codexHome)
+	sessionID := "aaaaaaaa-1111-4aaa-8aaa-aaaaaaaaaaaa"
+	writeCodexHookConfig(t, root, `sh -c '[ "${FLOW_HOOK_OWNED:-}" = "1" ] || exit 0; exec flow hook agent-event --provider codex --url http://127.0.0.1:8787/api/hooks/agent'`)
+	writeCodexTrustedHookState(t, codexHome, root)
+	srv := New(Config{DB: db, FlowRoot: root, Version: "test"})
+	health := srv.agentHookHealth(
+		TaskView{Slug: "build-ui", WorkDir: root, SessionID: &sessionID},
+		"codex",
+		nil,
+		nil,
+	)
+	if health != nil {
+		t.Fatalf("hook health = %+v, want guarded Flow-owned command treated as installed and trusted", health)
+	}
+}
+
 func TestCodexHookHealthRejectsAbsoluteManagedHookCommand(t *testing.T) {
 	root, db := testRootDB(t)
 	insertProjectTask(t, db, root)

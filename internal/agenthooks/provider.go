@@ -11,9 +11,9 @@ import (
 // pi, grok, amp) can plug in by registering an additional Provider.
 //
 // Every Provider answers the same three questions:
-//   1. Where in the workdir do my hooks live? (HookFile)
-//   2. What lifecycle events do I register, with what matchers? (Events)
-//   3. What command-line am I asking the host to execute? (HookCommand)
+//  1. Where in the workdir do my hooks live? (HookFile)
+//  2. What lifecycle events do I register, with what matchers? (Events)
+//  3. What command-line am I asking the host to execute? (HookCommand)
 //
 // The shared installer in local.go iterates over registered providers,
 // each writing into its own file. That's the only way new providers are
@@ -130,7 +130,7 @@ func (codexProvider) HookFile(workDir string) string {
 }
 
 func (codexProvider) HookCommand(opts InstallOptions) string {
-	return buildHookCommand("codex", opts)
+	return flowOwnedOnlyCommand(buildHookCommand("codex", opts))
 }
 
 func (codexProvider) Events() []HookSpec {
@@ -158,4 +158,8 @@ func buildHookCommand(provider string, opts InstallOptions) string {
 		cmd += " --url " + shellQuoteArg(hookURL)
 	}
 	return cmd
+}
+
+func flowOwnedOnlyCommand(command string) string {
+	return "sh -c " + shellQuoteArg(`[ "${FLOW_HOOK_OWNED:-}" = "1" ] || exit 0; exec `+command)
 }

@@ -63,6 +63,7 @@ CREATE TABLE IF NOT EXISTS tasks (
     session_id            TEXT,
     session_started       TEXT,
     session_last_resumed  TEXT,
+    session_path          TEXT,
     worktree_path         TEXT,
     inbox_seen_at         TEXT,
     created_at            TEXT NOT NULL,
@@ -225,6 +226,7 @@ type Task struct {
 	SessionID          sql.NullString
 	SessionStarted     sql.NullString
 	SessionLastResumed sql.NullString
+	SessionPath        sql.NullString
 	WorktreePath       sql.NullString
 	InboxSeenAt        sql.NullString // bumped when SessionStart consumes inbox.md
 	CreatedAt          string
@@ -507,6 +509,21 @@ func runMigrations(db *sql.DB) error {
 	if !has {
 		if _, err := db.Exec(`ALTER TABLE tasks ADD COLUMN inbox_seen_at TEXT`); err != nil {
 			return fmt.Errorf("add tasks.inbox_seen_at: %w", err)
+		}
+	}
+
+	// session_path caches the absolute path to a session's transcript jsonl
+	// file. Populated at session capture (Codex) or first-use lookup; read
+	// on every UI tick to skip the otherwise-expensive recursive walk of
+	// ~/.codex/sessions when resolving a Codex session id to its file. Null
+	// for tasks that have never had a session captured.
+	has, err = columnExists(db, "tasks", "session_path")
+	if err != nil {
+		return err
+	}
+	if !has {
+		if _, err := db.Exec(`ALTER TABLE tasks ADD COLUMN session_path TEXT`); err != nil {
+			return fmt.Errorf("add tasks.session_path: %w", err)
 		}
 	}
 
@@ -968,7 +985,7 @@ func ListProjects(db *sql.DB, filter ProjectFilter) ([]*Project, error) {
 
 // ---------- task queries ----------
 
-const TaskCols = "slug, name, project_slug, status, kind, playbook_slug, parent_slug, priority, work_dir, waiting_on, due_date, assignee, permission_mode, status_changed_at, session_provider, session_id, session_started, session_last_resumed, worktree_path, inbox_seen_at, created_at, updated_at, archived_at, deleted_at"
+const TaskCols = "slug, name, project_slug, status, kind, playbook_slug, parent_slug, priority, work_dir, waiting_on, due_date, assignee, permission_mode, status_changed_at, session_provider, session_id, session_started, session_last_resumed, session_path, worktree_path, inbox_seen_at, created_at, updated_at, archived_at, deleted_at"
 
 func ScanTask(row interface{ Scan(dest ...any) error }) (*Task, error) {
 	var t Task
@@ -976,7 +993,7 @@ func ScanTask(row interface{ Scan(dest ...any) error }) (*Task, error) {
 		&t.Slug, &t.Name, &t.ProjectSlug, &t.Status, &t.Kind, &t.PlaybookSlug, &t.ParentSlug,
 		&t.Priority, &t.WorkDir,
 		&t.WaitingOn, &t.DueDate, &t.Assignee, &t.PermissionMode, &t.StatusChangedAt, &t.SessionProvider, &t.SessionID,
-		&t.SessionStarted, &t.SessionLastResumed, &t.WorktreePath, &t.InboxSeenAt, &t.CreatedAt, &t.UpdatedAt, &t.ArchivedAt, &t.DeletedAt,
+		&t.SessionStarted, &t.SessionLastResumed, &t.SessionPath, &t.WorktreePath, &t.InboxSeenAt, &t.CreatedAt, &t.UpdatedAt, &t.ArchivedAt, &t.DeletedAt,
 	)
 	if err != nil {
 		return nil, err

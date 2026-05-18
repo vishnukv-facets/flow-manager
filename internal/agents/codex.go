@@ -45,16 +45,22 @@ func CaptureCodexSessionForTaskSince(db *sql.DB, taskSlug, workDir string, start
 		return "", err
 	}
 	now := flowdb.NowISO()
+	// session_path is persisted alongside session_id so the UI tick (and
+	// any other lookup) can skip the recursive walk of ~/.codex/sessions
+	// in steady state. candidate.Path was populated by
+	// FindCodexSessionForTask; nullable for safety against future callers
+	// that hand us a partial candidate.
 	res, err := db.Exec(
 		`UPDATE tasks
 		 SET session_provider = 'codex',
 		     session_id = ?,
+		     session_path = ?,
 		     session_started = COALESCE(session_started, ?),
 		     updated_at = ?
 		 WHERE slug = ?
 		   AND session_provider = 'codex'
 		   AND (session_id IS NULL OR session_id = '' OR session_id = ?)`,
-		candidate.ID, started.Format(time.RFC3339), now, taskSlug, candidate.ID,
+		candidate.ID, flowdb.NullIfEmpty(candidate.Path), started.Format(time.RFC3339), now, taskSlug, candidate.ID,
 	)
 	if err != nil {
 		return "", fmt.Errorf("update codex session_id: %w", err)

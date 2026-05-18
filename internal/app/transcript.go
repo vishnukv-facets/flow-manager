@@ -54,9 +54,9 @@ func cmdTranscript(args []string) int {
 		if lookupErr != nil {
 			if isNoBindingErr(lookupErr) {
 				if currentSessionID() == "" {
-					fmt.Fprintln(os.Stderr, "error: no task ref given and not running inside a Claude session ($CLAUDE_CODE_SESSION_ID unset)")
+					fmt.Fprintln(os.Stderr, "error: no task ref given and not running inside a Claude/Codex session ($CLAUDE_CODE_SESSION_ID or $CODEX_THREAD_ID unset)")
 				} else {
-					fmt.Fprintln(os.Stderr, "error: no task ref given and this Claude session is not bound to a task")
+					fmt.Fprintln(os.Stderr, "error: no task ref given and this agent session is not bound to a task")
 				}
 				return 2
 			}
@@ -87,7 +87,17 @@ func cmdTranscript(args []string) int {
 }
 
 // sessionJSONLPath returns the absolute path to a task's session jsonl file.
+//
+// Fast lane: if tasks.session_path is populated and the file still exists,
+// returns that path without walking. The CLI is one-shot so no self-heal
+// is wired here — the server's hot-path version writes back the resolved
+// path; this lookup just benefits when the column is already populated.
 func sessionJSONLPath(task *flowdb.Task) (string, error) {
+	if task.SessionPath.Valid && task.SessionPath.String != "" {
+		if _, err := os.Stat(task.SessionPath.String); err == nil {
+			return task.SessionPath.String, nil
+		}
+	}
 	if task.SessionProvider == sessionProviderCodex {
 		p, err := agents.FindCodexSessionPathByID(task.SessionID.String)
 		if err != nil {
@@ -117,8 +127,8 @@ type jsonlRecord struct {
 
 // jsonlMessage is the message body inside user/assistant records.
 type jsonlMessage struct {
-	Role    string            `json:"role"`
-	Content json.RawMessage   `json:"content"`
+	Role    string          `json:"role"`
+	Content json.RawMessage `json:"content"`
 }
 
 // contentBlock represents one block in the content array.
@@ -126,9 +136,9 @@ type contentBlock struct {
 	Type      string          `json:"type"`
 	Text      string          `json:"text"`
 	Thinking  string          `json:"thinking"`
-	Name      string          `json:"name"`      // tool_use: tool name
-	ID        string          `json:"id"`        // tool_use: tool_use_id
-	Input     json.RawMessage `json:"input"`     // tool_use: input params
+	Name      string          `json:"name"`        // tool_use: tool name
+	ID        string          `json:"id"`          // tool_use: tool_use_id
+	Input     json.RawMessage `json:"input"`       // tool_use: input params
 	ToolUseID string          `json:"tool_use_id"` // tool_result
 	Content   json.RawMessage `json:"content"`     // tool_result: content (string or array)
 	IsError   bool            `json:"is_error"`    // tool_result

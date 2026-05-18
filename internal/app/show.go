@@ -58,14 +58,14 @@ func showTaskCmd(args []string) int {
 		ref = os.Getenv("FLOW_TASK")
 	}
 	if ref == "" {
-		// No explicit ref: reverse-lookup via the current Claude session.
+		// No explicit ref: reverse-lookup via the current Claude/Codex session.
 		bound, lookupErr := currentSessionTask(db)
 		if lookupErr != nil {
 			if isNoBindingErr(lookupErr) {
 				if currentSessionID() == "" {
-					fmt.Fprintln(os.Stderr, "error: no task ref given and not running inside a Claude session ($CLAUDE_CODE_SESSION_ID unset)")
+					fmt.Fprintln(os.Stderr, "error: no task ref given and not running inside a Claude/Codex session ($CLAUDE_CODE_SESSION_ID or $CODEX_THREAD_ID unset)")
 				} else {
-					fmt.Fprintln(os.Stderr, "error: no task ref given and this Claude session is not bound to a task — pass a slug or run `flow do --here <slug>` first")
+					fmt.Fprintln(os.Stderr, "error: no task ref given and this agent session is not bound to a task — pass a slug or run `flow do --here <slug>` first")
 				}
 				return 1
 			}
@@ -93,7 +93,7 @@ func showTaskCmd(args []string) int {
 
 // showProjectCmd implements `flow show project [<ref>]`. With no
 // argument, falls back to the project of the task bound to the
-// current Claude session.
+// current Claude/Codex session.
 func showProjectCmd(args []string) int {
 	fs := flagSet("show project")
 	if err := fs.Parse(args); err != nil {
@@ -136,9 +136,9 @@ func showProjectCmd(args []string) int {
 		if lookupErr != nil {
 			if isNoBindingErr(lookupErr) {
 				if currentSessionID() == "" {
-					fmt.Fprintln(os.Stderr, "error: no project ref given and not running inside a Claude session ($CLAUDE_CODE_SESSION_ID unset)")
+					fmt.Fprintln(os.Stderr, "error: no project ref given and not running inside a Claude/Codex session ($CLAUDE_CODE_SESSION_ID or $CODEX_THREAD_ID unset)")
 				} else {
-					fmt.Fprintln(os.Stderr, "error: no project ref given and this Claude session is not bound to a task")
+					fmt.Fprintln(os.Stderr, "error: no project ref given and this agent session is not bound to a task")
 				}
 				return 1
 			}

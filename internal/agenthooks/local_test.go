@@ -111,7 +111,7 @@ func TestInstallLocalWithOptionsUsesPathIndependentHookCommand(t *testing.T) {
 		t.Fatalf("Codex hook used absolute binary path: %#v", codex["hooks"])
 	}
 	if !hookFileMatchesAny(codex, func(cmd string) bool {
-		return strings.Contains(cmd, "--url '"+hookURL+"'")
+		return strings.Contains(cmd, hookURL)
 	}) {
 		t.Fatalf("Codex hook missing --url stamping for %q: %#v", hookURL, codex["hooks"])
 	}

@@ -2,6 +2,7 @@ package server
 
 import (
 	"bufio"
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"flow/internal/agents"
@@ -35,10 +36,99 @@ type contentBlock struct {
 	IsError   bool            `json:"is_error"`
 }
 
-func sessionJSONLPath(task *flowdb.Task) (string, error) {
+// sessionJSONLPath resolves a task's session transcript file path.
+//
+// Hot-path fast lane: if tasks.session_path is populated and the file
+// still exists, that path is returned without computing or walking
+// anything. The UI tick hits this path many times per second per
+// connected client — keeping it to a single os.Stat is the difference
+// between idle and a saturated CPU when ~/.codex/sessions has grown to
+// thousands of files.
+//
+// Fallbacks (when session_path is unset or stale):
+//   - Codex: walks ~/.codex/sessions to find the file matching session_id.
+//   - Claude: computes the deterministic ~/.claude/projects/<cwd>/<id>.jsonl.
+//
+// Self-heal: on a successful fallback resolution, the discovered path is
+// written back to tasks.session_path so subsequent ticks take the fast
+// lane. Persistence is best-effort — a failed UPDATE never breaks the
+// caller. Pass db=nil to skip persistence (used by call sites that
+// don't have a DB handle wired through).
+func sessionJSONLPath(db *sql.DB, task *flowdb.Task) (string, error) {
 	if !task.SessionID.Valid || task.SessionID.String == "" {
 		return "", errors.New("task has no session")
 	}
+	if task.SessionPath.Valid && task.SessionPath.String != "" {
+		if _, err := os.Stat(task.SessionPath.String); err == nil {
+			return task.SessionPath.String, nil
+		}
+		// Stale path (file moved/archived/deleted) — fall through and
+		// re-resolve. The new path will be persisted below, replacing
+		// the stale value.
+	}
+	resolved, err := resolveSessionJSONLPath(task)
+	if err != nil {
+		return "", err
+	}
+	if db != nil && resolved != "" && resolved != task.SessionPath.String {
+		// Self-heal: cache the resolved path so the next tick takes the
+		// fast lane. Best-effort: a write failure is silently ignored;
+		// the worst case is one extra walk on the next tick.
+		_, _ = db.Exec(
+			`UPDATE tasks SET session_path = ? WHERE slug = ?`,
+			resolved, task.Slug,
+		)
+	}
+	return resolved, nil
+}
+
+// backfillSessionPaths populates tasks.session_path for any Codex task
+// whose session has been captured but predates the column existing.
+// Without this, the first UI tick after upgrading flow would still pay
+// the recursive walk cost; with it, the steady-state fast lane kicks in
+// immediately on server start.
+//
+// Best-effort: a row-level failure logs to stderr and continues with the
+// next task. The function returns nil even on partial failure so a
+// pathological ~/.codex/sessions tree (e.g. unreadable) can't block
+// server startup.
+func (s *Server) backfillSessionPaths() {
+	if s.cfg.DB == nil {
+		return
+	}
+	rows, err := s.cfg.DB.Query(
+		`SELECT slug, session_id FROM tasks
+		 WHERE session_provider = 'codex'
+		   AND session_id IS NOT NULL AND session_id != ''
+		   AND (session_path IS NULL OR session_path = '')
+		   AND deleted_at IS NULL`,
+	)
+	if err != nil {
+		return
+	}
+	type pending struct{ slug, sid string }
+	var todo []pending
+	for rows.Next() {
+		var p pending
+		if err := rows.Scan(&p.slug, &p.sid); err != nil {
+			continue
+		}
+		todo = append(todo, p)
+	}
+	rows.Close()
+	for _, p := range todo {
+		path, err := agents.FindCodexSessionPathByID(p.sid)
+		if err != nil || path == "" {
+			continue
+		}
+		_, _ = s.cfg.DB.Exec(
+			`UPDATE tasks SET session_path = ? WHERE slug = ? AND session_id = ?`,
+			path, p.slug, p.sid,
+		)
+	}
+}
+
+func resolveSessionJSONLPath(task *flowdb.Task) (string, error) {
 	if task.SessionProvider == agents.ProviderCodex {
 		path, err := agents.FindCodexSessionPathByID(task.SessionID.String)
 		if err != nil {
