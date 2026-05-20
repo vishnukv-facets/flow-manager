@@ -215,7 +215,10 @@ Edit / mutate
                             [--due-date <date>] [--clear-due]
                             [--parent <task>] [--clear-parent]
                             [--waiting "<who or what>"] [--clear-waiting]
+                            [--project <slug>] [--clear-project]
   flow update project <ref> [--priority high|medium|low]
+  flow update playbook <ref> [--slug <s>] [--name <n>] [--work-dir <path>] [--mkdir]
+                             [--project <slug>] [--clear-project]
   flow archive        <ref>
   flow unarchive      <ref>
   flow delete         <ref>
@@ -2053,10 +2056,15 @@ flow update task <ref>
     [--due-date <date>]   [--clear-due]
     [--parent <task>] [--clear-parent]
     [--waiting "<who or what>"] [--clear-waiting]
+    [--project <slug>] [--clear-project]
     [--tag <t> ...] [--remove-tag <t> ...] [--clear-tags]
 
 flow update project <ref>
     [--priority high|medium|low]
+
+flow update playbook <ref>
+    [--slug <s>] [--name <n>] [--work-dir <path>] [--mkdir]
+    [--project <slug>] [--clear-project]
 ```
 
 When to use which flag:
@@ -2088,6 +2096,16 @@ When to use which flag:
 - **`--waiting "<X>"` / `--clear-waiting`** — set or clear the
   `waiting_on` freeform note (see §4.6). Status stays in-progress;
   the note is just there to remind the user.
+- **`--project <slug>` / `--clear-project`** — attach a task to an
+  existing project, or detach it back to floating. The target project
+  must exist and not be archived/deleted; archived/deleted projects
+  are rejected so updates don't get orphaned under hidden containers.
+  Swap is silent (no confirmation), matching `--priority` /
+  `--assignee` semantics — if the user said "attach to X", just do it.
+  On `flow update playbook`, the same flags re-project the playbook
+  for **future runs only**; existing `kind=playbook_run` rows keep
+  the `project_slug` they snapshotted at run time and are not
+  retroactively rewritten.
 
 There is **no** `--session-id` flag. The session_id is owned by
 `flow do`, Codex capture, or `flow do --here`; manual rewriting was a

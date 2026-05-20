@@ -126,6 +126,8 @@ func cmdUpdateTask(args []string) int {
 	clearParent := fs.Bool("clear-parent", false, "clear ALL parent task links")
 	waiting := fs.String("waiting", "", "set waiting_on freeform note (\"<who or what>\")")
 	clearWaiting := fs.Bool("clear-waiting", false, "clear waiting_on")
+	project := fs.String("project", "", "attach this task to a project (slug)")
+	clearProject := fs.Bool("clear-project", false, "detach from any project (task becomes floating)")
 	var addTags stringSliceFlag
 	fs.Var(&addTags, "tag", "add a tag (repeatable: --tag foo --tag bar)")
 	var removeTags stringSliceFlag
@@ -139,9 +141,10 @@ func cmdUpdateTask(args []string) int {
 		*assignee != "" || *clearAssignee || *dueDate != "" || *clearDue ||
 		len(addParents) > 0 || len(removeParents) > 0 || *clearParent ||
 		*waiting != "" || *clearWaiting ||
+		*project != "" || *clearProject ||
 		len(addTags) > 0 || len(removeTags) > 0 || *clearTags
 	if !anyField {
-		fmt.Fprintln(os.Stderr, "error: give at least one of --slug, --name, --work-dir, --status, --priority, --assignee, --clear-assignee, --due-date, --clear-due, --parent, --remove-parent, --clear-parent, --waiting, --clear-waiting, --tag, --remove-tag, --clear-tags")
+		fmt.Fprintln(os.Stderr, "error: give at least one of --slug, --name, --work-dir, --status, --priority, --assignee, --clear-assignee, --due-date, --clear-due, --parent, --remove-parent, --clear-parent, --waiting, --clear-waiting, --project, --clear-project, --tag, --remove-tag, --clear-tags")
 		return 2
 	}
 
@@ -178,6 +181,10 @@ func cmdUpdateTask(args []string) int {
 	}
 	if *clearWaiting && *waiting != "" {
 		fmt.Fprintln(os.Stderr, "error: --waiting and --clear-waiting are mutually exclusive")
+		return 2
+	}
+	if *clearProject && *project != "" {
+		fmt.Fprintln(os.Stderr, "error: --project and --clear-project are mutually exclusive")
 		return 2
 	}
 	if *clearTags && len(removeTags) > 0 {
@@ -372,6 +379,34 @@ func cmdUpdateTask(args []string) int {
 			return 1
 		}
 		fmt.Println("waiting_on cleared")
+	}
+	if *project != "" {
+		// Reject archived/deleted projects via ResolveProject — attaching
+		// a task to an archived container would orphan its updates from
+		// active project views.
+		p, err := ResolveProject(db, *project, false)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "error: %v\n", err)
+			return 1
+		}
+		if _, err := db.Exec(
+			`UPDATE tasks SET project_slug=?, updated_at=? WHERE slug=?`,
+			p.Slug, now, task.Slug,
+		); err != nil {
+			fmt.Fprintf(os.Stderr, "error: update project: %v\n", err)
+			return 1
+		}
+		fmt.Printf("project → %s\n", p.Slug)
+	}
+	if *clearProject {
+		if _, err := db.Exec(
+			`UPDATE tasks SET project_slug=NULL, updated_at=? WHERE slug=?`,
+			now, task.Slug,
+		); err != nil {
+			fmt.Fprintf(os.Stderr, "error: clear project: %v\n", err)
+			return 1
+		}
+		fmt.Println("project cleared")
 	}
 	if *assignee != "" {
 		if _, err := db.Exec(
@@ -605,11 +640,17 @@ func cmdUpdatePlaybook(args []string) int {
 	newName := fs.String("name", "", "new display name")
 	workDir := fs.String("work-dir", "", "new absolute work directory")
 	mkdir := fs.Bool("mkdir", false, "create --work-dir if it does not exist")
+	project := fs.String("project", "", "attach this playbook to a project (slug); applies to future runs only")
+	clearProject := fs.Bool("clear-project", false, "detach from any project (playbook becomes floating); applies to future runs only")
 	if err := fs.Parse(args[1:]); err != nil {
 		return 2
 	}
-	if *newSlug == "" && *newName == "" && *workDir == "" {
-		fmt.Fprintln(os.Stderr, "error: give at least one of --slug, --name, --work-dir")
+	if *newSlug == "" && *newName == "" && *workDir == "" && *project == "" && !*clearProject {
+		fmt.Fprintln(os.Stderr, "error: give at least one of --slug, --name, --work-dir, --project, --clear-project")
+		return 2
+	}
+	if *clearProject && *project != "" {
+		fmt.Fprintln(os.Stderr, "error: --project and --clear-project are mutually exclusive")
 		return 2
 	}
 	if *newSlug != "" {
@@ -687,6 +728,34 @@ func cmdUpdatePlaybook(args []string) int {
 			return 1
 		}
 		fmt.Printf("work_dir → %s\n", absWorkDir)
+	}
+	if *project != "" {
+		// Reject archived/deleted projects. Future runs of this playbook
+		// will inherit the new project_slug; existing run-tasks (which
+		// snapshotted the prior value at run time) are NOT rewritten.
+		p, err := ResolveProject(db, *project, false)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "error: %v\n", err)
+			return 1
+		}
+		if _, err := db.Exec(
+			`UPDATE playbooks SET project_slug=?, updated_at=? WHERE slug=?`,
+			p.Slug, now, pb.Slug,
+		); err != nil {
+			fmt.Fprintf(os.Stderr, "error: update project: %v\n", err)
+			return 1
+		}
+		fmt.Printf("project → %s\n", p.Slug)
+	}
+	if *clearProject {
+		if _, err := db.Exec(
+			`UPDATE playbooks SET project_slug=NULL, updated_at=? WHERE slug=?`,
+			now, pb.Slug,
+		); err != nil {
+			fmt.Fprintf(os.Stderr, "error: clear project: %v\n", err)
+			return 1
+		}
+		fmt.Println("project cleared")
 	}
 	return 0
 }

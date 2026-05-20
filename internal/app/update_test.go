@@ -665,3 +665,208 @@ func TestCmdUpdatePlaybookRequiresFlag(t *testing.T) {
 		t.Errorf("rc=%d, want 2 for no fields", rc)
 	}
 }
+
+// ---------- project attachment tests ----------
+
+// TestCmdUpdateTaskSetProject covers attaching a floating task to an
+// existing project (--project) and detaching it back (--clear-project).
+func TestCmdUpdateTaskSetProject(t *testing.T) {
+	setupFlowRoot(t)
+	wd := t.TempDir()
+	if rc := cmdAdd([]string{"project", "Target Proj", "--slug", "tgt-proj", "--work-dir", wd}); rc != 0 {
+		t.Fatalf("seed project rc=%d", rc)
+	}
+	seedTask(t, "up-attach")
+
+	if rc := cmdUpdate([]string{"task", "up-attach", "--project", "tgt-proj"}); rc != 0 {
+		t.Fatalf("attach rc=%d", rc)
+	}
+	db := openFlowDB(t)
+	task, _ := flowdb.GetTask(db, "up-attach")
+	if !task.ProjectSlug.Valid || task.ProjectSlug.String != "tgt-proj" {
+		t.Errorf("project_slug = %+v, want tgt-proj", task.ProjectSlug)
+	}
+
+	if rc := cmdUpdate([]string{"task", "up-attach", "--clear-project"}); rc != 0 {
+		t.Fatalf("clear rc=%d", rc)
+	}
+	task, _ = flowdb.GetTask(db, "up-attach")
+	if task.ProjectSlug.Valid {
+		t.Errorf("project_slug should be NULL after clear, got %q", task.ProjectSlug.String)
+	}
+}
+
+// TestCmdUpdateTaskSetProjectReassigns covers swapping a task from one
+// project to another. The brief calls out a "swap silently" semantic
+// consistent with --priority / --assignee.
+func TestCmdUpdateTaskSetProjectReassigns(t *testing.T) {
+	setupFlowRoot(t)
+	wd := t.TempDir()
+	if rc := cmdAdd([]string{"project", "A", "--slug", "proj-a", "--work-dir", wd}); rc != 0 {
+		t.Fatal()
+	}
+	if rc := cmdAdd([]string{"project", "B", "--slug", "proj-b", "--work-dir", wd}); rc != 0 {
+		t.Fatal()
+	}
+	if rc := cmdAdd([]string{"task", "swap me", "--slug", "up-swap", "--project", "proj-a"}); rc != 0 {
+		t.Fatalf("seed rc=%d", rc)
+	}
+
+	if rc := cmdUpdate([]string{"task", "up-swap", "--project", "proj-b"}); rc != 0 {
+		t.Fatalf("reassign rc=%d", rc)
+	}
+	db := openFlowDB(t)
+	task, _ := flowdb.GetTask(db, "up-swap")
+	if !task.ProjectSlug.Valid || task.ProjectSlug.String != "proj-b" {
+		t.Errorf("project_slug = %+v, want proj-b", task.ProjectSlug)
+	}
+}
+
+// TestCmdUpdateTaskProjectUnknown pins that --project to a non-existent
+// project errors with rc=1 and does not mutate the task.
+func TestCmdUpdateTaskProjectUnknown(t *testing.T) {
+	setupFlowRoot(t)
+	seedTask(t, "up-noproj")
+	if rc := cmdUpdate([]string{"task", "up-noproj", "--project", "ghost"}); rc != 1 {
+		t.Errorf("rc=%d, want 1 for unknown project", rc)
+	}
+	db := openFlowDB(t)
+	task, _ := flowdb.GetTask(db, "up-noproj")
+	if task.ProjectSlug.Valid {
+		t.Errorf("project_slug should remain NULL after failed attach, got %q", task.ProjectSlug.String)
+	}
+}
+
+// TestCmdUpdateTaskProjectArchived pins that archived projects are
+// rejected — attaching to a hidden container would orphan the task's
+// updates from active project views.
+func TestCmdUpdateTaskProjectArchived(t *testing.T) {
+	setupFlowRoot(t)
+	wd := t.TempDir()
+	if rc := cmdAdd([]string{"project", "Old", "--slug", "old-proj", "--work-dir", wd}); rc != 0 {
+		t.Fatal()
+	}
+	if rc := cmdArchive([]string{"old-proj"}); rc != 0 {
+		t.Fatalf("archive rc=%d", rc)
+	}
+	seedTask(t, "up-arch")
+	if rc := cmdUpdate([]string{"task", "up-arch", "--project", "old-proj"}); rc != 1 {
+		t.Errorf("rc=%d, want 1 for archived project target", rc)
+	}
+}
+
+// TestCmdUpdateTaskProjectMutuallyExclusive pins that passing both
+// --project and --clear-project is a usage error.
+func TestCmdUpdateTaskProjectMutuallyExclusive(t *testing.T) {
+	setupFlowRoot(t)
+	wd := t.TempDir()
+	if rc := cmdAdd([]string{"project", "P", "--slug", "p-mx", "--work-dir", wd}); rc != 0 {
+		t.Fatal()
+	}
+	seedTask(t, "up-mx")
+	if rc := cmdUpdate([]string{"task", "up-mx", "--project", "p-mx", "--clear-project"}); rc != 2 {
+		t.Errorf("rc=%d, want 2 when --project and --clear-project both given", rc)
+	}
+}
+
+// TestCmdUpdatePlaybookSetProject covers --project / --clear-project on
+// `flow update playbook`. Future runs inherit the change.
+func TestCmdUpdatePlaybookSetProject(t *testing.T) {
+	setupFlowRoot(t)
+	wd := t.TempDir()
+	if rc := cmdAdd([]string{"project", "Target", "--slug", "pb-tgt", "--work-dir", wd}); rc != 0 {
+		t.Fatal()
+	}
+	if rc := cmdAdd([]string{"playbook", "Floating PB", "--slug", "float-pb", "--work-dir", wd}); rc != 0 {
+		t.Fatalf("seed playbook rc=%d", rc)
+	}
+
+	if rc := cmdUpdate([]string{"playbook", "float-pb", "--project", "pb-tgt"}); rc != 0 {
+		t.Fatalf("attach rc=%d", rc)
+	}
+	db := openFlowDB(t)
+	pb, _ := flowdb.GetPlaybook(db, "float-pb")
+	if !pb.ProjectSlug.Valid || pb.ProjectSlug.String != "pb-tgt" {
+		t.Errorf("playbook project_slug = %+v, want pb-tgt", pb.ProjectSlug)
+	}
+
+	if rc := cmdUpdate([]string{"playbook", "float-pb", "--clear-project"}); rc != 0 {
+		t.Fatalf("clear rc=%d", rc)
+	}
+	pb, _ = flowdb.GetPlaybook(db, "float-pb")
+	if pb.ProjectSlug.Valid {
+		t.Errorf("playbook project_slug should be NULL after clear, got %q", pb.ProjectSlug.String)
+	}
+}
+
+// TestCmdUpdatePlaybookProjectDoesNotCascadeToRuns pins the semantic
+// that re-projecting a playbook applies to FUTURE runs only. Existing
+// kind=playbook_run task rows are not retroactively re-projected,
+// matching how `flow update playbook --slug` leaves snapshotted run
+// briefs untouched.
+func TestCmdUpdatePlaybookProjectDoesNotCascadeToRuns(t *testing.T) {
+	setupFlowRoot(t)
+	wd := t.TempDir()
+	if rc := cmdAdd([]string{"project", "Old", "--slug", "pb-old", "--work-dir", wd}); rc != 0 {
+		t.Fatal()
+	}
+	if rc := cmdAdd([]string{"project", "New", "--slug", "pb-new", "--work-dir", wd}); rc != 0 {
+		t.Fatal()
+	}
+	if rc := cmdAdd([]string{"playbook", "Reproj", "--slug", "reproj-pb", "--project", "pb-old", "--work-dir", wd}); rc != 0 {
+		t.Fatalf("seed playbook rc=%d", rc)
+	}
+
+	// Seed a playbook-run task with the old project_slug, as flow run
+	// playbook would have done at run time.
+	db := openFlowDB(t)
+	now := flowdb.NowISO()
+	if _, err := db.Exec(
+		`INSERT INTO tasks (slug, name, project_slug, status, kind, playbook_slug, priority, work_dir, session_provider, session_id, status_changed_at, created_at, updated_at)
+		 VALUES (?, ?, ?, 'in-progress', 'playbook_run', ?, 'medium', ?, 'claude', ?, ?, ?, ?)`,
+		"reproj-pb-run-1", "Run 1", "pb-old", "reproj-pb", wd, "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee", now, now, now,
+	); err != nil {
+		t.Fatalf("seed run task: %v", err)
+	}
+
+	if rc := cmdUpdate([]string{"playbook", "reproj-pb", "--project", "pb-new"}); rc != 0 {
+		t.Fatalf("reattach rc=%d", rc)
+	}
+
+	pb, _ := flowdb.GetPlaybook(db, "reproj-pb")
+	if !pb.ProjectSlug.Valid || pb.ProjectSlug.String != "pb-new" {
+		t.Errorf("playbook project_slug = %+v, want pb-new", pb.ProjectSlug)
+	}
+	runTask, _ := flowdb.GetTask(db, "reproj-pb-run-1")
+	if !runTask.ProjectSlug.Valid || runTask.ProjectSlug.String != "pb-old" {
+		t.Errorf("existing run-task project_slug = %+v, want pb-old (must not cascade)", runTask.ProjectSlug)
+	}
+}
+
+// TestCmdUpdatePlaybookProjectMutuallyExclusive pins the usage error.
+func TestCmdUpdatePlaybookProjectMutuallyExclusive(t *testing.T) {
+	setupFlowRoot(t)
+	wd := t.TempDir()
+	if rc := cmdAdd([]string{"project", "P", "--slug", "p-pmx", "--work-dir", wd}); rc != 0 {
+		t.Fatal()
+	}
+	if rc := cmdAdd([]string{"playbook", "PB", "--slug", "pb-pmx", "--work-dir", wd}); rc != 0 {
+		t.Fatal()
+	}
+	if rc := cmdUpdate([]string{"playbook", "pb-pmx", "--project", "p-pmx", "--clear-project"}); rc != 2 {
+		t.Errorf("rc=%d, want 2 when --project and --clear-project both given", rc)
+	}
+}
+
+// TestCmdUpdatePlaybookProjectUnknown pins rejection of unknown
+// project ref on playbook attach.
+func TestCmdUpdatePlaybookProjectUnknown(t *testing.T) {
+	setupFlowRoot(t)
+	wd := t.TempDir()
+	if rc := cmdAdd([]string{"playbook", "PB", "--slug", "pb-noproj", "--work-dir", wd}); rc != 0 {
+		t.Fatal()
+	}
+	if rc := cmdUpdate([]string{"playbook", "pb-noproj", "--project", "ghost"}); rc != 1 {
+		t.Errorf("rc=%d, want 1 for unknown project", rc)
+	}
+}
