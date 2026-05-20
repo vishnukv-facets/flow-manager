@@ -41,6 +41,7 @@ type actionRequest struct {
 	EntityKind     string `json:"entity_kind"`
 	Provider       string `json:"provider"`
 	PermissionMode string `json:"permission_mode"`
+	Mkdir          bool   `json:"mkdir"`
 }
 
 type actionResponse struct {
@@ -143,6 +144,10 @@ func (s *Server) runAction(req actionRequest) (actionResponse, int) {
 		return s.spawnPlaybookRunBridge(target, req)
 	case "create-flow":
 		return s.createFlow(req)
+	case "create-project":
+		return s.createProject(req)
+	case "update-permission-mode":
+		return s.updatePermissionMode(req)
 	case "pause":
 		return s.pauseTask(target)
 	case "kill":
@@ -445,6 +450,92 @@ func (s *Server) createFlowFromExisting(req actionRequest, task *flowdb.Task, pr
 		Agent:   agent,
 		Bridge:  true,
 	}, http.StatusOK
+}
+
+func (s *Server) createProject(req actionRequest) (actionResponse, int) {
+	name := strings.TrimSpace(req.Name)
+	if name == "" {
+		return actionResponse{OK: false, Message: "name is required"}, http.StatusBadRequest
+	}
+	slug := strings.TrimSpace(req.Slug)
+	if slug == "" {
+		slug = strings.TrimSpace(req.Target)
+	}
+	if err := validateSlug(slug); err != nil {
+		return actionResponse{OK: false, Message: err.Error()}, http.StatusBadRequest
+	}
+	workDir := strings.TrimSpace(req.WorkDir)
+	if workDir == "" {
+		return actionResponse{OK: false, Message: "work_dir is required"}, http.StatusBadRequest
+	}
+	priority := strings.TrimSpace(req.Priority)
+	if priority == "" {
+		priority = "medium"
+	}
+
+	if _, err := flowdb.GetProject(s.cfg.DB, slug); err == nil {
+		return actionResponse{OK: false, Message: "project " + slug + " already exists"}, http.StatusConflict
+	} else if !errors.Is(err, sql.ErrNoRows) {
+		return actionResponse{OK: false, Message: err.Error()}, http.StatusInternalServerError
+	}
+
+	args := []string{"add", "project", name, "--slug", slug, "--priority", priority, "--work-dir", workDir}
+	if req.Mkdir {
+		args = append(args, "--mkdir")
+	}
+	out, err := s.runFlowCommand(args...)
+	if err != nil {
+		return actionResponse{OK: false, Message: err.Error(), Output: out}, http.StatusInternalServerError
+	}
+	if strings.TrimSpace(req.Description) != "" {
+		if err := s.writeProjectBrief(slug, name, req.Description); err != nil {
+			return actionResponse{OK: false, Message: err.Error(), Output: out}, http.StatusInternalServerError
+		}
+	}
+	return actionResponse{OK: true, Message: "created project " + slug, Output: out}, http.StatusOK
+}
+
+func (s *Server) updatePermissionMode(req actionRequest) (actionResponse, int) {
+	target := firstNonEmpty(req.Target, req.Slug)
+	if err := validateSlug(target); err != nil {
+		return actionResponse{OK: false, Message: err.Error()}, http.StatusBadRequest
+	}
+	mode, err := flowdb.NormalizePermissionMode(req.PermissionMode)
+	if err != nil {
+		return actionResponse{OK: false, Message: err.Error()}, http.StatusBadRequest
+	}
+	task, err := flowdb.GetTask(s.cfg.DB, target)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return actionResponse{OK: false, Message: "task not found: " + target}, http.StatusNotFound
+		}
+		return actionResponse{OK: false, Message: err.Error()}, http.StatusInternalServerError
+	}
+	if task.PermissionMode == mode {
+		return actionResponse{OK: true, Message: "permission mode unchanged (" + mode + ")"}, http.StatusOK
+	}
+
+	if _, err := s.cfg.DB.Exec(
+		`UPDATE tasks SET permission_mode = ?, updated_at = ? WHERE slug = ?`,
+		mode, flowdb.NowISO(), task.Slug,
+	); err != nil {
+		return actionResponse{OK: false, Message: err.Error()}, http.StatusInternalServerError
+	}
+
+	restarted := false
+	if task.SessionID.Valid && strings.TrimSpace(task.SessionID.String) != "" && safeSessionRe.MatchString(task.SessionID.String) {
+		if pid, perr := claudePIDForSession(task.SessionID.String); perr == nil {
+			if kerr := syscall.Kill(pid, syscall.SIGTERM); kerr == nil {
+				restarted = true
+			}
+		}
+	}
+
+	msg := "permission mode set to " + mode
+	if restarted {
+		msg += "; current session terminated, reattach to apply"
+	}
+	return actionResponse{OK: true, Message: msg, AlreadyLive: restarted}, http.StatusOK
 }
 
 func (s *Server) pauseTask(target string) (actionResponse, int) {
@@ -1214,6 +1305,18 @@ func (s *Server) writeTaskBrief(slug, name, prompt string) error {
 		return fmt.Errorf("create task brief dir: %w", err)
 	}
 	body := fmt.Sprintf("# %s\n\n%s\n", name, strings.TrimSpace(prompt))
+	return os.WriteFile(path, []byte(body), 0o644)
+}
+
+func (s *Server) writeProjectBrief(slug, name, description string) error {
+	path := filepath.Join(s.cfg.FlowRoot, "projects", slug, "brief.md")
+	if !strings.HasPrefix(filepath.Clean(path), filepath.Join(s.cfg.FlowRoot, "projects")+string(os.PathSeparator)) {
+		return errors.New("invalid project brief path")
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return fmt.Errorf("create project brief dir: %w", err)
+	}
+	body := fmt.Sprintf("# %s\n\n%s\n", name, strings.TrimSpace(description))
 	return os.WriteFile(path, []byte(body), 0o644)
 }
 

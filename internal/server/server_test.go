@@ -1021,6 +1021,127 @@ func TestCreateFlowExistingActiveTaskOpensExisting(t *testing.T) {
 	}
 }
 
+func TestCreateProjectCreatesProject(t *testing.T) {
+	root, db := testRootDB(t)
+	t.Setenv("FLOW_ROOT", root)
+	workDir := filepath.Join(root, "newproj-dir")
+	srv := New(Config{DB: db, FlowRoot: root, CommandPath: testFlowBinary(t)})
+
+	resp, status := srv.runAction(actionRequest{
+		Kind:        "create-project",
+		Slug:        "newproj",
+		Name:        "New Project",
+		WorkDir:     workDir,
+		Priority:    "high",
+		Mkdir:       true,
+		Description: "A project created via the UI.\n\nSecond paragraph.",
+	})
+	if status != http.StatusOK || !resp.OK {
+		t.Fatalf("status = %d, resp = %+v", status, resp)
+	}
+	project, err := flowdb.GetProject(db, "newproj")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if project.Name != "New Project" || project.Priority != "high" || project.WorkDir != workDir {
+		t.Fatalf("project not persisted as expected: %+v", project)
+	}
+	if _, err := os.Stat(workDir); err != nil {
+		t.Fatalf("--mkdir did not create work_dir: %v", err)
+	}
+	brief, err := os.ReadFile(filepath.Join(root, "projects", "newproj", "brief.md"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(brief), "A project created via the UI.") {
+		t.Fatalf("brief did not capture description: %q", brief)
+	}
+	if !strings.HasPrefix(string(brief), "# New Project") {
+		t.Fatalf("brief should start with project name heading: %q", brief)
+	}
+}
+
+func TestCreateProjectRejectsDuplicateSlug(t *testing.T) {
+	root, db := testRootDB(t)
+	t.Setenv("FLOW_ROOT", root)
+	insertProjectTask(t, db, root)
+	srv := New(Config{DB: db, FlowRoot: root, CommandPath: testFlowBinary(t)})
+
+	resp, status := srv.runAction(actionRequest{
+		Kind:     "create-project",
+		Slug:     "flow",
+		Name:     "Duplicate",
+		WorkDir:  root,
+		Priority: "medium",
+	})
+	if status != http.StatusConflict || resp.OK {
+		t.Fatalf("expected 409 conflict, got status=%d resp=%+v", status, resp)
+	}
+}
+
+func TestUpdatePermissionModeStoresMode(t *testing.T) {
+	root, db := testRootDB(t)
+	insertProjectTask(t, db, root)
+	srv := New(Config{DB: db, FlowRoot: root, CommandPath: testFlowBinary(t)})
+
+	resp, status := srv.runAction(actionRequest{
+		Kind:           "update-permission-mode",
+		Slug:           "build-ui",
+		PermissionMode: "auto",
+	})
+	if status != http.StatusOK || !resp.OK {
+		t.Fatalf("status = %d, resp = %+v", status, resp)
+	}
+	task, err := flowdb.GetTask(db, "build-ui")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if task.PermissionMode != "auto" {
+		t.Fatalf("permission mode = %q, want auto", task.PermissionMode)
+	}
+}
+
+func TestUpdatePermissionModeRejectsInvalidMode(t *testing.T) {
+	root, db := testRootDB(t)
+	insertProjectTask(t, db, root)
+	srv := New(Config{DB: db, FlowRoot: root, CommandPath: testFlowBinary(t)})
+	resp, status := srv.runAction(actionRequest{
+		Kind:           "update-permission-mode",
+		Slug:           "build-ui",
+		PermissionMode: "not-a-mode",
+	})
+	if status != http.StatusBadRequest || resp.OK {
+		t.Fatalf("expected 400 bad request, got status=%d resp=%+v", status, resp)
+	}
+}
+
+func TestUpdatePermissionModeUnknownSlug(t *testing.T) {
+	root, db := testRootDB(t)
+	srv := New(Config{DB: db, FlowRoot: root, CommandPath: testFlowBinary(t)})
+	resp, status := srv.runAction(actionRequest{
+		Kind:           "update-permission-mode",
+		Slug:           "no-such-task",
+		PermissionMode: "auto",
+	})
+	if status != http.StatusNotFound || resp.OK {
+		t.Fatalf("expected 404, got status=%d resp=%+v", status, resp)
+	}
+}
+
+func TestCreateProjectRequiresWorkDir(t *testing.T) {
+	root, db := testRootDB(t)
+	srv := New(Config{DB: db, FlowRoot: root, CommandPath: testFlowBinary(t)})
+	resp, status := srv.runAction(actionRequest{
+		Kind:     "create-project",
+		Slug:     "no-wd",
+		Name:     "Missing workdir",
+		Priority: "medium",
+	})
+	if status != http.StatusBadRequest || resp.OK {
+		t.Fatalf("expected 400 bad request, got status=%d resp=%+v", status, resp)
+	}
+}
+
 func TestSpawnBacklogActionAppliesProviderChoiceBeforeSessionCreation(t *testing.T) {
 	root, db := testRootDB(t)
 	insertProjectTask(t, db, root)

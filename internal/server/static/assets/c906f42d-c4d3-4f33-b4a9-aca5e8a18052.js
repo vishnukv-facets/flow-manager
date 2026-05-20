@@ -1263,6 +1263,107 @@ const CreateFlowModal = ({ onClose, projects, action, preselect }) => {
   );
 };
 
+// ───────── Create project modal ─────────────────────────────────────
+const CreateProjectModal = ({ onClose, action }) => {
+  const [name, setName] = useState('');
+  const [slugEdited, setSlugEdited] = useState(false);
+  const [slugInput, setSlugInput] = useState('');
+  const [workdir, setWorkdir] = useState(WORKDIRS[0]?.path || '');
+  const [mkdir, setMkdir] = useState(false);
+  const [priority, setPriority] = useState('medium');
+  const [description, setDescription] = useState('');
+  const [pickerOpen, setPickerOpen] = useState(false);
+
+  const derivedSlug = name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 40);
+  const slug = (slugEdited ? slugInput : derivedSlug) || 'new-project';
+  const canSubmit = name.trim().length > 1 && /^[a-z0-9][a-z0-9._-]*$/.test(slug) && workdir.trim().length > 0;
+
+  const submit = () => {
+    if (!canSubmit) return;
+    action('create-project', { slug, name: name.trim(), work_dir: workdir, priority, mkdir, description: description.trim() });
+    onClose();
+  };
+
+  useEffect(() => {
+    const onKey = (e) => {
+      if (e.key === 'Escape') { onClose(); return; }
+      if ((e.metaKey || e.ctrlKey) && e.key === 'Enter') { e.preventDefault(); submit(); }
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [name, slug, workdir, priority, mkdir, description]);
+
+  return (
+    <div className="modal-scrim centered" onClick={onClose}>
+      <div className="modal create-flow" style={{width: 580}} onClick={(e) => e.stopPropagation()}>
+        <div className="modal-head">
+          <Icon name="folder-plus" size={14}/>
+          <span>Create project</span>
+          <span className="mono dim" style={{marginLeft: 8, fontSize: 11}}>group related tasks under one roof</span>
+          <button className="modal-close" onClick={onClose}><Icon name="x" size={12}/></button>
+        </div>
+        <div className="modal-body" style={{padding: 16, display: 'flex', flexDirection: 'column', gap: 14}}>
+          <label className="form-row">
+            <span className="form-label">Project name</span>
+            <input className="form-input" value={name} onChange={e => setName(e.target.value)} placeholder="Budgeting app" autoFocus/>
+          </label>
+
+          <label className="form-row">
+            <span className="form-label">Slug</span>
+            <input
+              className="form-input mono"
+              value={slugEdited ? slugInput : derivedSlug}
+              onChange={e => { setSlugEdited(true); setSlugInput(e.target.value); }}
+              placeholder="auto-generated from name"
+            />
+            <span className="form-hint mono dim">lowercase, digits, dot/dash/underscore</span>
+          </label>
+
+          <label className="form-row">
+            <span className="form-label">Priority</span>
+            <div className="seg">
+              {['low','medium','high'].map(p => (
+                <button key={p} className={`seg-btn ${priority===p?'on':''}`} onClick={() => setPriority(p)}>{p}</button>
+              ))}
+            </div>
+          </label>
+
+          <label className="form-row">
+            <span className="form-label">Work dir</span>
+            <div className="path-picker" onClick={() => setPickerOpen(true)} title="Choose directory…">
+              <Icon name="folder" size={13}/>
+              <span className="path-picker-text mono">{workdir || 'Choose a directory…'}</span>
+              <span className="path-picker-btn mono">Browse…</span>
+            </div>
+            <label className="mono dim" style={{display: 'flex', alignItems: 'center', gap: 6, fontSize: 11, marginTop: 6, cursor: 'pointer'}}>
+              <input type="checkbox" checked={mkdir} onChange={e => setMkdir(e.target.checked)}/>
+              Create the directory if it doesn't exist
+            </label>
+          </label>
+          {pickerOpen && <DirectoryPicker initial={workdir} onPick={(p) => { setWorkdir(p); setPickerOpen(false); }} onClose={() => setPickerOpen(false)}/>}
+
+          <label className="form-row">
+            <span className="form-label">Description <span className="mono dim">optional</span></span>
+            <textarea className="form-input" rows={4} value={description} onChange={e => setDescription(e.target.value)} placeholder="What is this project for? What scope does it cover?"/>
+            <span className="form-hint mono dim">Becomes the body of the project brief. Leave blank to fill in later.</span>
+          </label>
+        </div>
+        <div className="modal-foot">
+          <span className="mono dim" style={{fontSize: 11}}>
+            <kbd className="kbd">esc</kbd> cancel · <kbd className="kbd">⌘↵</kbd> create
+          </span>
+          <div style={{marginLeft: 'auto', display: 'flex', gap: 8}}>
+            <button className="btn sm" onClick={onClose}>Cancel</button>
+            <button className="btn sm primary" disabled={!canSubmit} onClick={submit}>
+              <Icon name="plus" size={11}/>Create project
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+};
+
 // ───────── Terminal launcher dropdown (Open in …) ─────────────────────
 const SUPPORTED_TERMINALS = [
   { id: 'iterm', label: 'iTerm', icon: 'terminal', os: 'macOS', preferred: true },
@@ -1484,6 +1585,23 @@ const SessionDetail = ({ agent, goto, action, gitDiffOpen = false, toggleGitDiff
             Artifacts
             {artifactCountFor(current) > 0 && <span className="mono" style={{marginLeft: 4, opacity: 0.75}}>{artifactCountFor(current)}</span>}
           </button>
+          <div className="seg" title={`Agent permissions (current: ${current.permission_mode || 'default'})`}>
+            {['default', 'auto', 'bypass'].map(m => {
+              const cur = (current.permission_mode || 'default') === m;
+              return (
+                <button
+                  key={m}
+                  className={`seg-btn ${cur ? 'on' : ''}`}
+                  title={cur ? `Permissions: ${m} (current)` : `Switch to ${m} — terminates the running session; reattach to apply`}
+                  onClick={() => {
+                    if (cur) return;
+                    if (!window.confirm(`Switch permissions to ${m}?\n\nThis terminates the running session; reattach to spawn a fresh one with the new mode.`)) return;
+                    action('update-permission-mode', { slug: current.slug, permission_mode: m, provider: current.provider });
+                  }}
+                >{m}</button>
+              );
+            })}
+          </div>
           <button className="btn sm" onClick={() => goto('mc')}><Icon name="arrow-left" size={11}/>Detach</button>
           <button className="btn sm" onClick={restartTerminal} disabled={!canRestartTerminal} title={restartTitle}><Icon name="refresh-cw" size={11}/>Restart</button>
           <TerminalDropdown action={action} agent={current}/>
@@ -2189,12 +2307,7 @@ const TasksList = ({ setFocus, action, goto }) => {
     ...(completed.length ? completed : (DEAD_AGENT ? [DEAD_AGENT] : [])).map(t => ({ ...t, kind: 'task', hasAgent: false, status_outer: 'done' })),
   ];
   const openTask = (t) => {
-    const provider = t.provider || 'claude';
-    if (t.hasAgent && !isCapabilityAvailable('providers', provider)) return;
-    if (t.status_outer === 'backlog' && !anyProviderAvailable()) return;
-    if (t.hasAgent) { action('attach', t); return; }
-    if (t.status_outer === 'backlog') { action('spawn', t); return; }
-    if (t.status_outer === 'done' && goto) { goto(`session/${t.slug}`); }
+    if (goto) goto(`task/${t.slug}`);
   };
   return (
     <div>
@@ -2235,7 +2348,7 @@ const TasksList = ({ setFocus, action, goto }) => {
                   ) : t.status_outer === 'backlog' ? (
                     <button className="btn sm green" disabled={!anyProviderAvailable() || !!blockReason} title={blockReason || (anyProviderAvailable() ? 'Choose Claude or Codex' : 'No supported agent binary found on PATH')} onClick={(e) => { e.stopPropagation(); action('spawn', t); }}><Icon name="play" size={10}/>Spawn</button>
                   ) : (
-                    <button className="btn sm" onClick={(e) => { e.stopPropagation(); goto && goto(`session/${t.slug}`); }}><Icon name="check-circle" size={10}/>Details</button>
+                    <button className="btn sm" onClick={(e) => { e.stopPropagation(); goto && goto(`task/${t.slug}`); }}><Icon name="check-circle" size={10}/>Details</button>
                   )}
                   <button className="btn sm" title="Archive task" onClick={(e) => { e.stopPropagation(); action('delete', t); }}><Icon name="archive" size={10}/>Archive</button>
                 </div>
@@ -2251,7 +2364,13 @@ const TasksList = ({ setFocus, action, goto }) => {
 // ───────── Projects ─────────────────────────────────────────────────────
 const ProjectsList = ({ goto, action }) => (
   <div>
-    <div className="section-head"><h2>Projects</h2><span className="count mono">{PROJECTS_MC.length} active</span></div>
+    <div className="section-head">
+      <h2>Projects</h2>
+      <span className="count mono">{PROJECTS_MC.length} active</span>
+      <button className="btn sm primary" style={{marginLeft: 'auto'}} onClick={() => action('create-project-open', {})}>
+        <Icon name="plus" size={11}/>New project
+      </button>
+    </div>
     <div className="agent-grid" style={{gridTemplateColumns: 'repeat(3, 1fr)'}}>
       {PROJECTS_MC.map(p => {
         const t = p.tasks;
@@ -2937,7 +3056,7 @@ const ProjectDetail = ({ slug, goto, action, onAddTask, refreshKey }) => {
                       <td><PriorityPill priority={t.priority}/></td>
                       <td><DependencyBadges task={t} compact/></td>
                       <td className="mono dim" style={{fontSize: 11}}>{t.waiting_on ? `waiting: ${t.waiting_on}` : (t.temporal_summary || '')}</td>
-                      <td style={{textAlign: 'right'}}><button className="btn sm" onClick={() => goto(`session/${t.slug}`)}>View</button></td>
+                      <td style={{textAlign: 'right'}}><button className="btn sm" onClick={() => goto(`task/${t.slug}`)}>View</button></td>
                     </tr>
                   ))}
                 </tbody>
@@ -2953,6 +3072,184 @@ const ProjectDetail = ({ slug, goto, action, onAddTask, refreshKey }) => {
           files={updates.map(f => ({ ...f, route: 'updates' }))}
           empty="No project updates yet"
           fetchFile={fetchProjectFile}
+          minutesSinceISO={minutesSinceISO}
+        />
+      </div>
+    </div>
+  );
+};
+
+// ───────── Task detail ─────────────────────────────────────────────────
+const TaskDetail = ({ slug, goto, action, refreshKey }) => {
+  const [detail, setDetail] = useState(null);
+  const [brief, setBrief] = useState('');
+  const [loadState, setLoadState] = useState({ loading: true, error: '' });
+
+  useEffect(() => {
+    let active = true;
+    setLoadState({ loading: true, error: '' });
+    Promise.all([
+      fetch(`/api/tasks/${encodeURIComponent(slug)}`).then(r => r.ok ? r.json() : r.text().then(t => Promise.reject(new Error(t || `HTTP ${r.status}`)))),
+      fetch(`/api/tasks/${encodeURIComponent(slug)}/brief`).then(r => r.ok ? r.text() : r.text().then(t => Promise.reject(new Error(t || `HTTP ${r.status}`)))).catch(() => ''),
+    ])
+      .then(([nextDetail, nextBrief]) => {
+        if (!active) return;
+        setDetail(nextDetail);
+        setBrief(nextBrief || '');
+        setLoadState({ loading: false, error: '' });
+      })
+      .catch(err => {
+        if (!active) return;
+        setLoadState({ loading: false, error: err.message || String(err) });
+      });
+    return () => { active = false; };
+  }, [slug, refreshKey]);
+
+  if (loadState.loading && !detail) return <div className="pane" style={{padding: 18}}><SkeletonRows rows={5}/></div>;
+  if (loadState.error && !detail) return <div><BrandEmpty title="Task not found" body={loadState.error || `No task matches ${slug}.`}/><button className="btn sm" style={{marginTop: 12}} onClick={() => goto('tasks')}>Back to tasks</button></div>;
+  if (!detail) return null;
+
+  const minutesSinceISO = (iso) => {
+    if (!iso) return null;
+    const ts = Date.parse(iso);
+    if (!Number.isFinite(ts)) return null;
+    return Math.max(0, (Date.now() - ts) / 60000);
+  };
+  const fetchTaskFile = (file) =>
+    fetch(`/api/tasks/${encodeURIComponent(slug)}/${file.route}/${encodeURIComponent(file.filename)}`)
+      .then(r => r.ok ? r.text() : r.text().then(t => Promise.reject(new Error(t || `HTTP ${r.status}`))));
+
+  const live = !!detail.live;
+  const status = detail.status;
+  const provider = detail.session_provider || 'claude';
+  const workDir = detail.work_dir || '';
+  const updates = detail.updates || [];
+  const aux = detail.aux_files || [];
+  const tags = detail.tags || [];
+  const stale = detail.stale_days && detail.stale_days > 0;
+
+  const openSession = () => goto(`session/${slug}`);
+  const sessionButton = (() => {
+    if (live) {
+      return <button className="btn sm primary" onClick={() => action('attach', { ...detail, slug, hasAgent: true, provider })}><Icon name="external-link" size={11}/>Resume terminal</button>;
+    }
+    if (status === 'backlog') {
+      const blocked = !anyProviderAvailable();
+      return <button className="btn sm green" disabled={blocked} title={blocked ? 'No supported agent binary found on PATH' : 'Spawn a fresh session'} onClick={() => action('spawn', { ...detail, slug, provider })}><Icon name="play" size={11}/>Spawn session</button>;
+    }
+    if (status === 'done') {
+      return <button className="btn sm" onClick={openSession} disabled={!detail.transcript_available} title={detail.transcript_available ? 'Open transcript view' : 'No transcript on disk'}><Icon name="terminal" size={11}/>View transcript</button>;
+    }
+    // in-progress but not currently live — offer to resume the stored session
+    return <button className="btn sm" onClick={openSession}><Icon name="terminal" size={11}/>Open session</button>;
+  })();
+
+  return (
+    <div className="entity-page">
+      <div className="entity-hero">
+        <div className="entity-hero-main">
+          <div className="entity-kicker"><button className="btn sm" onClick={() => goto('tasks')}><Icon name="arrow-left" size={11}/>Back</button>{detail.project_slug && <button className="tag-chip" style={{cursor: 'pointer'}} onClick={() => goto(`project/${detail.project_slug}`)} title="Open project">{detail.project_slug}</button>}</div>
+          <div className="entity-title-row">
+            <h1>{detail.slug}</h1>
+            <StatusPill status={status}/>
+            <PriorityPill priority={detail.priority}/>
+            {live && <span className="tag-chip" title="Live session" style={{background: 'var(--running)', color: 'var(--bg)'}}>live</span>}
+            {stale && <span className="tag-chip" title={`Stale ${detail.stale_days}d`} style={{background: 'var(--idle)'}}>⚠ stale</span>}
+          </div>
+          <p className="entity-subtitle">{detail.name}</p>
+          <div className="entity-meta-row">
+            <span title={workDir}><Icon name="folder" size={13}/>{workDir || 'no workdir'}</span>
+            <span title={`Agent: ${provider}`}><ProviderMark provider={provider} size={13}/>{provider}</span>
+            <span><Icon name="clock" size={13}/>updated {formatAge(minutesSinceISO(detail.updated_at))} ago</span>
+            {detail.assignee && <span><Icon name="user" size={13}/>{detail.assignee}</span>}
+            {detail.due_info && <span title={detail.due_date || ''}><Icon name="calendar" size={13}/>{detail.due_info}</span>}
+            {detail.waiting_on && <span style={{color: 'var(--idle)'}}><Icon name="pause" size={13}/>waiting: {detail.waiting_on}</span>}
+          </div>
+        </div>
+        <div className="entity-hero-actions">
+          {sessionButton}
+          <button className="btn sm" onClick={() => action('delete', { ...detail, kind: 'task' })} title="Archive task"><Icon name="archive" size={11}/>Archive</button>
+        </div>
+      </div>
+      {loadState.error && <div className="pane" style={{padding: 12, marginTop: 12, borderColor: 'var(--dead)'}}><span className="mono" style={{fontSize: 11, color: 'var(--dead)'}}>{loadState.error}</span></div>}
+
+      <div style={{display: 'grid', gridTemplateColumns: '1.4fr 1fr', gap: 16, marginTop: 12}}>
+        <div className="pane" style={{padding: 16}}>
+          <div className="mono" style={{fontSize: 10.5, color: 'var(--text-dim)', textTransform: 'uppercase', letterSpacing: '0.08em', marginBottom: 12}}>State</div>
+          <div style={{display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 12}}>
+            <div><div style={{fontSize: 20, fontWeight: 600, color: 'var(--text)'}}>{detail.days_in_status}d</div><div className="mono dim" style={{fontSize: 10.5}}>in {status}</div></div>
+            <div><div style={{fontSize: 20, fontWeight: 600, color: 'var(--text)'}}>{updates.length}</div><div className="mono dim" style={{fontSize: 10.5}}>updates</div></div>
+            <div><div style={{fontSize: 20, fontWeight: 600, color: 'var(--text)'}}>{aux.length}</div><div className="mono dim" style={{fontSize: 10.5}}>sidecar files</div></div>
+          </div>
+          {tags.length > 0 && (
+            <div style={{marginTop: 14, display: 'flex', flexWrap: 'wrap', gap: 4}}>
+              {tags.map(tg => <span key={tg} className="tag-chip">#{tg}</span>)}
+            </div>
+          )}
+        </div>
+        <div className="pane" style={{padding: 16}}>
+          <div className="mono" style={{fontSize: 10.5, color: 'var(--text-dim)', textTransform: 'uppercase', letterSpacing: '0.08em', marginBottom: 12}}>Details</div>
+          <div style={{display: 'grid', gap: 7}}>
+            <div className="mono" title={workDir} style={{fontSize: 11, color: 'var(--text-mid)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap'}}>work_dir: {workDir || '—'}</div>
+            <div className="mono" title={detail.brief_path} style={{fontSize: 11, color: 'var(--text-faint)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap'}}>brief: {detail.brief_path}</div>
+            <div className="mono" style={{fontSize: 11, color: 'var(--text-faint)', display: 'flex', alignItems: 'center', gap: 6}}>
+              <ProviderMark provider={provider} size={11}/>
+              <span>agent: {provider}</span>
+            </div>
+            <div style={{display: 'flex', alignItems: 'center', gap: 8, marginTop: 2}}>
+              <span className="mono" style={{fontSize: 11, color: 'var(--text-faint)'}}>permissions:</span>
+              <div className="seg" style={{transform: 'scale(0.9)', transformOrigin: 'left center'}}>
+                {['default', 'auto', 'bypass'].map(m => {
+                  const current = (detail.permission_mode || 'default') === m;
+                  return (
+                    <button
+                      key={m}
+                      className={`seg-btn ${current ? 'on' : ''}`}
+                      title={current ? `Current mode (${m})` : `Switch to ${m}` + (live ? ' (restarts running session)' : '')}
+                      onClick={() => {
+                        if (current) return;
+                        const apply = () => {
+                          action('update-permission-mode', { slug, permission_mode: m, _live: live, provider });
+                        };
+                        if (live) {
+                          if (window.confirm(`Switch permissions to ${m}?\n\nThis terminates the running session; reattach to spawn a fresh one with the new mode.`)) apply();
+                        } else {
+                          apply();
+                        }
+                      }}
+                    >{m}</button>
+                  );
+                })}
+              </div>
+            </div>
+            {detail.session_id ? (
+              <div className="mono" title="Click to copy" onClick={() => navigator.clipboard && navigator.clipboard.writeText(detail.session_id)} style={{fontSize: 11, color: 'var(--text-faint)', cursor: 'copy', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap'}}>session: {detail.session_id}</div>
+            ) : (
+              <div className="mono" style={{fontSize: 11, color: 'var(--text-faint)'}}>session: <span style={{color: 'var(--text-faint)', opacity: 0.7}}>none yet</span></div>
+            )}
+            {detail.session_started && <div className="mono" style={{fontSize: 11, color: 'var(--text-faint)'}}>session started: {detail.session_started.slice(0, 16).replace('T', ' ')}</div>}
+            {detail.session_last_resumed && <div className="mono" style={{fontSize: 11, color: 'var(--text-faint)'}}>last resumed: {detail.session_last_resumed.slice(0, 16).replace('T', ' ')}</div>}
+            <div className="mono" style={{fontSize: 11, color: 'var(--text-faint)'}}>created: {detail.created_at?.slice(0, 10)} · updated: {detail.updated_at?.slice(0, 10)}</div>
+            {detail.parent_slug && <div className="mono" style={{fontSize: 11, color: 'var(--text-faint)'}}>parent: <a onClick={() => goto(`task/${detail.parent_slug}`)} style={{cursor: 'pointer', color: 'var(--accent)'}}>{detail.parent_slug}</a></div>}
+            {(detail.children || []).length > 0 && <div className="mono" style={{fontSize: 11, color: 'var(--text-faint)'}}>children: {(detail.children || []).map(c => c.slug).join(', ')}</div>}
+          </div>
+        </div>
+      </div>
+
+      <div className="entity-card" style={{marginTop: 16}}>
+        <div style={{display: 'flex', alignItems: 'center', gap: 8, marginBottom: 12}}>
+          <div className="mono" style={{fontSize: 10.5, color: 'var(--text-dim)', textTransform: 'uppercase', letterSpacing: '0.08em'}}>Brief</div>
+          <span className="mono dim" style={{fontSize: 10.5, marginLeft: 'auto'}}>edit via `flow edit {slug}` for now</span>
+        </div>
+        <MarkdownView source={brief} empty="No brief text found."/>
+      </div>
+
+      <div style={{marginTop: 16}}>
+        <div className="mono" style={{fontSize: 10.5, color: 'var(--text-dim)', textTransform: 'uppercase', letterSpacing: '0.08em', marginBottom: 12}}>Recent updates</div>
+        <ReadableFiles
+          files={updates.map(f => ({ ...f, route: 'updates' }))}
+          empty="No progress notes yet"
+          fetchFile={fetchTaskFile}
           minutesSinceISO={minutesSinceISO}
         />
       </div>
@@ -3518,7 +3815,7 @@ const ShortcutsOverlay = ({ onClose }) => (
 );
 
 window.MC_SCREENS = {
-  MissionControl, SessionsGrid, SessionDetail, CompletedSessionView, TasksList, ProjectsList, ProjectDetail, PlaybooksList, PlaybookDetail,
+  MissionControl, SessionsGrid, SessionDetail, CompletedSessionView, TasksList, TaskDetail, ProjectsList, ProjectDetail, PlaybooksList, PlaybookDetail,
   TrashView, KBView, WorkdirsView,
-  CommandPalette, QRModal, ConfirmModal, ShortcutsOverlay, CreateFlowModal,
+  CommandPalette, QRModal, ConfirmModal, ShortcutsOverlay, CreateFlowModal, CreateProjectModal,
 };

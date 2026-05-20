@@ -1440,7 +1440,7 @@ button.readable-file-head:focus-visible { outline: 1px solid var(--primary); out
 <script type="text/babel">
 const { useState, useEffect, useMemo, useRef, useContext, Fragment } = React;
 const { ClockProvider, ClockCtx, AGENTS, DEAD_AGENT, DONE_AGENTS = [], BACKLOG, DONE_TASKS = [], PROJECTS_MC, PLAYBOOKS_MC, WORKDIRS, KB_FILES, ACTIVITY_HEATMAP, TRASH = { tasks: [], projects: [], playbooks: [], total: 0 }, Icon, Dot, FlowLogo, FlowMark } = window.MC;
-const { MissionControl, SessionsGrid, SessionDetail, CompletedSessionView, TasksList, ProjectsList, ProjectDetail, PlaybooksList, PlaybookDetail, TrashView, KBView, WorkdirsView, CommandPalette, QRModal, ConfirmModal, ShortcutsOverlay, CreateFlowModal } = window.MC_SCREENS;
+const { MissionControl, SessionsGrid, SessionDetail, CompletedSessionView, TasksList, TaskDetail, ProjectsList, ProjectDetail, PlaybooksList, PlaybookDetail, TrashView, KBView, WorkdirsView, CommandPalette, QRModal, ConfirmModal, ShortcutsOverlay, CreateFlowModal, CreateProjectModal } = window.MC_SCREENS;
 
 const NAV = [
   { group: 'core', items: [
@@ -1475,7 +1475,7 @@ const ROUTE_IDS = new Set(NAV.flatMap(group => group.items.map(item => item.id))
 const routeFromLocation = () => {
   const path = window.location.pathname.replace(/^\/+/, '').replace(/\/+$/, '');
   if (!path || path === 'overview') return 'mc';
-  if (path.startsWith('session/') || path.startsWith('playbook/')) return path;
+  if (path.startsWith('session/') || path.startsWith('playbook/') || path.startsWith('project/') || path.startsWith('task/')) return path;
   return ROUTE_IDS.has(path) ? path : 'mc';
 };
 const pathForRoute = (route) => route === 'mc' || route === 'overview' ? '/' : `/${route}`;
@@ -1845,6 +1845,7 @@ const App = () => {
   const [help, setHelp] = useState(false);
 	  const [createOpen, setCreateOpen] = useState(false);
 	  const [createPreselect, setCreatePreselect] = useState(null);
+	  const [createProjectOpen, setCreateProjectOpen] = useState(false);
 	  const [confirm, setConfirm] = useState(null);
 	  const [toast, setToast] = useState(null);
 	  const [sort, setSort] = useState('priority');
@@ -1961,6 +1962,7 @@ const App = () => {
       entity_kind: target.kind,
       provider: target.provider,
       permission_mode: target.permission_mode,
+      mkdir: target.mkdir,
 	      notification_ids: target.notification_ids,
 	      read_only: target.read_only,
 	      rule_update: target.rule_update,
@@ -2146,6 +2148,24 @@ const App = () => {
     }
     if (kind === 'spawn-prompt') { setPalette(false); setCreateOpen(true); return; }
     if (kind === 'create-flow') { openBridge('create-flow', target); return; }
+    if (kind === 'update-permission-mode') {
+      serverAction('update-permission-mode', target)
+        .then(() => refreshUIData())
+        .catch(err => setToast(err.message));
+      return;
+    }
+    if (kind === 'create-project-open') { setCreateProjectOpen(true); return; }
+    if (kind === 'create-project') {
+      setToast(`creating project · ${target.slug}`);
+      serverAction('create-project', target)
+        .then(async (data) => {
+          await refreshUIData();
+          if (data && data.ok && target.slug) goto(`project/${target.slug}`);
+          return data;
+        })
+        .catch(err => setToast(err.message));
+      return;
+    }
     if (kind === 'overview-chat') { openBridge('overview-chat', target); return; }
 	    if (kind === 'monitor-sync' || kind === 'monitor-ignore-event' || kind === 'notification-dismiss' || kind === 'notification-dismiss-all' || kind === 'notification-read' || kind === 'notification-read-all' || kind === 'set-rule-mode') {
 	      serverAction(kind, target).then(refreshUIData).catch(err => setToast(err.message));
@@ -2273,6 +2293,8 @@ const App = () => {
   const playbookSlug = isPlaybook ? route.slice(9) : null;
   const isProject = route.startsWith('project/');
   const projectSlug = isProject ? route.slice(8) : null;
+  const isTask = route.startsWith('task/');
+  const taskSlug = isTask ? route.slice(5) : null;
   const openAddTaskForProject = (slug) => {
     const proj = PROJECTS_MC.find(p => p.slug === slug);
     setCreatePreselect({ project: slug, workDir: proj?.work_dir || '' });
@@ -2410,6 +2432,7 @@ const App = () => {
         {isSession && !sessionAgent && completedAgent && <CompletedSessionView key={`done-${completedAgent.slug}`} agent={completedAgent} goto={goto} action={action} gitDiffOpen={gitDiffOpen} toggleGitDiff={() => setGitDiffOpen(v => !v)} artifactsOpen={artifactsOpen} toggleArtifacts={() => setArtifactsOpen(v => !v)}/>}
         {isSession && !sessionAgent && !completedAgent && <SessionFallback slug={sessionSlug} goto={goto} action={action}/>}
         {route === 'tasks' && <TasksList setFocus={setFocus} action={action} goto={goto}/>}
+        {isTask && <TaskDetail key={`task-${taskSlug}`} slug={taskSlug} goto={goto} action={action} refreshKey={dataTick}/>}
         {route === 'projects' && <ProjectsList goto={goto} action={action}/>}
         {isProject && <ProjectDetail slug={projectSlug} goto={goto} action={action} onAddTask={openAddTaskForProject} refreshKey={dataTick}/>}
         {route === 'playbooks' && <PlaybooksList action={action} goto={goto}/>}
@@ -2424,6 +2447,7 @@ const App = () => {
       {qr && <QRModal onClose={() => setQR(false)}/>}
       {help && <ShortcutsOverlay onClose={() => setHelp(false)}/>}
       {createOpen && <CreateFlowModal onClose={closeCreateModal} projects={PROJECTS_MC.map(p => p.slug)} action={action} preselect={createPreselect}/>}
+      {createProjectOpen && <CreateProjectModal onClose={() => setCreateProjectOpen(false)} action={action}/>}
       {providerPick && <ProviderChoiceModal target={providerPick} providers={capabilityList('providers')} onClose={() => setProviderPick(null)} onPick={(provider, permission_mode) => { const target = providerPick; setProviderPick(null); action('spawn', { ...target, provider, permission_mode, _providerChosen: true }); }}/>}
       {confirm && <ConfirmModal {...confirm} onClose={() => setConfirm(null)}/>}
       {toast && (
