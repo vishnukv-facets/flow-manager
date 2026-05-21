@@ -43,6 +43,13 @@ func TestSlackListener_StopBeforeStart(t *testing.T) {
 }
 
 func TestSlackListener_MockConnectorDispatchesEvents(t *testing.T) {
+	t.Setenv("FLOW_SLACK_APP_TOKEN", "xapp-test")
+	t.Setenv("SLACK_APP_TOKEN", "")
+	t.Setenv("SLACK_BOT_TOKEN", "xoxb-test")
+	t.Setenv("FLOW_SLACK_TOKEN", "")
+	t.Setenv("SLACK_USER_TOKEN", "")
+	t.Setenv("SLACK_TOKEN", "")
+	t.Setenv("FLOW_SLACK_SOCKET_MODE", "1")
 	t.Setenv("FLOW_SLACK_SELF_USER_IDS", "U_me")
 	t.Setenv("FLOW_SLACK_TRIGGER_EMOJI", "claude")
 	t.Setenv("FLOW_SLACK_AUTOOPEN", "0")
