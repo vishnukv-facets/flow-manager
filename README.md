@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="assets/flow-logo.svg" alt="flow" width="480">
+  <img src="assets/flow-logo-v2.svg" alt="flow" width="480">
 </p>
 
 <p align="center">
