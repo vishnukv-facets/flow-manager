@@ -1354,6 +1354,13 @@ func TestStaticActionPayloadForwardsProvider(t *testing.T) {
 	if !strings.Contains(string(screens), "stripTerminalGeneratedInput(data)") {
 		t.Fatal("browser terminal must filter generated capability replies before sending input to the PTY")
 	}
+	if !strings.Contains(string(screens), "return mouseMode !== 'none';") ||
+		strings.Contains(string(screens), "term.buffer?.active?.type === 'alternate' && mouseMode !== 'none'") {
+		t.Fatal("browser terminal must let tmux own wheel events whenever mouse tracking is enabled, even when alt-screen controls are stripped")
+	}
+	if !strings.Contains(string(screens), "const TERMINAL_SCROLLBACK_LINES = 4294967295;") {
+		t.Fatal("browser terminal scrollback should use xterm's maximum accepted line cap")
+	}
 	if !strings.Contains(string(screens), "/attachments") ||
 		!strings.Contains(string(screens), "terminalClipboardFiles(event.clipboardData)") ||
 		!strings.Contains(string(screens), "host.addEventListener('drop', dropHandler)") {

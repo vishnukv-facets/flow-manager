@@ -121,13 +121,14 @@ func newUICaches() *uiCaches {
 		// fork per window.
 		live: newLiveSnapshotCache(1500 * time.Millisecond),
 		// Branches and diffs change on user action (switch-branch,
-		// commits, edits) but rarely within one UI refresh. 5s TTL means
-		// a freshly-switched branch shows within the next two SSE ticks
-		// without exception; explicit invalidate on switch-branch makes
-		// it instant.
-		gitBranch:   newTTLCache[string, string](5 * time.Second),
-		gitBranches: newTTLCache[string, []string](5 * time.Second),
-		gitDiff:     newTTLCache[string, gitDiffSnapshot](5 * time.Second),
+		// commits, edits) but rarely within one UI refresh. The 30s TTL
+		// is a safety net — explicit invalidate on switch-branch makes
+		// updates instant; the TTL just bounds staleness if an action
+		// path forgets to invalidate. Kept generous to minimize git
+		// fork()/wait4() pressure on the SSE refresh loop.
+		gitBranch:   newTTLCache[string, string](30 * time.Second),
+		gitBranches: newTTLCache[string, []string](30 * time.Second),
+		gitDiff:     newTTLCache[string, gitDiffSnapshot](30 * time.Second),
 	}
 }
 

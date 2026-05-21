@@ -1944,7 +1944,7 @@ const ContextSummary = ({ agent }) => (
   </div>
 );
 
-const TERMINAL_SCROLLBACK_LINES = 200000;
+const TERMINAL_SCROLLBACK_LINES = 4294967295;
 const TERMINAL_FIT_DELAYS_MS = [0, 40, 160, 420, 900];
 const TERMINAL_GENERATED_INPUT_RE = /\x1b\[(?:\?[0-9;]*|>[0-9;]*)c/g;
 
@@ -2068,7 +2068,7 @@ const TaskTerminal = ({ agent, onStatus }) => {
     let wheelRemainder = 0;
     const terminalAppOwnsMouseWheel = () => {
       const mouseMode = term.modes?.mouseTrackingMode || 'none';
-      return term.buffer?.active?.type === 'alternate' && mouseMode !== 'none';
+      return mouseMode !== 'none';
     };
     const wheelLineHeight = () => {
       const cell = term._core?._renderService?.dimensions?.css?.cell;

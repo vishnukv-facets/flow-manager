@@ -22,6 +22,7 @@ type Server struct {
 	transcripts   *transcriptCache
 	caches        *uiCaches
 	slackListener *monitor.SlackListener
+	dbWatcher     *dbWatcher
 }
 
 type HealthView struct {

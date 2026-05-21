@@ -187,6 +187,26 @@ func (s *Server) publishHookEvent(resp agentHookIngestResponse, _ map[string]any
 }
 
 
+// publishUIChange signals subscribers (notably the /api/events SSE
+// loop) that server-side state visible in the UI has changed. Callers
+// don't need to describe what changed — the SSE handler responds by
+// rebuilding its snapshot and emitting if the fingerprint differs. Use
+// this from any mutation that the UI should react to within a tick.
+func (s *Server) publishUIChange(kind string) {
+	if s.events == nil {
+		return
+	}
+	s.events.publish(eventEnvelope{
+		Type: "ui_change",
+		Data: json.RawMessage(`{"kind":` + jsonQuote(kind) + `}`),
+	})
+}
+
+func jsonQuote(s string) string {
+	b, _ := json.Marshal(s)
+	return string(b)
+}
+
 // publishLiveness fans out a liveness reconciler observation. Slug is
 // empty when no task is bound to the session.
 func (s *Server) publishLiveness(provider, sessionID, slug, status, reason string) {

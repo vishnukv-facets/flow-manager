@@ -73,20 +73,64 @@ func (s *Server) handleUIEvents(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	ticker := time.NewTicker(2 * time.Second)
-	defer ticker.Stop()
-	heartbeat := time.NewTicker(20 * time.Second)
-	defer heartbeat.Stop()
+	// Event-driven loop: instead of rebuilding the snapshot on a fixed
+	// ticker (which burns CPU even when nothing changed), subscribe to
+	// the in-process hub and rebuild only when something actually fires.
+	// A short debounce coalesces bursts (e.g. PreToolUse / PostToolUse
+	// pairs) into one rebuild; a long safety heartbeat catches anything
+	// that mutated state without publishing.
+	var sub *eventSubscriber
+	if s.events != nil {
+		sub = s.events.subscribe(eventFilter{})
+		defer s.events.unsubscribe(sub)
+	}
+	var subCh <-chan eventEnvelope
+	if sub != nil {
+		subCh = sub.send
+	}
 
+	// Fast tick + dirty flag is a select-friendly debounce: events set
+	// dirty=true, the tick checks and clears it. The tick fires often
+	// but does nothing unless dirty, so idle cost is just a select
+	// wakeup. 250ms balances UI snappiness against burst coalescing.
+	debounce := time.NewTicker(250 * time.Millisecond)
+	defer debounce.Stop()
+	// Safety heartbeat: force a rebuild even with no events. CLI
+	// mutations are caught by dbWatcher (PRAGMA data_version polling)
+	// and UI mutations publish via handleAction, so this exists only as
+	// a backstop for filesystem-side changes (brief/KB markdown edits)
+	// and anything we forgot to wire. Keep generous so idle CPU stays
+	// near zero.
+	safety := time.NewTicker(30 * time.Second)
+	defer safety.Stop()
+	keepAlive := time.NewTicker(20 * time.Second)
+	defer keepAlive.Stop()
+
+	dirty := false
 	for {
 		select {
 		case <-r.Context().Done():
 			return
-		case <-ticker.C:
+		case _, ok := <-subCh:
+			if !ok {
+				// Hub closed our subscriber; fall back to safety + keepalive.
+				subCh = nil
+				continue
+			}
+			dirty = true
+		case <-debounce.C:
+			if dirty {
+				dirty = false
+				if !sendSnapshot(false) {
+					return
+				}
+			}
+		case <-safety.C:
+			dirty = false
 			if !sendSnapshot(false) {
 				return
 			}
-		case <-heartbeat.C:
+		case <-keepAlive.C:
 			if _, err := w.Write([]byte(": keep-alive\n\n")); err != nil {
 				return
 			}

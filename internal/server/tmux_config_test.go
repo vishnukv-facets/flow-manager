@@ -1,6 +1,7 @@
 package server
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -35,7 +36,7 @@ func TestEnsureTmuxConfigWritesFileWhenAbsent(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, want := range []string{"set -g mouse on", "set -g history-limit 100000", "~/.tmux.conf"} {
+	for _, want := range []string{"set -g mouse on", "set -g history-limit 2147483647", "~/.tmux.conf"} {
 		if !strings.Contains(string(contents), want) {
 			t.Errorf("tmux.conf missing %q; contents=%s", want, contents)
 		}
@@ -97,4 +98,138 @@ func TestEnsureTmuxConfigRejectsEmptyFlowRoot(t *testing.T) {
 	if err == nil {
 		t.Errorf("expected error for empty flow root, got nil")
 	}
+}
+
+func TestEnsureSharedTerminalScrollOptionsAppliesPerSession(t *testing.T) {
+	oldSharedCommand := sharedTerminalCommand
+	defer func() { sharedTerminalCommand = oldSharedCommand }()
+
+	var commands [][]string
+	sharedTerminalCommand = func(args ...string) ([]byte, error) {
+		commands = append(commands, append([]string(nil), args...))
+		return nil, nil
+	}
+
+	if err := ensureSharedTerminalScrollOptions("flow-build-ui"); err != nil {
+		t.Fatalf("ensureSharedTerminalScrollOptions: %v", err)
+	}
+
+	got := strings.TrimSpace(commandLog(commands))
+	for _, want := range []string{
+		"set-option -t flow-build-ui mouse on",
+		"set-window-option -t flow-build-ui: history-limit 2147483647",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("missing tmux command %q in:\n%s", want, got)
+		}
+	}
+}
+
+func TestEnsureSharedTerminalDefaultScrollOptionsAppliesBeforeNewWindows(t *testing.T) {
+	oldSharedCommand := sharedTerminalCommand
+	defer func() { sharedTerminalCommand = oldSharedCommand }()
+
+	var commands [][]string
+	sharedTerminalCommand = func(args ...string) ([]byte, error) {
+		commands = append(commands, append([]string(nil), args...))
+		return nil, nil
+	}
+
+	if err := ensureSharedTerminalDefaultScrollOptions(); err != nil {
+		t.Fatalf("ensureSharedTerminalDefaultScrollOptions: %v", err)
+	}
+
+	got := strings.TrimSpace(commandLog(commands))
+	for _, want := range []string{
+		"set-option -g mouse on",
+		"set-window-option -g history-limit 2147483647",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("missing tmux command %q in:\n%s", want, got)
+		}
+	}
+}
+
+func TestEnsureSharedTerminalSessionSetsMaxHistoryBeforeNewWindow(t *testing.T) {
+	oldSharedLookPath := sharedTerminalLookPath
+	oldSharedCommand := sharedTerminalCommand
+	sharedTerminalLookPath = func(name string) (string, error) {
+		if name == "tmux" {
+			return "/usr/bin/tmux", nil
+		}
+		return "", fmt.Errorf("not found")
+	}
+	resetSharedTerminalAvailable()
+	defer func() {
+		sharedTerminalLookPath = oldSharedLookPath
+		sharedTerminalCommand = oldSharedCommand
+		resetSharedTerminalAvailable()
+	}()
+
+	var commands [][]string
+	sessionExists := false
+	sharedTerminalCommand = func(args ...string) ([]byte, error) {
+		commands = append(commands, append([]string(nil), args...))
+		if len(args) > 0 && args[0] == "has-session" {
+			if sessionExists {
+				return nil, nil
+			}
+			return nil, fmt.Errorf("missing session")
+		}
+		if containsString(args, "new-session") {
+			sessionExists = true
+		}
+		return nil, nil
+	}
+
+	srv := &Server{cfg: Config{FlowRoot: t.TempDir()}}
+	if _, created, err := srv.ensureSharedTerminalSession(terminalLaunch{
+		Slug:     "build-ui",
+		Provider: "claude",
+		WorkDir:  t.TempDir(),
+		Args:     []string{"--resume", "session-id"},
+	}, 120, 32); err != nil {
+		t.Fatalf("ensureSharedTerminalSession: %v", err)
+	} else if !created {
+		t.Fatal("expected a new tmux session")
+	}
+
+	got := strings.TrimSpace(commandLog(commands))
+	want := "set-option -g mouse on ; set-window-option -g history-limit 2147483647 ; new-session"
+	if !strings.Contains(got, want) {
+		t.Fatalf("tmux creation command must set max history before new-session; missing %q in:\n%s", want, got)
+	}
+}
+
+func TestSharedTerminalCaptureHistoryUsesTmuxHistoryOnlyRange(t *testing.T) {
+	oldSharedCommand := sharedTerminalCommand
+	defer func() { sharedTerminalCommand = oldSharedCommand }()
+
+	var commands [][]string
+	sharedTerminalCommand = func(args ...string) ([]byte, error) {
+		commands = append(commands, append([]string(nil), args...))
+		return []byte("older line\nnewer line\n"), nil
+	}
+
+	got, err := sharedTerminalCaptureHistory("flow-build-ui")
+	if err != nil {
+		t.Fatalf("sharedTerminalCaptureHistory: %v", err)
+	}
+	if string(got) != "older line\r\nnewer line\r\n" {
+		t.Fatalf("captured history = %q", string(got))
+	}
+
+	want := "capture-pane -p -e -S - -E -1 -t flow-build-ui"
+	if log := commandLog(commands); !strings.Contains(log, want) {
+		t.Fatalf("capture must read tmux history before the visible pane; missing %q in:\n%s", want, log)
+	}
+}
+
+func commandLog(commands [][]string) string {
+	var b strings.Builder
+	for _, cmd := range commands {
+		b.WriteString(strings.Join(cmd, " "))
+		b.WriteByte('\n')
+	}
+	return b.String()
 }

@@ -258,12 +258,21 @@ func (h *terminalHub) startSessionLocked(launch terminalLaunch, cols, rows int) 
 	}
 	var cmd *exec.Cmd
 	sharedName := ""
+	initialScrollback := []byte(nil)
 	if sharedTerminalAvailable() {
-		name, _, err := h.server.ensureSharedTerminalSession(launch, cols, rows)
+		name, created, err := h.server.ensureSharedTerminalSession(launch, cols, rows)
 		if err != nil {
 			return nil, err
 		}
 		sharedName = name
+		if !created {
+			history, historyErr := sharedTerminalCaptureHistory(name)
+			if historyErr != nil {
+				fmt.Fprintf(os.Stderr, "warning: capture shared terminal history: %v\n", historyErr)
+			} else {
+				initialScrollback = history
+			}
+		}
 		// `-f` is server-startup only — only the first tmux invocation
 		// that actually starts the tmux server reads the config; later
 		// invocations against the same server ignore it. Passing it on
@@ -304,6 +313,7 @@ func (h *terminalHub) startSessionLocked(launch terminalLaunch, cols, rows int) 
 		tty:        f,
 		done:       make(chan struct{}),
 		clients:    map[*terminalClient]struct{}{},
+		scrollback: initialScrollback,
 	}
 	go sess.readPTY()
 	go sess.wait()
@@ -483,6 +493,30 @@ func sharedTerminalHasSession(name string) bool {
 	return err == nil
 }
 
+func sharedTerminalCaptureHistory(name string) ([]byte, error) {
+	name = strings.TrimSpace(name)
+	if name == "" {
+		return nil, fmt.Errorf("tmux session name not set")
+	}
+	out, err := sharedTerminalCommand("capture-pane", "-p", "-e", "-S", "-", "-E", "-1", "-t", name)
+	if err != nil {
+		return nil, fmt.Errorf("capture tmux history for %s: %w: %s", name, err, strings.TrimSpace(string(out)))
+	}
+	return normalizeCapturedPaneForTerminal(out), nil
+}
+
+func normalizeCapturedPaneForTerminal(data []byte) []byte {
+	if len(data) == 0 {
+		return nil
+	}
+	data = bytes.ReplaceAll(data, []byte("\r\n"), []byte("\n"))
+	data = bytes.ReplaceAll(data, []byte("\n"), []byte("\r\n"))
+	if !bytes.HasSuffix(data, []byte("\r\n")) {
+		data = append(data, '\r', '\n')
+	}
+	return data
+}
+
 func sharedTerminalKillSession(name string) error {
 	if strings.TrimSpace(name) == "" || !sharedTerminalAvailable() {
 		return nil
@@ -497,6 +531,9 @@ func (s *Server) ensureSharedTerminalSession(launch terminalLaunch, cols, rows i
 	}
 	name := sharedTerminalSessionName(launch.Slug)
 	if sharedTerminalHasSession(name) {
+		if err := ensureSharedTerminalScrollOptions(name); err != nil {
+			return "", false, err
+		}
 		return name, false, nil
 	}
 	if cols <= 0 {
@@ -528,6 +565,16 @@ func (s *Server) ensureSharedTerminalSession(launch terminalLaunch, cols, rows i
 		args = append(args, "-f", cfgPath)
 	}
 	args = append(args,
+		"set-option",
+		"-g",
+		"mouse",
+		"on",
+		";",
+		"set-window-option",
+		"-g",
+		"history-limit",
+		sharedTerminalHistoryLimit,
+		";",
 		"new-session",
 		"-d",
 		"-s", name,
@@ -539,9 +586,16 @@ func (s *Server) ensureSharedTerminalSession(launch terminalLaunch, cols, rows i
 	out, err := sharedTerminalCommand(args...)
 	if err != nil {
 		if sharedTerminalHasSession(name) {
+			if optErr := ensureSharedTerminalScrollOptions(name); optErr != nil {
+				return "", false, optErr
+			}
 			return name, false, nil
 		}
 		return "", false, fmt.Errorf("start shared terminal session %s: %w: %s", name, err, strings.TrimSpace(string(out)))
+	}
+	if err := ensureSharedTerminalScrollOptions(name); err != nil {
+		_ = sharedTerminalKillSession(name)
+		return "", false, err
 	}
 	return name, true, nil
 }

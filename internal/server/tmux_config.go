@@ -4,8 +4,11 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 )
+
+const sharedTerminalHistoryLimit = "2147483647"
 
 // tmuxConfigBody is the tiny tmux config flow ships so that browser /
 // shared-terminal sessions have sensible defaults — most importantly
@@ -35,10 +38,11 @@ const tmuxConfigBody = `# flow tmux defaults (auto-managed; safe to delete — f
 # default tmux.
 set -g mouse on
 
-# History buffer per pane. Default 2000 fills up in seconds with
-# verbose tools (claude transcripts, kubectl logs, git log). 100k is
-# cheap memory-wise (~few MB) and you'll rarely hit it.
-set -g history-limit 100000
+# History buffer per pane. tmux does not expose a true "unlimited"
+# history switch; this uses the largest value accepted by tmux so
+# flow-spawned terminals can scroll back to the beginning of practical
+# interactive sessions.
+set -g history-limit ` + sharedTerminalHistoryLimit + `
 
 # Source the user's personal config last so their settings win on
 # conflicts. -q makes this a no-op if the file doesn't exist.
@@ -86,4 +90,28 @@ func ensureTmuxConfig(flowRoot string) (string, error) {
 	}
 	tmuxConfigWritten = true
 	return path, nil
+}
+
+func ensureSharedTerminalScrollOptions(name string) error {
+	name = strings.TrimSpace(name)
+	if name == "" {
+		return fmt.Errorf("tmux session name not set")
+	}
+	if out, err := sharedTerminalCommand("set-option", "-t", name, "mouse", "on"); err != nil {
+		return fmt.Errorf("enable tmux mouse for %s: %w: %s", name, err, strings.TrimSpace(string(out)))
+	}
+	if out, err := sharedTerminalCommand("set-window-option", "-t", name+":", "history-limit", sharedTerminalHistoryLimit); err != nil {
+		return fmt.Errorf("set tmux history limit for %s: %w: %s", name, err, strings.TrimSpace(string(out)))
+	}
+	return nil
+}
+
+func ensureSharedTerminalDefaultScrollOptions() error {
+	if out, err := sharedTerminalCommand("set-option", "-g", "mouse", "on"); err != nil {
+		return fmt.Errorf("enable tmux mouse globally: %w: %s", err, strings.TrimSpace(string(out)))
+	}
+	if out, err := sharedTerminalCommand("set-window-option", "-g", "history-limit", sharedTerminalHistoryLimit); err != nil {
+		return fmt.Errorf("set tmux global history limit: %w: %s", err, strings.TrimSpace(string(out)))
+	}
+	return nil
 }

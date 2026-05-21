@@ -78,6 +78,9 @@ func (s *Server) handleAction(w http.ResponseWriter, r *http.Request) {
 	}
 	resp, status := s.runAction(req)
 	writeJSONStatus(w, resp, status)
+	if status < 400 && resp.OK {
+		s.publishUIChange(req.Kind)
+	}
 }
 
 func (s *Server) runAction(req actionRequest) (actionResponse, int) {

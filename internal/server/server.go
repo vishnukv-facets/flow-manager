@@ -28,6 +28,7 @@ func New(cfg Config) *Server {
 	s.reconcile = newLivenessReconciler(s)
 	s.transcripts = newTranscriptCache()
 	s.caches = newUICaches()
+	s.dbWatcher = newDBWatcher(s)
 	// Slack Socket Mode listener: only constructed when a DB is available
 	// (the dispatcher needs one). Start()/Stop() are no-ops when the env
 	// isn't configured for Socket Mode, so wiring is safe to leave in
@@ -82,6 +83,13 @@ func (s *Server) ListenAndServe(addr string) int {
 	if s.reconcile != nil {
 		s.reconcile.start()
 		defer s.reconcile.stop()
+	}
+	// Watch SQLite data_version so writes from external processes
+	// (notably the flow CLI) trigger an SSE refresh within ~1s without
+	// each CLI command needing to notify us out-of-band.
+	if s.dbWatcher != nil {
+		s.dbWatcher.start()
+		defer s.dbWatcher.stopWatching()
 	}
 	// Start the Slack Socket Mode listener when configured. The listener
 	// is responsible for receiving reaction_added + message events and
