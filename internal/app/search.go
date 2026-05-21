@@ -11,12 +11,12 @@ import (
 
 func cmdSearch(args []string) int {
 	fs := flagSet("search")
-	scopeRaw := fs.String("in", "briefs,updates", "comma-separated scopes: briefs,updates,transcripts,all")
+	scopeRaw := fs.String("in", "briefs,updates,memories", "comma-separated scopes: briefs,updates,memories,transcripts,all")
 	limit := fs.Int("limit", 20, "maximum number of results")
 	format := fs.String("format", "table", "output format: table|json|tsv")
 	noColor := fs.Bool("no-color", false, "disable ANSI color even when stdout is a TTY")
 	fs.Usage = func() {
-		fmt.Fprintln(os.Stderr, `usage: flow search "<query>" [--in briefs,updates,transcripts] [--limit N] [--format table|json|tsv]`)
+		fmt.Fprintln(os.Stderr, `usage: flow search "<query>" [--in briefs,updates,memories,transcripts] [--limit N] [--format table|json|tsv]`)
 		fs.PrintDefaults()
 	}
 	if err := fs.Parse(normalizeSearchArgs(args)); err != nil {
@@ -58,8 +58,7 @@ func cmdSearch(args []string) int {
 	}
 	defer db.Close()
 
-	includeTranscripts := flowdb.SearchScopesInclude(scopes, flowdb.SearchScopeTranscript)
-	if err := flowdb.SyncSearchDocs(db, root, includeTranscripts); err != nil {
+	if err := flowdb.SyncSearchDocsForScopes(db, root, scopes); err != nil {
 		fmt.Fprintf(os.Stderr, "error: index search docs: %v\n", err)
 		return 1
 	}

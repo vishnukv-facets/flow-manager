@@ -3,10 +3,12 @@ package flowdb
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
 func TestSearchDocsIndexesBriefsUpdatesAndOptInTranscripts(t *testing.T) {
+	isolateMemoryEnv(t)
 	db := openTempDB(t)
 	root := t.TempDir()
 	if err := os.MkdirAll(filepath.Join(root, "tasks", "build-ui", "updates"), 0o755); err != nil {
@@ -64,7 +66,69 @@ func TestSearchDocsIndexesBriefsUpdatesAndOptInTranscripts(t *testing.T) {
 	}
 }
 
+func TestSearchDocsIndexesMemoriesByDefault(t *testing.T) {
+	db := openTempDB(t)
+	root := t.TempDir()
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("CODEX_HOME", filepath.Join(home, ".codex"))
+	t.Setenv("CLAUDE_CONFIG_DIR", filepath.Join(home, ".claude"))
+
+	insertProject(t, db, "flow", "Flow", root, "medium")
+	insertTask(t, db, "build-ui", "Build UI", "backlog", "high", root, "flow")
+	if err := os.MkdirAll(filepath.Join(root, "kb"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "kb", "user.md"), []byte("flow-kb-memory-marker\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(home, ".codex", "memories"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(home, ".codex", "memories", "raw_memories.md"), []byte("codex-memory-marker\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Dir(claudeTestMemoryPath(home, root)), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(claudeTestMemoryPath(home, root), []byte("claude-memory-marker\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := SyncSearchDocs(db, root, false); err != nil {
+		t.Fatalf("SyncSearchDocs: %v", err)
+	}
+	for _, marker := range []string{"flow-kb-memory-marker", "codex-memory-marker", "claude-memory-marker"} {
+		got, err := SearchDocs(db, marker, DefaultSearchScopes(), 10)
+		if err != nil {
+			t.Fatalf("SearchDocs %s: %v", marker, err)
+		}
+		if len(got) != 1 || got[0].Scope != "memory" || got[0].Type != "memory" {
+			t.Fatalf("memory results for %s = %+v", marker, got)
+		}
+	}
+}
+
+func TestParseSearchScopesAcceptsMemories(t *testing.T) {
+	scopes, err := ParseSearchScopes("briefs,memories")
+	if err != nil {
+		t.Fatalf("ParseSearchScopes: %v", err)
+	}
+	if !SearchScopesInclude(scopes, SearchScope("memory")) {
+		t.Fatalf("scopes = %+v, want memory", scopes)
+	}
+
+	scopes, err = ParseSearchScopes("all")
+	if err != nil {
+		t.Fatalf("ParseSearchScopes all: %v", err)
+	}
+	if !SearchScopesInclude(scopes, SearchScope("memory")) || !SearchScopesInclude(scopes, SearchScopeTranscript) {
+		t.Fatalf("all scopes = %+v, want memory and transcript", scopes)
+	}
+}
+
 func TestSearchDocsRefreshesChangedMarkdown(t *testing.T) {
+	isolateMemoryEnv(t)
 	db := openTempDB(t)
 	root := t.TempDir()
 	taskDir := filepath.Join(root, "tasks", "refresh", "updates")
@@ -95,4 +159,20 @@ func TestSearchDocsRefreshesChangedMarkdown(t *testing.T) {
 	if got, err := SearchDocs(db, "new-brief-marker", DefaultSearchScopes(), 10); err != nil || len(got) != 1 {
 		t.Fatalf("new marker got=%+v err=%v", got, err)
 	}
+}
+
+func isolateMemoryEnv(t *testing.T) {
+	t.Helper()
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("CODEX_HOME", filepath.Join(home, ".codex"))
+	t.Setenv("CLAUDE_CONFIG_DIR", filepath.Join(home, ".claude"))
+}
+
+func claudeTestMemoryPath(home, workdir string) string {
+	if abs, err := filepath.Abs(workdir); err == nil {
+		workdir = abs
+	}
+	key := strings.ReplaceAll(filepath.ToSlash(filepath.Clean(workdir)), "/", "-")
+	return filepath.Join(home, ".claude", "projects", key, "memory", "MEMORY.md")
 }

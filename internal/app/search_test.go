@@ -71,3 +71,38 @@ func TestCmdSearchTranscriptsAreOptIn(t *testing.T) {
 		t.Fatalf("transcript output = %s", out)
 	}
 }
+
+func TestCmdSearchFindsMemoriesByDefault(t *testing.T) {
+	root := setupFlowRoot(t)
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("CODEX_HOME", filepath.Join(home, ".codex"))
+	t.Setenv("CLAUDE_CONFIG_DIR", filepath.Join(home, ".claude"))
+	if err := os.WriteFile(filepath.Join(root, "kb", "user.md"), []byte("cli-flow-memory-marker\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(home, ".codex", "memories"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(home, ".codex", "memories", "raw_memories.md"), []byte("cli-codex-memory-marker\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	out := captureStdout(t, func() {
+		if rc := cmdSearch([]string{"cli-flow-memory-marker"}); rc != 0 {
+			t.Fatalf("cmdSearch flow memory rc=%d", rc)
+		}
+	})
+	if !strings.Contains(out, "memory") || !strings.Contains(out, "flow-kb-user") {
+		t.Fatalf("flow memory output = %s", out)
+	}
+
+	out = captureStdout(t, func() {
+		if rc := cmdSearch([]string{"cli-codex-memory-marker", "--in", "memories"}); rc != 0 {
+			t.Fatalf("cmdSearch codex memory rc=%d", rc)
+		}
+	})
+	if !strings.Contains(out, "memory") || !strings.Contains(out, "codex-memory-raw-memories") {
+		t.Fatalf("codex memory output = %s", out)
+	}
+}

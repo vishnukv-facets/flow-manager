@@ -870,8 +870,7 @@ func (s *Server) handleSearch(w http.ResponseWriter, r *http.Request) {
 		}
 		limit = n
 	}
-	includeTranscripts := flowdb.SearchScopesInclude(scopes, flowdb.SearchScopeTranscript)
-	if err := flowdb.SyncSearchDocs(s.cfg.DB, s.cfg.FlowRoot, includeTranscripts); err != nil {
+	if err := flowdb.SyncSearchDocsForScopes(s.cfg.DB, s.cfg.FlowRoot, scopes); err != nil {
 		writeError(w, fmt.Errorf("index search docs: %w", err), http.StatusInternalServerError)
 		return
 	}
@@ -887,6 +886,8 @@ func (s *Server) handleSearch(w http.ResponseWriter, r *http.Request) {
 			resp.Updates = append(resp.Updates, mapped)
 		case string(flowdb.SearchScopeTranscript):
 			resp.Transcripts = append(resp.Transcripts, mapped)
+		case string(flowdb.SearchScopeMemory):
+			resp.Memories = append(resp.Memories, mapped)
 		default:
 			switch result.EntityType {
 			case "task":
@@ -921,6 +922,8 @@ func searchResultURL(entityType, slug string) string {
 		return "/project/" + url.PathEscape(slug)
 	case "playbook":
 		return "/playbook/" + url.PathEscape(slug)
+	case "memory":
+		return "/memories"
 	default:
 		return "/"
 	}

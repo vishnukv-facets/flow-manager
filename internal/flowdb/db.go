@@ -117,8 +117,8 @@ CREATE TABLE IF NOT EXISTS task_dependencies (
 CREATE TABLE IF NOT EXISTS search_docs (
     id            INTEGER PRIMARY KEY,
     doc_key       TEXT NOT NULL UNIQUE,
-    scope         TEXT NOT NULL CHECK (scope IN ('brief','update','transcript')),
-    entity_type   TEXT NOT NULL CHECK (entity_type IN ('task','project','playbook')),
+    scope         TEXT NOT NULL CHECK (scope IN ('brief','update','transcript','memory')),
+    entity_type   TEXT NOT NULL CHECK (entity_type IN ('task','project','playbook','memory')),
     entity_slug   TEXT NOT NULL,
     title         TEXT NOT NULL,
     source_path   TEXT NOT NULL,
@@ -902,7 +902,77 @@ func runMigrations(db *sql.DB) error {
 	if err := migrateTaskDependencies(db); err != nil {
 		return fmt.Errorf("migrate task_dependencies: %w", err)
 	}
+	if err := migrateSearchDocsMemoryScope(db); err != nil {
+		return fmt.Errorf("migrate search docs memory scope: %w", err)
+	}
 	return nil
+}
+
+// migrateSearchDocsMemoryScope widens the rebuildable FTS cache to include
+// memory docs. Because search_docs is derived from markdown/transcript files,
+// dropping and recreating the cache is safer than a SQLite table rebuild that
+// preserves stale index rows.
+func migrateSearchDocsMemoryScope(db *sql.DB) error {
+	var ddl string
+	err := db.QueryRow(`SELECT sql FROM sqlite_master WHERE type='table' AND name='search_docs'`).Scan(&ddl)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	if strings.Contains(ddl, "'memory'") {
+		return nil
+	}
+	_, err = db.Exec(`
+DROP TRIGGER IF EXISTS search_docs_ai;
+DROP TRIGGER IF EXISTS search_docs_ad;
+DROP TRIGGER IF EXISTS search_docs_au;
+DROP TABLE IF EXISTS search_docs_fts;
+DROP TABLE IF EXISTS search_docs;
+
+CREATE TABLE search_docs (
+    id            INTEGER PRIMARY KEY,
+    doc_key       TEXT NOT NULL UNIQUE,
+    scope         TEXT NOT NULL CHECK (scope IN ('brief','update','transcript','memory')),
+    entity_type   TEXT NOT NULL CHECK (entity_type IN ('task','project','playbook','memory')),
+    entity_slug   TEXT NOT NULL,
+    title         TEXT NOT NULL,
+    source_path   TEXT NOT NULL,
+    source_mtime  TEXT NOT NULL,
+    content       TEXT NOT NULL,
+    updated_at    TEXT NOT NULL
+);
+
+CREATE VIRTUAL TABLE search_docs_fts USING fts5(
+    title,
+    content,
+    content='search_docs',
+    content_rowid='id',
+    tokenize='unicode61'
+);
+
+CREATE TRIGGER search_docs_ai AFTER INSERT ON search_docs BEGIN
+    INSERT INTO search_docs_fts(rowid, title, content)
+    VALUES (new.id, new.title, new.content);
+END;
+
+CREATE TRIGGER search_docs_ad AFTER DELETE ON search_docs BEGIN
+    INSERT INTO search_docs_fts(search_docs_fts, rowid, title, content)
+    VALUES ('delete', old.id, old.title, old.content);
+END;
+
+CREATE TRIGGER search_docs_au AFTER UPDATE ON search_docs BEGIN
+    INSERT INTO search_docs_fts(search_docs_fts, rowid, title, content)
+    VALUES ('delete', old.id, old.title, old.content);
+    INSERT INTO search_docs_fts(rowid, title, content)
+    VALUES (new.id, new.title, new.content);
+END;
+
+CREATE INDEX IF NOT EXISTS idx_search_docs_scope ON search_docs(scope);
+CREATE INDEX IF NOT EXISTS idx_search_docs_entity ON search_docs(entity_type, entity_slug);
+`)
+	return err
 }
 
 // migrateTaskDependencies ensures the task_dependencies table exists and

@@ -224,10 +224,11 @@ handles the rest.
   session from the browser; and offers a Cmd+K switcher. No
   cloud, no auth — bound to loopback by default.
 - **Full-text search over flow memory.** `flow search "<query>"`
-  searches brief and update markdown through SQLite FTS5. Add
-  `--in transcripts` when you explicitly want session transcript
-  search; transcripts stay out of the default scope because they
-  are much larger.
+  searches brief, update, Flow KB, Codex memory, and Claude memory
+  markdown through SQLite FTS5. Add `--in transcripts` when you
+  explicitly want session transcript search; transcripts stay out of
+  the default scope because they are much larger. Use `--in all` to
+  include every supported corpus.
 - **Interview-driven task capture.** No forms. flow asks
   what / why / where / done-when, then writes a structured brief.
 - **A knowledge base that grows.** Five markdown buckets for

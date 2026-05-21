@@ -260,6 +260,7 @@ type SearchResponse struct {
 	Playbooks   []SearchResult `json:"playbooks"`
 	Updates     []SearchResult `json:"updates"`
 	Transcripts []SearchResult `json:"transcripts"`
+	Memories    []SearchResult `json:"memories"`
 }
 
 type SearchResult struct {

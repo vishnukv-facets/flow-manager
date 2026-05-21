@@ -111,7 +111,7 @@ Sessions:
 
 Read:
   flow ui serve        [--host 127.0.0.1] [--port 8787] [--bg] (local web Mission Control UI)
-  flow search "<query>" [--in briefs,updates,transcripts] [--limit N] [--format table|json|tsv]
+  flow search "<query>" [--in briefs,updates,memories,transcripts] [--limit N] [--format table|json|tsv]
   flow show task       [<ref>]
   flow show project    [<ref>]
   flow transcript      [<ref>] [--compact]           (readable transcript from session jsonl)

@@ -3,6 +3,7 @@ package flowdb
 import (
 	"database/sql"
 	"errors"
+	"flow/internal/memorysrc"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -16,6 +17,7 @@ const (
 	SearchScopeBrief      SearchScope = "brief"
 	SearchScopeUpdate     SearchScope = "update"
 	SearchScopeTranscript SearchScope = "transcript"
+	SearchScopeMemory     SearchScope = "memory"
 )
 
 type SearchDoc struct {
@@ -41,7 +43,7 @@ type SearchResult struct {
 }
 
 func DefaultSearchScopes() []SearchScope {
-	return []SearchScope{SearchScopeBrief, SearchScopeUpdate}
+	return []SearchScope{SearchScopeBrief, SearchScopeUpdate, SearchScopeMemory}
 }
 
 func ParseSearchScopes(raw string) ([]SearchScope, error) {
@@ -67,14 +69,17 @@ func ParseSearchScopes(raw string) ([]SearchScope, error) {
 			add(SearchScopeBrief)
 			add(SearchScopeUpdate)
 			add(SearchScopeTranscript)
+			add(SearchScopeMemory)
 		case "brief", "briefs":
 			add(SearchScopeBrief)
 		case "update", "updates":
 			add(SearchScopeUpdate)
 		case "transcript", "transcripts":
 			add(SearchScopeTranscript)
+		case "memory", "memories":
+			add(SearchScopeMemory)
 		default:
-			return nil, fmt.Errorf("invalid search scope %q (want briefs, updates, transcripts, or all)", part)
+			return nil, fmt.Errorf("invalid search scope %q (want briefs, updates, memories, transcripts, or all)", part)
 		}
 	}
 	if len(scopes) == 0 {
@@ -93,16 +98,21 @@ func SearchScopesInclude(scopes []SearchScope, want SearchScope) bool {
 }
 
 func SyncSearchDocs(db *sql.DB, root string, includeTranscripts bool) error {
+	scopes := DefaultSearchScopes()
+	if includeTranscripts {
+		scopes = append(scopes, SearchScopeTranscript)
+	}
+	return SyncSearchDocsForScopes(db, root, scopes)
+}
+
+func SyncSearchDocsForScopes(db *sql.DB, root string, scopes []SearchScope) error {
 	if strings.TrimSpace(root) == "" {
 		return errors.New("flow root is empty")
 	}
-	docs, err := collectSearchDocs(db, root, includeTranscripts)
+	scopes = normalizeSearchScopes(scopes)
+	docs, err := collectSearchDocs(db, root, scopes)
 	if err != nil {
 		return err
-	}
-	scopes := []SearchScope{SearchScopeBrief, SearchScopeUpdate}
-	if includeTranscripts {
-		scopes = append(scopes, SearchScopeTranscript)
 	}
 	return replaceSearchDocs(db, docs, scopes)
 }
@@ -151,6 +161,7 @@ func SearchDocs(db *sql.DB, query string, scopes []SearchScope, limit int) ([]Se
 		            SELECT 1 FROM playbooks pb
 		            WHERE pb.slug = d.entity_slug AND pb.archived_at IS NULL AND pb.deleted_at IS NULL
 		       ))
+		    OR d.entity_type = 'memory'
 		  )
 		ORDER BY bm25(search_docs_fts), d.updated_at DESC
 		LIMIT ?`, sqlPlaceholders(len(scopes))), args...)
@@ -165,14 +176,21 @@ func SearchDocs(db *sql.DB, query string, scopes []SearchScope, limit int) ([]Se
 			return nil, err
 		}
 		r.Type = r.EntityType + "_" + r.Scope
+		if r.EntityType == "memory" {
+			r.Type = "memory"
+		}
 		r.Snippet = cleanSearchSnippet(r.Snippet)
 		out = append(out, r)
 	}
 	return out, rows.Err()
 }
 
-func collectSearchDocs(db *sql.DB, root string, includeTranscripts bool) ([]SearchDoc, error) {
+func collectSearchDocs(db *sql.DB, root string, scopes []SearchScope) ([]SearchDoc, error) {
 	var docs []SearchDoc
+	includeBriefs := SearchScopesInclude(scopes, SearchScopeBrief)
+	includeUpdates := SearchScopesInclude(scopes, SearchScopeUpdate)
+	includeTranscripts := SearchScopesInclude(scopes, SearchScopeTranscript)
+	includeMemories := SearchScopesInclude(scopes, SearchScopeMemory)
 	type entity struct {
 		typ         string
 		dir         string
@@ -195,11 +213,13 @@ func collectSearchDocs(db *sql.DB, root string, includeTranscripts bool) ([]Sear
 			} else if err := rows.Scan(&e.slug, &e.name); err != nil {
 				return err
 			}
-			entityDocs, err := collectEntityMarkdownDocs(root, e.dir, e.typ, e.slug, e.name)
-			if err != nil {
-				return err
+			if includeBriefs || includeUpdates {
+				entityDocs, err := collectEntityMarkdownDocs(root, e.dir, e.typ, e.slug, e.name, includeBriefs, includeUpdates)
+				if err != nil {
+					return err
+				}
+				docs = append(docs, entityDocs...)
 			}
-			docs = append(docs, entityDocs...)
 			if includeTranscripts && e.typ == "task" && e.sessionPath.Valid && strings.TrimSpace(e.sessionPath.String) != "" {
 				if doc, ok, err := transcriptSearchDoc(e.slug, e.name, e.sessionPath.String); err != nil {
 					return err
@@ -210,25 +230,41 @@ func collectSearchDocs(db *sql.DB, root string, includeTranscripts bool) ([]Sear
 		}
 		return rows.Err()
 	}
-	if err := load(`SELECT slug, name, session_path FROM tasks WHERE deleted_at IS NULL`, "task", "tasks", true); err != nil {
-		return nil, err
+	if includeBriefs || includeUpdates || includeTranscripts {
+		if err := load(`SELECT slug, name, session_path FROM tasks WHERE deleted_at IS NULL`, "task", "tasks", true); err != nil {
+			return nil, err
+		}
+		if includeBriefs || includeUpdates {
+			if err := load(`SELECT slug, name FROM projects WHERE deleted_at IS NULL`, "project", "projects", false); err != nil {
+				return nil, err
+			}
+			if err := load(`SELECT slug, name FROM playbooks WHERE deleted_at IS NULL`, "playbook", "playbooks", false); err != nil {
+				return nil, err
+			}
+		}
 	}
-	if err := load(`SELECT slug, name FROM projects WHERE deleted_at IS NULL`, "project", "projects", false); err != nil {
-		return nil, err
-	}
-	if err := load(`SELECT slug, name FROM playbooks WHERE deleted_at IS NULL`, "playbook", "playbooks", false); err != nil {
-		return nil, err
+	if includeMemories {
+		memoryDocs, err := collectMemorySearchDocs(db, root)
+		if err != nil {
+			return nil, err
+		}
+		docs = append(docs, memoryDocs...)
 	}
 	return docs, nil
 }
 
-func collectEntityMarkdownDocs(root, dir, entityType, slug, name string) ([]SearchDoc, error) {
+func collectEntityMarkdownDocs(root, dir, entityType, slug, name string, includeBriefs, includeUpdates bool) ([]SearchDoc, error) {
 	entityDir := filepath.Join(root, dir, slug)
 	var docs []SearchDoc
-	if doc, ok, err := fileSearchDoc(entityType+":"+slug+":brief", SearchScopeBrief, entityType, slug, name+" brief", filepath.Join(entityDir, "brief.md")); err != nil {
-		return nil, err
-	} else if ok {
-		docs = append(docs, doc)
+	if includeBriefs {
+		if doc, ok, err := fileSearchDoc(entityType+":"+slug+":brief", SearchScopeBrief, entityType, slug, name+" brief", filepath.Join(entityDir, "brief.md")); err != nil {
+			return nil, err
+		} else if ok {
+			docs = append(docs, doc)
+		}
+	}
+	if !includeUpdates {
+		return docs, nil
 	}
 	updateDir := filepath.Join(entityDir, "updates")
 	entries, err := os.ReadDir(updateDir)
@@ -259,6 +295,62 @@ func collectEntityMarkdownDocs(root, dir, entityType, slug, name string) ([]Sear
 		}
 	}
 	return docs, nil
+}
+
+func collectMemorySearchDocs(db *sql.DB, root string) ([]SearchDoc, error) {
+	workdirs, err := memorySearchWorkdirs(db)
+	if err != nil {
+		return nil, err
+	}
+	sources := memorysrc.AllSources(root, workdirs)
+	docs := make([]SearchDoc, 0, len(sources))
+	for _, source := range sources {
+		if strings.TrimSpace(source.ID) == "" {
+			continue
+		}
+		doc, ok, err := fileSearchDoc(
+			"memory:"+source.ID,
+			SearchScopeMemory,
+			"memory",
+			source.ID,
+			source.Label,
+			source.Path,
+		)
+		if err != nil {
+			return nil, err
+		}
+		if ok {
+			docs = append(docs, doc)
+		}
+	}
+	return docs, nil
+}
+
+func memorySearchWorkdirs(db *sql.DB) ([]string, error) {
+	rows, err := db.Query(`
+		SELECT work_dir FROM tasks WHERE deleted_at IS NULL
+		UNION
+		SELECT work_dir FROM projects WHERE deleted_at IS NULL
+		UNION
+		SELECT work_dir FROM playbooks WHERE deleted_at IS NULL
+		UNION
+		SELECT path FROM workdirs
+	`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []string
+	for rows.Next() {
+		var path string
+		if err := rows.Scan(&path); err != nil {
+			return nil, err
+		}
+		if strings.TrimSpace(path) != "" {
+			out = append(out, path)
+		}
+	}
+	return out, rows.Err()
 }
 
 func fileSearchDoc(key string, scope SearchScope, entityType, slug, title, path string) (SearchDoc, bool, error) {
@@ -385,6 +477,25 @@ func sqlPlaceholders(n int) string {
 
 func cleanSearchSnippet(s string) string {
 	return strings.Join(strings.Fields(s), " ")
+}
+
+func normalizeSearchScopes(scopes []SearchScope) []SearchScope {
+	if len(scopes) == 0 {
+		scopes = DefaultSearchScopes()
+	}
+	seen := map[SearchScope]bool{}
+	out := make([]SearchScope, 0, len(scopes))
+	for _, scope := range scopes {
+		if scope == "" || seen[scope] {
+			continue
+		}
+		seen[scope] = true
+		out = append(out, scope)
+	}
+	if len(out) == 0 {
+		return DefaultSearchScopes()
+	}
+	return out
 }
 
 const timeFormatRFC3339Nano = "2006-01-02T15:04:05.999999999Z07:00"

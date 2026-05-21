@@ -3702,6 +3702,7 @@ const CommandPalette = ({ onClose, goto, action }) => {
             ...(data.playbooks || []),
             ...(data.updates || []),
             ...(data.transcripts || []),
+            ...(data.memories || []),
           ];
           setFtsState({ query: raw, loading: false, results: buckets, error: '' });
         })
@@ -3715,7 +3716,7 @@ const CommandPalette = ({ onClose, goto, action }) => {
   const ftsItems = useMemo(() => {
     if (q.trim().length < 2) return [];
     if (ftsState.loading) {
-      return [{ group: 'Full-text search', kind: 'search', icon: 'search', label: 'Searching briefs and updates...', title: ftsState.query, meta: 'fts5', search: ftsState.query, onSel: () => {} }];
+      return [{ group: 'Full-text search', kind: 'search', icon: 'search', label: 'Searching flow memory...', title: ftsState.query, meta: 'fts5', search: ftsState.query, onSel: () => {} }];
     }
     if (ftsState.error) {
       return [{ group: 'Full-text search', kind: 'search', icon: 'alert-triangle', label: 'Search unavailable', title: ftsState.error, meta: 'error', search: ftsState.query, onSel: () => {} }];
@@ -3723,7 +3724,7 @@ const CommandPalette = ({ onClose, goto, action }) => {
     return (ftsState.results || []).map(r => ({
       group: 'Full-text search',
       kind: r.scope || 'search',
-      icon: r.scope === 'update' ? 'file-text' : r.scope === 'transcript' ? 'messages-square' : r.type === 'project_brief' ? 'folder-tree' : r.type === 'playbook_brief' ? 'play' : 'search',
+      icon: r.scope === 'update' ? 'file-text' : r.scope === 'transcript' ? 'messages-square' : r.scope === 'memory' ? 'brain-circuit' : r.type === 'project_brief' ? 'folder-tree' : r.type === 'playbook_brief' ? 'play' : 'search',
       label: r.slug,
       title: r.name,
       subtitle: r.snippet,
@@ -3831,7 +3832,7 @@ const CommandPalette = ({ onClose, goto, action }) => {
         </div>
         <div className="palette-input-wrap">
           <Icon name="search" size={14}/>
-          <input autoFocus className="palette-input" placeholder="Search briefs, updates, slugs, tags, or commands" value={q} onChange={(e) => { setQ(e.target.value); setActive(0); }}/>
+          <input autoFocus className="palette-input" placeholder="Search briefs, updates, memories, slugs, tags, or commands" value={q} onChange={(e) => { setQ(e.target.value); setActive(0); }}/>
         </div>
         <div className="palette-list" role="listbox" aria-label="Switcher results">
           {orderedGroups.map(([g, list]) => (

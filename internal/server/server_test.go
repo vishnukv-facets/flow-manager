@@ -149,6 +149,52 @@ func TestSearchTranscriptsRequireOptInScope(t *testing.T) {
 	}
 }
 
+func TestSearchReadsMemoryBodies(t *testing.T) {
+	root, db := testRootDB(t)
+	insertProjectTask(t, db, root)
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("CODEX_HOME", filepath.Join(home, ".codex"))
+	t.Setenv("CLAUDE_CONFIG_DIR", filepath.Join(home, ".claude"))
+	if err := os.WriteFile(filepath.Join(root, "kb", "user.md"), []byte("server-flow-memory-marker\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	writeTestFile(t, filepath.Join(home, ".codex", "memories", "raw_memories.md"), "server-codex-memory-marker\n")
+
+	srv := New(Config{DB: db, FlowRoot: root, Version: "test"}).Handler()
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/api/search?q=server-flow-memory-marker", nil)
+	srv.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, body = %s", rec.Code, rec.Body.String())
+	}
+	var res struct {
+		Memories []SearchResult `json:"memories"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &res); err != nil {
+		t.Fatal(err)
+	}
+	if len(res.Memories) != 1 || res.Memories[0].Slug != "flow-kb-user" || res.Memories[0].Scope != "memory" {
+		t.Fatalf("memory results = %#v", res.Memories)
+	}
+
+	rec = httptest.NewRecorder()
+	req = httptest.NewRequest(http.MethodGet, "/api/search?q=server-codex-memory-marker&in=memories", nil)
+	srv.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("codex status = %d, body = %s", rec.Code, rec.Body.String())
+	}
+	res = struct {
+		Memories []SearchResult `json:"memories"`
+	}{}
+	if err := json.Unmarshal(rec.Body.Bytes(), &res); err != nil {
+		t.Fatal(err)
+	}
+	if len(res.Memories) != 1 || res.Memories[0].Slug != "codex-memory-raw-memories" {
+		t.Fatalf("codex memory results = %#v", res.Memories)
+	}
+}
+
 func TestUIDataUsesFlowRecords(t *testing.T) {
 	root, db := testRootDB(t)
 	insertProjectTask(t, db, root)
@@ -1373,8 +1419,10 @@ func TestStaticActionPayloadForwardsProvider(t *testing.T) {
 		t.Fatal("task screens should disable spawn controls for blocked/dependent tasks")
 	}
 	if !strings.Contains(string(screens), "fetch(`/api/search?q=${encodeURIComponent(raw)}&limit=8`)") ||
-		!strings.Contains(string(screens), "Full-text search") {
-		t.Fatal("command palette should surface FTS-backed brief/update search results")
+		!strings.Contains(string(screens), "Full-text search") ||
+		!strings.Contains(string(screens), "...(data.memories || [])") ||
+		!strings.Contains(string(screens), "Search briefs, updates, memories") {
+		t.Fatal("command palette should surface FTS-backed flow memory search results")
 	}
 }
 

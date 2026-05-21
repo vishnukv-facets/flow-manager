@@ -199,7 +199,7 @@ Read
   flow show task    [<ref>]     (no arg → $FLOW_TASK, then current-session reverse-lookup)
   flow show project [<ref>]     (no arg → project of current/bound task)
   flow show playbook    [<ref>]
-  flow search "<query>" [--in briefs,updates,transcripts] [--limit N] [--format table|json|tsv]
+  flow search "<query>" [--in briefs,updates,memories,transcripts] [--limit N] [--format table|json|tsv]
   flow transcript   [<ref>] [--compact]    (readable transcript from session jsonl)
   flow list tasks    [--status backlog|in-progress|done] [--project <slug>]
                      [--priority high|medium|low] [--since today|monday|7d|YYYY-MM-DD]
@@ -924,6 +924,46 @@ Produce a digest in this exact shape:
 Do not solve anything during a weekly review — it's a reporting
 workflow, not a planning workflow.
 
+### 4.9a Search flow memory
+
+**When to use:** Use `flow search` when you need to locate context
+across flow's markdown-backed memory and you do not already know the
+exact task, project, playbook, KB file, or agent memory file to open.
+This is the fast path for questions like "where did we decide X?",
+"what did we do for customer/product Y?", "have we seen this error
+before?", or "what memory exists about this tool/person/project?".
+
+`flow search "<query>"` searches briefs, updates, and memories by
+default. "Memories" means flow KB files under `~/.flow/kb/`, Codex
+memory/instruction markdown, and Claude auto-memory markdown. Session
+transcripts are deliberately opt-in because they can be much larger:
+use `--in transcripts` for transcript-only search or `--in all` when
+you explicitly need briefs, updates, memories, and transcripts together.
+
+Common patterns:
+
+```
+flow search "Socket Mode"
+flow search "permission mode" --in memories
+flow search "unsupported updatedInput" --in all --limit 10
+flow search "review thread" --format json
+```
+
+Search is a locator, not an authority. After finding a hit, open the
+source the normal way before making claims:
+
+- For task/project/playbook hits, run `flow show ...` and read the
+  surfaced brief/update files.
+- For transcript hits, run `flow transcript <task-slug>` if you need
+  the surrounding conversation.
+- For memory hits, read only the specific `source_path` or KB file that
+  the result points to; do not bulk-load every KB or memory file.
+
+This does **not** replace the execution-session bootstrap contract in
+§9. Still read the current task brief, updates, parent project context,
+and repo conventions first. Use search after bootstrap when the work
+requires cross-task or cross-memory context.
+
 ### 4.10 Listening for knowledge-base facts (scoop mode)
 
 This is a **passive** workflow — it runs alongside every other workflow
@@ -1013,6 +1053,12 @@ category of fact. Signals that it's time to Read one:
 - You're generating cross-cutting advice ("how should I approach
   this?") that would benefit from context about the user's role,
   organization, or product suite.
+
+If you are not sure which KB file or prior task contains the answer,
+use `flow search "<terms>" --in memories` or `flow search "<terms>"`
+first, then read only the specific source file or entity that the result
+identifies. Search is compatible with lazy loading because it is an
+on-demand lookup for a concrete question, not bootstrap-time bulk read.
 
 Signals it's NOT time to read the KB:
 
@@ -1966,6 +2012,11 @@ proposing any plan:
    user input, or in the work makes them relevant. This matches the
    lazy-load principle for KB files (§5.10 in the skill, §4.10 in the
    section numbering).
+
+   After bootstrap, if you need cross-task or memory context and do not
+   know the exact file/entity to open, use `flow search "<terms>"` as the
+   locator. Default search covers briefs, updates, and memories; add
+   `--in all` only when transcripts are needed too. See §4.9a.
 
 3. **Load the parent project context, if any.** If `flow show task`
    printed a `project:` line that isn't `(floating)`, run:

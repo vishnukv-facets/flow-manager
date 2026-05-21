@@ -391,6 +391,24 @@ func TestSkillMentionsSoftDelete(t *testing.T) {
 	}
 }
 
+func TestSkillDocumentsMemorySearch(t *testing.T) {
+	got := string(embeddedSkill)
+	for _, want := range []string{
+		"### 4.9a Search flow memory",
+		"searches briefs, updates, and memories by",
+		"flow KB files under `~/.flow/kb/`, Codex",
+		"Claude auto-memory markdown",
+		"use `--in transcripts` for transcript-only search or `--in all`",
+		"Search is a locator, not an authority",
+		"`flow search \"<terms>\" --in memories`",
+		"Search is compatible with lazy loading",
+	} {
+		if !strings.Contains(got, want) {
+			t.Errorf("skill missing memory-search guidance %q", want)
+		}
+	}
+}
+
 func TestSkillHasPlaybookSections(t *testing.T) {
 	got := string(embeddedSkill)
 	for _, want := range []string{
