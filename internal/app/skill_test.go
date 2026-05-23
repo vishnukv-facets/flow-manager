@@ -660,6 +660,21 @@ func TestSkillDocumentsGitHubMonitorBootstrap(t *testing.T) {
 	}
 }
 
+func TestSkillDocumentsSameSessionInboxMonitor(t *testing.T) {
+	got := string(embeddedSkill)
+	for _, want := range []string{
+		"inbox.jsonl",
+		"same Flow-owned terminal session",
+		"Slack, GitHub, or future source",
+		"Codex",
+		"gh-pr:",
+	} {
+		if !strings.Contains(got, want) {
+			t.Errorf("skill missing same-session inbox monitor content %q", want)
+		}
+	}
+}
+
 func TestPlaybookRunBootstrapMentionsPersistAdjustments(t *testing.T) {
 	prompt := buildPlaybookRunBootstrapPrompt("p--2026-04-30-10-30", "p", false)
 	for _, want := range []string{

@@ -197,6 +197,16 @@ any task and an xterm.js terminal streams the live Claude or Codex
 session — same scrollback, same input. Reload the tab and the
 snapshot syncs back.
 
+### Same-session inbox monitor
+
+Every monitored source writes normalized events to the task's
+`~/.flow/tasks/<slug>/inbox.jsonl`. When that task has a live Flow-owned
+terminal session, flow starts a task-local monitor that watches the
+inbox and sends a short wake prompt into the same Claude or Codex
+session. The monitor is generic: Slack, GitHub, and future sources use
+the same append-to-inbox contract, and the agent continues the work in
+place instead of spawning a separate solver.
+
 ### What it doesn't do
 
 No auth, no TLS, loopback only. Mission Control is a *local* tool —
@@ -274,8 +284,9 @@ Slack is opt-in.
 ## GitHub integration — assigned work and review threads
 
 flow can also poll GitHub through the authenticated `gh` CLI and turn
-assigned issues, assigned/review-requested pull requests, and review
-comments on tracked pull requests into flow work.
+assigned issues, assigned/review-requested pull requests, review
+comments, and top-level PR reviews on tracked pull requests into flow
+work.
 
 ```
                            gh api polling
@@ -286,7 +297,7 @@ comments on tracked pull requests into flow work.
    │   • search assigned issues / PRs                 │
    │   • search PRs requesting your review            │
    │   • track head changes / merge state for PRs      │
-   │   • fetch review comments for tracked PR tasks   │
+   │   • fetch review comments / reviews for PR tasks │
    └────────────────┬────────────────────────────────┘
                     │  is FLOW_GH_ENABLED=1?
                     │  is login in FLOW_GH_SELF_LOGINS?
@@ -309,18 +320,21 @@ you want a smaller allowlist.
 **One GitHub item, one task.** PR tasks are tagged
 `gh-pr:<owner>/<repo>#<number>` and issue tasks are tagged
 `gh-issue:<owner>/<repo>#<number>`. A later assignment,
-review-request, or review comment for the same PR/issue appends to the
-existing task's `inbox.jsonl` instead of creating a duplicate. GitHub
-event keys are recorded in SQLite so repeated polling does not
-double-append the same event.
+review-request, review comment, top-level review, commit, or merge for
+the same PR/issue appends to the existing task's `inbox.jsonl` instead
+of creating a duplicate. GitHub event keys are recorded in SQLite so
+repeated polling does not double-append the same event. `flow done`
+also tries to link the current branch PR automatically by adding the
+`gh-pr:` tag.
 
 **PR review lifecycle.** GitHub search only creates work for open PRs.
-For already-tracked PR tasks, flow also polls the PR detail endpoint:
-a new head SHA appends a "review again" event and reopens the flow task
-if it was already done, while a merged PR appends a merge event and
-marks the associated flow task done. flow does not blindly approve PRs;
-approval remains part of the review task after the reviewer/agent has
-verified the latest diff.
+For already-tracked PR tasks, flow also polls the PR detail and review
+endpoints: a `CHANGES_REQUESTED` review or new head SHA appends a
+"review again" event and reopens the flow task if it was already done,
+while a merged PR appends a merge event and marks the associated flow
+task done. Approved reviews are recorded in the inbox but do not reopen
+the task. flow does not blindly approve PRs; approval remains part of
+the review task after the reviewer/agent has verified the latest diff.
 
 **Provider routing via labels.** Add `flow:codex` to route a new
 GitHub-origin task to Codex, or `flow:claude` to route it to Claude.

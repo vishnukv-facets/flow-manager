@@ -2192,6 +2192,28 @@ A session is "bound" when some task carries its session_id (set by
 retroactively). A session is "dispatch / unbound" when no task does
 — `flow show task` errors with a friendly message.
 
+## 10a. Same-session inbox monitor
+
+Flow routes monitored Slack, GitHub, or future source events into the
+active task's `inbox.jsonl`. When a task terminal is live, Flow also runs
+a task-local monitor that wakes the same Flow-owned terminal session by
+sending a short prompt into the existing Claude or Codex session. The
+monitor never performs the work itself and never starts a separate
+background solver for the task.
+
+When you are woken by this monitor:
+
+1. Read the newest `inbox.jsonl` entries for the current task.
+2. Inspect the source link, Slack thread, GitHub PR, or other referenced
+   context in the entry.
+3. Continue the fix or response in this same agent session.
+4. Save normal task updates for durable decisions or outcomes.
+
+For GitHub PR work, make sure the task carries a
+`gh-pr:<owner>/<repo>#<number>` tag. `flow done` tries to discover the
+current branch PR automatically, and you can add the tag manually with
+`flow update task <slug> --tag gh-pr:<owner>/<repo>#<number>`.
+
 ## 10b. Slack-reply tasks (reaction-trigger pipeline)
 
 `flow ui serve` hosts a Slack Socket Mode listener that watches every
@@ -2217,10 +2239,10 @@ under the `tags:` line), follow this bootstrap:
    (Kind = `message` | `app_mention` | `reaction_added`; full schema in
    `internal/monitor/inbound_event.go`). The events arrived while this
    session was closed — process them before posting fresh replies.
-3. **Arm a live tail.** While the session is open, run
-   `Monitor(persistent=true, command="tail -F ~/.flow/tasks/<your-slug>/inbox.jsonl", ...)`
-   so new events from the same Slack thread appear as chat notifications
-   without you having to refresh.
+3. **Use the same-session monitor.** Flow wakes the same Flow-owned
+   terminal session when new actionable Slack events arrive. If you are
+   diagnosing monitor behavior manually, the equivalent file tail is
+   `tail -F ~/.flow/tasks/<your-slug>/inbox.jsonl`.
 4. **Pull richer Slack context if needed.** The inbox event payload is
    compact. To see the full thread (older messages, files, deep links),
    use the Slack MCP tools — primarily
@@ -2260,8 +2282,9 @@ starts it with `FLOW_GH_ENABLED=1` and `FLOW_GH_SELF_LOGINS=<login>`.
 Set `FLOW_GH_REPOS=owner/repo,owner/repo2` only when the user wants a
 narrow repo allowlist; unset means all repos visible to the authenticated
 `gh` CLI. The listener turns open assigned issues, open assigned PRs,
-open PRs requesting the user's review, tracked PR review comments, PR
-head updates, and PR merges into flow inbox events.
+open PRs requesting the user's review, tracked PR review comments,
+top-level PR reviews, PR head updates, and PR merges into flow inbox
+events.
 
 GitHub-origin tasks are tagged `github` plus either
 `gh-pr:<owner>/<repo>#<number>` or `gh-issue:<owner>/<repo>#<number>`.
@@ -2284,11 +2307,12 @@ lists tags under the `tags:` line), follow this bootstrap:
    `~/.flow/tasks/<your-slug>/inbox.jsonl` in order. Each line is a JSON
    object `{enqueued_at, event}` where `event.Kind` may include
    `pr_assigned`, `pr_review_requested`, `issue_assigned`,
-   `pr_review_comment`, `pr_head_updated`, or `pr_merged`.
-4. **Arm a live tail.** While the session is open, run
-   `Monitor(persistent=true, command="tail -F ~/.flow/tasks/<your-slug>/inbox.jsonl", ...)`
-   so new GitHub events for the same PR/issue appear as chat
-   notifications without refreshing Mission Control.
+   `pr_review_comment`, `pr_review_changes_requested`,
+   `pr_review_approved`, `pr_head_updated`, or `pr_merged`.
+4. **Use the same-session monitor.** Flow wakes the same Flow-owned
+   terminal session when new actionable GitHub events arrive. If you are
+   diagnosing monitor behavior manually, the equivalent file tail is
+   `tail -F ~/.flow/tasks/<your-slug>/inbox.jsonl`.
 5. **Review from current GitHub state.** Use `gh pr view`, `gh pr diff`,
    `gh pr checkout`, or `gh api` as needed before approving, requesting
    changes, or replying. Inbox events tell you something changed; they
