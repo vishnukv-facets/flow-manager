@@ -954,6 +954,38 @@ func TestPrepareTerminalLaunchCodexStartsPendingCapture(t *testing.T) {
 	}
 }
 
+func TestSlackTaskOpenerPreservesCodexProvider(t *testing.T) {
+	root, db := testRootDB(t)
+	insertProjectTask(t, db, root)
+	if _, err := db.Exec(`UPDATE tasks SET session_provider = 'codex' WHERE slug = 'build-ui'`); err != nil {
+		t.Fatal(err)
+	}
+	binDir := t.TempDir()
+	for _, name := range []string{"claude", "codex"} {
+		path := filepath.Join(binDir, name)
+		body := "#!/bin/sh\ntrap 'exit 0' TERM INT\nwhile :; do sleep 1; done\n"
+		if err := os.WriteFile(path, []byte(body), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+
+	srv := New(Config{DB: db, FlowRoot: root, CommandPath: "/bin/false"})
+	t.Cleanup(func() { srv.terminals.stop("build-ui") })
+	opener := &slackTaskOpener{server: srv}
+	if err := opener.OpenInUI("build-ui"); err != nil {
+		t.Fatal(err)
+	}
+
+	task, err := flowdb.GetTask(db, "build-ui")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if task.SessionProvider != "codex" || task.SessionID.Valid {
+		t.Fatalf("slack opener should preserve pending codex launch, got %+v", task)
+	}
+}
+
 func TestPrepareTerminalLaunchResumesCodexSession(t *testing.T) {
 	root, db := testRootDB(t)
 	insertProjectTask(t, db, root)

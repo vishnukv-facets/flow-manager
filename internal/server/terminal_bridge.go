@@ -513,6 +513,47 @@ func sharedTerminalHasSession(name string) bool {
 	return err == nil
 }
 
+func sharedTerminalSessionMatchesLaunch(name string, launch terminalLaunch) (bool, error) {
+	if strings.TrimSpace(name) == "" || !sharedTerminalAvailable() {
+		return false, nil
+	}
+	out, err := sharedTerminalCommand("list-panes", "-t", name, "-F", "#{pane_start_command}")
+	if err != nil {
+		return false, fmt.Errorf("inspect shared terminal session %s: %w: %s", name, err, strings.TrimSpace(string(out)))
+	}
+	command := string(out)
+	task := shellCommandEnvValue(command, "FLOW_TASK")
+	provider := shellCommandEnvValue(command, "FLOW_SESSION_PROVIDER")
+	// Older/manual sessions may not carry Flow's launch metadata. Preserve
+	// them unless we can positively identify a stale Flow-owned mismatch.
+	if task == "" && provider == "" {
+		return true, nil
+	}
+	wantProvider := strings.TrimSpace(launch.Provider)
+	if wantProvider == "" {
+		wantProvider = agents.ProviderClaude
+	}
+	if task != "" && task != launch.Slug {
+		return false, nil
+	}
+	if provider != "" && provider != wantProvider {
+		return false, nil
+	}
+	return true, nil
+}
+
+func shellCommandEnvValue(command, key string) string {
+	prefix := key + "="
+	for _, field := range strings.Fields(command) {
+		if !strings.HasPrefix(field, prefix) {
+			continue
+		}
+		value := strings.TrimPrefix(field, prefix)
+		return strings.Trim(value, `"'`)
+	}
+	return ""
+}
+
 func sharedTerminalCaptureHistory(name string) ([]byte, error) {
 	name = strings.TrimSpace(name)
 	if name == "" {
@@ -551,10 +592,18 @@ func (s *Server) ensureSharedTerminalSession(launch terminalLaunch, cols, rows i
 	}
 	name := sharedTerminalSessionName(launch.Slug)
 	if sharedTerminalHasSession(name) {
-		if err := ensureSharedTerminalScrollOptions(name); err != nil {
+		matches, err := sharedTerminalSessionMatchesLaunch(name, launch)
+		if err != nil {
 			return "", false, err
 		}
-		return name, false, nil
+		if !matches {
+			_ = sharedTerminalKillSession(name)
+		} else {
+			if err := ensureSharedTerminalScrollOptions(name); err != nil {
+				return "", false, err
+			}
+			return name, false, nil
+		}
 	}
 	if cols <= 0 {
 		cols = 120

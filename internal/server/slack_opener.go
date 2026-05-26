@@ -12,11 +12,12 @@ type slackTaskOpener struct {
 	server *Server
 }
 
-// OpenInUI ensures the task is startable, sets the provider to claude,
-// and attaches it to a managed PTY so the UI's terminal bridge can stream
-// the session. The PTY starts immediately — the user can attach the UI
-// pane whenever they get to it; Claude bootstraps in the background and
-// processes the inbox.jsonl as soon as the agent is up.
+// OpenInUI ensures the task is startable and attaches it to a managed
+// PTY so the UI's terminal bridge can stream the session. The task's
+// stored provider is preserved; Slack reaction routing has already set
+// it before the opener runs. The PTY starts immediately — the user can
+// attach the UI pane whenever they get to it; the agent bootstraps in the
+// background and processes the inbox.jsonl as soon as it is up.
 //
 // The attach uses a default 120x32 size which the UI will renegotiate
 // when its WebSocket connects with the actual viewport size.
@@ -24,11 +25,11 @@ func (o *slackTaskOpener) OpenInUI(slug string) error {
 	if o == nil || o.server == nil {
 		return fmt.Errorf("slack opener: server not wired")
 	}
-	// openBrowserTerminalBridge validates the task, sets provider, and
+	// openBrowserTerminalBridge validates the task and
 	// returns the "bridge ready" actionResponse. We discard the response
 	// because there's no UI request to answer — the user will pick it up
 	// out-of-band when they open the UI.
-	resp, _ := o.server.openBrowserTerminalBridge(slug, "claude")
+	resp, _ := o.server.openBrowserTerminalBridge(slug, "")
 	if !resp.OK {
 		return fmt.Errorf("slack opener: bridge prep: %s", resp.Message)
 	}

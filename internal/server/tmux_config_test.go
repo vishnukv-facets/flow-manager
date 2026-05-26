@@ -217,6 +217,73 @@ func TestEnsureSharedTerminalSessionSetsMaxHistoryBeforeNewWindow(t *testing.T) 
 	}
 }
 
+func TestEnsureSharedTerminalSessionReplacesProviderMismatch(t *testing.T) {
+	oldSharedLookPath := sharedTerminalLookPath
+	oldSharedCommand := sharedTerminalCommand
+	sharedTerminalLookPath = func(name string) (string, error) {
+		if name == "tmux" {
+			return "/usr/bin/tmux", nil
+		}
+		return "", fmt.Errorf("not found")
+	}
+	resetSharedTerminalAvailable()
+	defer func() {
+		sharedTerminalLookPath = oldSharedLookPath
+		sharedTerminalCommand = oldSharedCommand
+		resetSharedTerminalAvailable()
+	}()
+
+	var commands [][]string
+	sessionExists := true
+	sharedTerminalCommand = func(args ...string) ([]byte, error) {
+		commands = append(commands, append([]string(nil), args...))
+		if len(args) == 0 {
+			return nil, nil
+		}
+		switch args[0] {
+		case "has-session":
+			if sessionExists {
+				return nil, nil
+			}
+			return nil, fmt.Errorf("missing session")
+		case "list-panes":
+			return []byte("FLOW_SESSION_PROVIDER='claude' FLOW_TASK='build-ui' claude --resume old\n"), nil
+		case "kill-session":
+			sessionExists = false
+			return nil, nil
+		default:
+			if containsString(args, "new-session") {
+				sessionExists = true
+			}
+			return nil, nil
+		}
+	}
+
+	srv := &Server{cfg: Config{FlowRoot: t.TempDir()}}
+	if _, created, err := srv.ensureSharedTerminalSession(terminalLaunch{
+		Slug:     "build-ui",
+		Provider: "codex",
+		WorkDir:  t.TempDir(),
+		Args:     []string{"exec", "prompt"},
+	}, 120, 32); err != nil {
+		t.Fatalf("ensureSharedTerminalSession: %v", err)
+	} else if !created {
+		t.Fatal("expected stale claude tmux session to be replaced by a new codex session")
+	}
+
+	got := strings.TrimSpace(commandLog(commands))
+	for _, want := range []string{
+		"list-panes -t flow-build-ui -F #{pane_start_command}",
+		"kill-session -t flow-build-ui",
+		"FLOW_SESSION_PROVIDER='codex'",
+		"new-session",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("missing %q in tmux command log:\n%s", want, got)
+		}
+	}
+}
+
 func TestSharedTerminalCaptureHistoryUsesTmuxHistoryOnlyRange(t *testing.T) {
 	oldSharedCommand := sharedTerminalCommand
 	defer func() { sharedTerminalCommand = oldSharedCommand }()
