@@ -401,6 +401,27 @@ doesn't refuse to run the unsigned binary.
 
 </details>
 
+### For those who use Claude's agents view
+
+`flow do` and `flow run` don't pass `--bg` today — the aliases below
+will, so flow's sessions (and your own direct invocations) land in
+the agents view. Add to your shell rc (`~/.zshrc` or `~/.bashrc`) and
+`source` it.
+
+```bash
+# Bare `claude` now drops into the agents view. Add
+# `--dangerously-skip-permissions` if you'd also like dispatched
+# sessions to skip per-tool permission prompts (optional flavor).
+alias claude='claude --bg'
+
+# Since `claude` is now aliased, any `claude <sub>` invocation would
+# also pick up `--bg`. For each subcommand you use, add an alias that
+# routes through `command claude` to bypass the outer alias. The one
+# below is for the agents subcommand — the same shape works for
+# `mcp`, `doctor`, etc.
+alias ca='command claude agents'
+```
+
 ## Upgrade
 
 In any Claude Code session:
