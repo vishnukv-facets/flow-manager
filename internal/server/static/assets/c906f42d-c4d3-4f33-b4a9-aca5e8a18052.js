@@ -2876,6 +2876,37 @@ const TaskTerminal = ({ agent, onStatus }) => {
     const fit = window.FitAddon ? new window.FitAddon.FitAddon() : null;
     if (fit) term.loadAddon(fit);
 
+    // Defensive scroll guard for copy operations. When the user is
+    // scrolled up reading older session output and finishes a
+    // drag-select (or any path that ends in a clipboard write), the
+    // viewport snaps to the bottom shortly after — likely a side
+    // effect of focus shuffling during navigator.clipboard.writeText
+    // or an internal xterm.js refresh that resets _userScrolling.
+    // Snapshot scrollTop synchronously, then briefly watch for a
+    // single jump-to-bottom and restore. Only restores once, so it
+    // never fights legitimate user scrolling that follows.
+    const guardScrollDuringCopy = () => {
+      const vp = host.querySelector('.xterm-viewport');
+      if (!vp) return;
+      const savedTop = vp.scrollTop;
+      const atBottom = savedTop + vp.clientHeight >= vp.scrollHeight - 4;
+      if (atBottom) return;
+      let done = false;
+      const onScroll = () => {
+        if (done) return;
+        if (vp.scrollTop > savedTop + 4) {
+          vp.scrollTop = savedTop;
+          done = true;
+          vp.removeEventListener('scroll', onScroll);
+        }
+      };
+      vp.addEventListener('scroll', onScroll);
+      setTimeout(() => {
+        done = true;
+        vp.removeEventListener('scroll', onScroll);
+      }, 500);
+    };
+
     // OSC 52 → browser clipboard. flow runs sessions inside tmux with
     // mouse-mode on, so drag-selection never surfaces as a DOM selection;
     // instead tmux (with `set-clipboard on`) emits OSC 52 with the
@@ -2895,6 +2926,7 @@ const TaskTerminal = ({ agent, onStatus }) => {
           let text;
           try { text = atob(payload); } catch (_) { return false; }
           if (!text) return true;
+          guardScrollDuringCopy();
           navigator.clipboard.writeText(text).then(() => {
             window.dispatchEvent(new CustomEvent('flow:toast', { detail: { message: 'copied to clipboard' } }));
           }).catch(() => {
@@ -3096,6 +3128,7 @@ const TaskTerminal = ({ agent, onStatus }) => {
       const text = termRef.current.getSelection();
       if (!text || !text.trim()) return;
       if (!navigator.clipboard || !navigator.clipboard.writeText) return;
+      guardScrollDuringCopy();
       navigator.clipboard.writeText(text).then(() => {
         window.dispatchEvent(new CustomEvent('flow:toast', { detail: { message: 'copied to clipboard' } }));
       }).catch(() => {
