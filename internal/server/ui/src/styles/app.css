@@ -2579,6 +2579,63 @@ select.input {
   width: 100%;
 }
 
+/* Nudge composer — one-line "send instruction" input on a session card/row.
+   Injects into the agent's PTY (reusing the monitor's inject path) so you can
+   steer a session without opening the terminal. */
+.nudge {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 10px;
+  padding-top: 10px;
+  border-top: 1px solid var(--border-faint);
+}
+.nudge-input {
+  flex: 1;
+  min-width: 0;
+  height: 28px;
+  padding: 0 9px;
+  font-family: inherit;
+  font-size: 12px;
+  color: var(--text);
+  background: var(--bg-2);
+  border: 1px solid var(--border);
+  border-radius: var(--r-sm);
+  outline: none;
+  transition: border-color 0.12s ease;
+}
+.nudge-input::placeholder {
+  color: var(--text-3);
+}
+.nudge-input:focus {
+  border-color: var(--accent-line);
+}
+.nudge-input:disabled {
+  opacity: 0.6;
+}
+.nudge-send {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  flex: none;
+  color: var(--text-inv);
+  background: var(--accent);
+  border: none;
+  border-radius: var(--r-sm);
+  cursor: pointer;
+  transition: background 0.12s ease, opacity 0.12s ease;
+}
+.nudge-send:hover:not(:disabled) {
+  background: var(--accent-hi);
+}
+.nudge-send:disabled {
+  background: var(--bg-3);
+  color: var(--text-3);
+  cursor: default;
+}
+
 /* custom select (replaces native <select>) */
 .select {
   position: relative;

@@ -239,11 +239,60 @@ func (s *Server) runAction(req actionRequest) (actionResponse, int) {
 		return s.forkTask(req)
 	case "edit-playbook":
 		return s.editPlaybook(target)
+	case "nudge":
+		return s.nudgeSession(target, req.Prompt)
 	case "overview-chat":
 		return s.overviewChat(req)
 	default:
 		return actionResponse{OK: false, Message: "unknown action " + req.Kind}, http.StatusBadRequest
 	}
+}
+
+// nudgeSession delivers a user-typed instruction into a task's agent session
+// without opening the terminal. It reuses the exact path the inbox monitor uses
+// to auto-inject on new messages (see deliverInboxEvents): inject into the live
+// server-managed PTY if one exists, otherwise resume the session and inject —
+// but never duplicate a session the user is running in an external terminal.
+func (s *Server) nudgeSession(slug, text string) (actionResponse, int) {
+	text = strings.TrimSpace(text)
+	if text == "" {
+		return actionResponse{OK: false, Message: "instruction is empty"}, http.StatusBadRequest
+	}
+	if slug == "" {
+		return actionResponse{OK: false, Message: "no session specified"}, http.StatusBadRequest
+	}
+	// Live server PTY → inject straight away (paste + delayed Enter).
+	if s.terminals != nil && s.terminals.running(slug) {
+		if err := s.terminals.wakeTask(slug, text); err != nil {
+			return actionResponse{OK: false, Message: err.Error()}, http.StatusInternalServerError
+		}
+		return actionResponse{OK: true, Message: "Instruction sent to session"}, http.StatusOK
+	}
+	task, err := flowdb.GetTask(s.cfg.DB, slug)
+	if err != nil {
+		return actionResponse{OK: false, Message: "session not found"}, http.StatusNotFound
+	}
+	// A native (user-owned terminal) session is alive: flow has no PTY to inject
+	// into and must not spawn a duplicate.
+	if s.taskAgentProcessLive(task) {
+		return actionResponse{OK: false, Message: "Session is running in an external terminal — open it there to send."}, http.StatusConflict
+	}
+	if task.Status != "backlog" && task.Status != "in-progress" {
+		return actionResponse{OK: false, Message: "Session is finished — reopen it to send an instruction."}, http.StatusConflict
+	}
+	provider := task.SessionProvider
+	if provider == "" {
+		provider = "claude"
+	}
+	if err := s.ensureProviderAvailable(provider); err != nil {
+		return actionResponse{OK: false, Message: err.Error()}, http.StatusBadRequest
+	}
+	// No live session: wakeTask resumes a server PTY (--resume the prior session)
+	// via attach, then injects the instruction.
+	if err := s.terminals.wakeTask(slug, text); err != nil {
+		return actionResponse{OK: false, Message: err.Error()}, http.StatusInternalServerError
+	}
+	return actionResponse{OK: true, Message: "Resumed session and sent instruction"}, http.StatusOK
 }
 
 func qualifiedEntityRef(kind, slug string) (string, error) {

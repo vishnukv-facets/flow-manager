@@ -3,6 +3,7 @@ import { GitBranch, Clock3, Radar, Coins } from 'lucide-react'
 import type { UiAgent } from '../lib/types'
 import { fromMinutes, fromSeconds, compact } from '../lib/format'
 import { ProviderIcon, Sparkline, StatusDot, TokenBar } from './ui'
+import { NudgeComposer } from './NudgeComposer'
 
 const BADGE_TONE: Record<string, string> = {
   waiting: 'warn',
@@ -96,6 +97,8 @@ export function AgentCard({ agent }: { agent: UiAgent }) {
           {compact(agent.tokens_used)}/{compact(agent.tokens_max)}
         </span>
       </div>
+
+      {!isDone && <NudgeComposer slug={agent.slug} compact />}
     </article>
   )
 }
