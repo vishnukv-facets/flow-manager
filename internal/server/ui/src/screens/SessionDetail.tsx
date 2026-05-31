@@ -5,9 +5,13 @@ import {
   ArrowDown,
   ArrowRight,
   ArrowUp,
+  Check,
+  CheckCircle2,
   ChevronDown,
+  Circle,
   GitBranch,
   GitFork,
+  Loader2,
   Maximize2,
   Minimize2,
   MoreHorizontal,
@@ -20,6 +24,7 @@ import {
   RotateCcw,
   Sparkles,
   TerminalSquare,
+  X as XIcon,
 } from 'lucide-react'
 import {
   queryClient,
@@ -59,6 +64,7 @@ export function SessionDetail({ slug }: { slug: string }) {
   const [transcriptModal, setTranscriptModal] = useState(false)
   const [updatesModal, setUpdatesModal] = useState(false)
   const [reopened, setReopened] = useState(false) // user revisited a done task → allow the live terminal to mount
+  const [doneRunning, setDoneRunning] = useState(false) // flow-done close-out in progress → show inline step panel
   const [editingName, setEditingName] = useState(false)
   const [nameDraft, setNameDraft] = useState('')
   const renameCommitted = useRef(false)
@@ -263,6 +269,22 @@ export function SessionDetail({ slug }: { slug: string }) {
               </summary>
               <div className="menu-pop right">
                 {!done && (
+                  <button
+                    className="menu-item"
+                    onClick={async (e) => {
+                      closeMenu(e)
+                      const ok = await confirmAction({
+                        title: 'Mark this task done?',
+                        body: `"${task.name}" will be closed and a close-out sweep will distill KB & project updates from its transcript.`,
+                        confirmLabel: 'Mark done',
+                      })
+                      if (ok) setDoneRunning(true)
+                    }}
+                  >
+                    <CheckCircle2 size={14} /> Mark done
+                  </button>
+                )}
+                {!done && (
                   <button className="menu-item" onClick={(e) => { closeMenu(e); setOpen(true); run('restart', {}, { reconnect: true }) }}>
                     <RotateCcw size={14} /> Restart
                   </button>
@@ -333,6 +355,7 @@ export function SessionDetail({ slug }: { slug: string }) {
                 </button>
               )}
             </div>
+            {doneRunning && <DoneProgress slug={slug} onClose={() => setDoneRunning(false)} />}
             {canTerminal ? (
               <TaskTerminal
                 key={`${slug}#${restartKey}`}
@@ -424,6 +447,108 @@ export function SessionDetail({ slug }: { slug: string }) {
       <Modal open={updatesModal} onClose={() => setUpdatesModal(false)} title="Updates" width={900}>
         <UpdatesTab slug={slug} updates={task.updates} startOpen />
       </Modal>
+    </div>
+  )
+}
+
+// Inline close-out progress shown when "Mark done" runs `flow done`. The CLI
+// performs three phases (git snapshot → status flip → headless KB/project
+// sweep) as one synchronous call; we surface them as live steps. The first two
+// are quick, so they advance on a short cadence; the sweep step holds in
+// "running" for the real duration until the action resolves.
+const DONE_STEPS = [
+  'Saving git close-out snapshot',
+  'Marking task as done',
+  'Distilling KB + project updates',
+]
+function DoneProgress({ slug, onClose }: { slug: string; onClose: () => void }) {
+  const [phase, setPhase] = useState(0)
+  const [state, setState] = useState<'running' | 'done' | 'error'>('running')
+  const [error, setError] = useState<string | null>(null)
+
+  useEffect(() => {
+    let cancelled = false
+    const timers = [
+      window.setTimeout(() => !cancelled && setPhase((p) => Math.max(p, 1)), 850),
+      window.setTimeout(() => !cancelled && setPhase((p) => Math.max(p, 2)), 1650),
+    ]
+    ;(async () => {
+      try {
+        // The close-out sweep (headless claude) can run well past the 30s
+        // default RPC timeout; give it the backend's full 2-minute budget + buffer.
+        await apiAction({ kind: 'done', target: slug }, 180000)
+        if (cancelled) return
+        setPhase(DONE_STEPS.length)
+        setState('done')
+        queryClient.invalidateQueries()
+        window.setTimeout(() => !cancelled && onClose(), 1200)
+      } catch (e) {
+        if (cancelled) return
+        setState('error')
+        setError(e instanceof Error ? e.message : 'close-out failed')
+      }
+    })()
+    return () => {
+      cancelled = true
+      timers.forEach(clearTimeout)
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [slug])
+
+  return (
+    <div className="done-progress">
+      <div className="done-card">
+        <div className="done-head">
+          {state === 'error' ? (
+            <XIcon size={18} className="danger-text" />
+          ) : state === 'done' ? (
+            <CheckCircle2 size={18} style={{ color: 'var(--ok)' }} />
+          ) : (
+            <Loader2 size={18} className="spin" style={{ color: 'var(--accent)' }} />
+          )}
+          <span className="h-lg">
+            {state === 'error' ? 'Close-out failed' : state === 'done' ? 'Task closed' : 'Closing task…'}
+          </span>
+        </div>
+        <div className="done-steps">
+          {DONE_STEPS.map((label, i) => {
+            const st =
+              state === 'error' && i === phase
+                ? 'error'
+                : state === 'done' || i < phase
+                ? 'done'
+                : i === phase
+                ? 'running'
+                : 'pending'
+            return (
+              <div key={i} className={`done-step ${st}`}>
+                <span className="done-step-icon">
+                  {st === 'done' ? (
+                    <Check size={13} />
+                  ) : st === 'running' ? (
+                    <Loader2 size={13} className="spin" />
+                  ) : st === 'error' ? (
+                    <XIcon size={13} />
+                  ) : (
+                    <Circle size={13} />
+                  )}
+                </span>
+                {label}
+              </div>
+            )
+          })}
+        </div>
+        {error ? (
+          <>
+            <div className="error-note" style={{ marginTop: 4 }}>{error}</div>
+            <button className="btn sm" style={{ alignSelf: 'flex-end' }} onClick={onClose}>Close</button>
+          </>
+        ) : (
+          <div className="faint" style={{ fontSize: 11.5 }}>
+            Distilling durable learnings into your KB &amp; project log — this can take a moment.
+          </div>
+        )}
+      </div>
     </div>
   )
 }

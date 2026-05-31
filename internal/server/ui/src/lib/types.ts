@@ -121,6 +121,7 @@ export interface KBFileView {
   size: number
   entries: number
   preview: string
+  content: string
 }
 
 export interface WorkdirView {

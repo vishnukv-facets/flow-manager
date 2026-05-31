@@ -1,8 +1,9 @@
 import { useEffect, useMemo, useState } from 'react'
 import { Brain, Search } from 'lucide-react'
-import { useUiData } from '../lib/query'
+import { useUiData, queryClient } from '../lib/query'
+import { apiPost } from '../lib/api'
 import { EmptyState, Loading } from '../components/ui'
-import { Md } from '../components/Markdown'
+import { DocEditor, wikiRefs, type Backlink } from '../components/DocEditor'
 
 export function Memories() {
   const { data: ui, isLoading } = useUiData()
@@ -33,6 +34,19 @@ export function Memories() {
     if (!selected || !filtered.some((s) => s.id === selected)) setSelected(filtered[0].id)
   }, [filtered, selected])
 
+  const active = filtered.find((s) => s.id === selected)
+
+  // Memories that reference the active one via [[label]] — resolved across the
+  // full source set (not just the filtered view). Computed before any early
+  // return so the hook order stays stable.
+  const backlinks = useMemo<Backlink[]>(() => {
+    if (!active) return []
+    const name = active.label.trim().toLowerCase()
+    return sources
+      .filter((s) => s.id !== active.id && wikiRefs(s.content ?? '').includes(name))
+      .map((s) => ({ name: s.label, onOpen: () => setSelected(s.id) }))
+  }, [sources, active])
+
   if (isLoading) return <div className="page"><Loading rows={5} /></div>
   if (sources.length === 0) {
     return (
@@ -42,7 +56,17 @@ export function Memories() {
     )
   }
 
-  const active = filtered.find((s) => s.id === selected)
+  const saveActive = async (text: string) => {
+    if (!active) return
+    await apiPost('/api/memory', { path: active.path, text })
+    await queryClient.invalidateQueries({ queryKey: ['ui-data'] })
+  }
+
+  const onWikiLink = (target: string) => {
+    const t = target.toLowerCase()
+    const hit = sources.find((s) => s.label.trim().toLowerCase() === t)
+    if (hit) setSelected(hit.id)
+  }
 
   return (
     <div className="page flush">
@@ -105,10 +129,16 @@ export function Memories() {
               <div className="detail-ref" style={{ marginBottom: 16 }}>{active.path}</div>
               {active.error ? (
                 <div className="error-note">{active.error}</div>
-              ) : active.content?.trim() ? (
-                <Md source={active.content} />
+              ) : active.available ? (
+                <DocEditor
+                  key={active.id}
+                  content={active.content ?? ''}
+                  onSave={saveActive}
+                  onWikiLink={onWikiLink}
+                  backlinks={backlinks}
+                />
               ) : (
-                <div className="faint">This source is empty.</div>
+                <div className="faint">This source is unavailable for editing.</div>
               )}
             </div>
           )}

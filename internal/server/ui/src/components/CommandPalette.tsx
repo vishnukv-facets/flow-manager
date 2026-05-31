@@ -18,6 +18,19 @@ import { useSearch, useUiData } from '../lib/query'
 import type { SearchResult } from '../lib/types'
 import { ProviderIcon, StatusDot } from './ui'
 import { fromSeconds, fromMinutes } from '../lib/format'
+import { getRecents, pushRecent, type RecentItem } from '../lib/recents'
+
+// Search scope chips — narrow results to one kind. 'all' shows everything.
+const SCOPES = [
+  { id: 'all', label: 'All' },
+  { id: 'tasks', label: 'Tasks' },
+  { id: 'projects', label: 'Projects' },
+  { id: 'playbooks', label: 'Playbooks' },
+  { id: 'updates', label: 'Updates' },
+  { id: 'memories', label: 'Memories' },
+  { id: 'transcripts', label: 'Transcripts' },
+] as const
+type ScopeId = (typeof SCOPES)[number]['id']
 
 interface Item {
   key: string
@@ -56,6 +69,8 @@ export function CommandPalette({ open, onClose }: { open: boolean; onClose: () =
   const [, navigate] = useLocation()
   const [q, setQ] = useState('')
   const [active, setActive] = useState(0)
+  const [scope, setScope] = useState<ScopeId>('all')
+  const [recents, setRecents] = useState<RecentItem[]>([])
   const inputRef = useRef<HTMLInputElement>(null)
   const listRef = useRef<HTMLDivElement>(null)
   const { data: search } = useSearch(q)
@@ -65,6 +80,8 @@ export function CommandPalette({ open, onClose }: { open: boolean; onClose: () =
     if (open) {
       setQ('')
       setActive(0)
+      setScope('all')
+      setRecents(getRecents())
       setTimeout(() => inputRef.current?.focus(), 10)
     }
   }, [open])
@@ -102,14 +119,24 @@ export function CommandPalette({ open, onClose }: { open: boolean; onClose: () =
     const waiting = agents.filter((a) => a.status === 'waiting')
     const running = agents.filter((a) => a.status === 'running')
     const idle = agents.filter((a) => a.status === 'idle' || a.status === 'stale')
-    const recent = [...agents].sort((a, b) => a.last_activity_sec - b.last_activity_sec).slice(0, 5)
     const groups: Group[] = []
+    // Recently-opened (persisted) — what you were actually working on.
+    if (recents.length)
+      groups.push({
+        label: 'Recent',
+        icon: <Clock3 size={12} />,
+        items: recents.map((r, i) => ({
+          key: `r-${r.to}-${i}`,
+          label: r.label,
+          sub: r.sub,
+          to: r.to,
+          icon: resultIcon(r.type || ''),
+        })),
+      })
     if (waiting.length)
       groups.push({ label: 'Needs your attention', icon: <AlertTriangle size={12} />, items: waiting.map(agentItem) })
     if (running.length)
       groups.push({ label: 'Running', icon: <Zap size={12} />, items: running.slice(0, 8).map(agentItem) })
-    if (recent.length)
-      groups.push({ label: 'Recent', icon: <Clock3 size={12} />, items: recent.map(agentItem) })
     if (idle.length)
       groups.push({ label: 'Idle', icon: <CircleDashed size={12} />, items: idle.slice(0, 8).map(agentItem) })
     groups.push({
@@ -125,7 +152,7 @@ export function CommandPalette({ open, onClose }: { open: boolean; onClose: () =
     })
     groups.push({ label: 'Go to', icon: <Hash size={12} />, items: NAV })
     return groups
-  }, [ui])
+  }, [ui, recents])
 
   const searchGroups = useMemo<Group[]>(() => {
     if (!search) return []
@@ -138,15 +165,19 @@ export function CommandPalette({ open, onClose }: { open: boolean; onClose: () =
         icon: resultIcon(r.type),
       }))
     const groups: Group[] = []
-    const push = (label: string, items: Item[]) => items.length && groups.push({ label, icon: <Hash size={12} />, items })
-    push('Tasks', toItems(search.tasks))
-    push('Projects', toItems(search.projects))
-    push('Playbooks', toItems(search.playbooks))
-    push('Updates', toItems(search.updates))
-    push('Memories', toItems(search.memories))
-    push('Transcripts', toItems(search.transcripts))
+    // A group shows only when the scope is "all" or matches that group's id.
+    const push = (id: ScopeId, label: string, items: Item[]) => {
+      if ((scope === 'all' || scope === id) && items.length)
+        groups.push({ label, icon: <Hash size={12} />, items })
+    }
+    push('tasks', 'Tasks', toItems(search.tasks))
+    push('projects', 'Projects', toItems(search.projects))
+    push('playbooks', 'Playbooks', toItems(search.playbooks))
+    push('updates', 'Updates', toItems(search.updates))
+    push('memories', 'Memories', toItems(search.memories))
+    push('transcripts', 'Transcripts', toItems(search.transcripts))
     return groups
-  }, [search])
+  }, [search, scope])
 
   const groups = q.trim() ? searchGroups : defaultGroups
   const flat = useMemo(() => groups.flatMap((g) => g.items), [groups])
@@ -162,9 +193,10 @@ export function CommandPalette({ open, onClose }: { open: boolean; onClose: () =
 
   if (!open) return null
 
-  const go = (to: string) => {
+  const go = (it: Item) => {
+    if (it.to && it.to !== '/') pushRecent({ label: it.label, sub: it.sub, to: it.to })
     onClose()
-    navigate(to)
+    navigate(it.to)
   }
 
   let idx = -1
@@ -187,12 +219,28 @@ export function CommandPalette({ open, onClose }: { open: boolean; onClose: () =
                 e.preventDefault()
                 setActive((a) => Math.max(0, a - 1))
               } else if (e.key === 'Enter' && flat[active]) {
-                go(flat[active].to)
+                go(flat[active])
               }
             }}
           />
           <span className="kbd">esc</span>
         </div>
+        {q.trim() && (
+          <div className="palette-scopes">
+            {SCOPES.map((s) => (
+              <button
+                key={s.id}
+                className={`palette-chip${scope === s.id ? ' active' : ''}`}
+                onClick={() => {
+                  setScope(s.id)
+                  setActive(0)
+                }}
+              >
+                {s.label}
+              </button>
+            ))}
+          </div>
+        )}
         <div className="palette-list" ref={listRef}>
           {flat.length === 0 && (
             <div className="palette-empty">{q.trim() ? 'No matches' : 'Loading…'}</div>
@@ -210,7 +258,7 @@ export function CommandPalette({ open, onClose }: { open: boolean; onClose: () =
                     key={it.key}
                     className={`palette-item${i === active ? ' active' : ''}`}
                     onMouseEnter={() => setActive(i)}
-                    onClick={() => go(it.to)}
+                    onClick={() => go(it)}
                   >
                     <span className="palette-item-icon dim">{it.icon}</span>
                     <span className="col" style={{ minWidth: 0, flex: 1 }}>

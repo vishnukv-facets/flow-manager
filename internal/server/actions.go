@@ -179,6 +179,19 @@ func (s *Server) runAction(req actionRequest) (actionResponse, int) {
 			return actionResponse{OK: false, Message: err.Error(), Output: out}, http.StatusInternalServerError
 		}
 		return actionResponse{OK: true, Message: "archived " + target, Output: out}, http.StatusOK
+	case "done":
+		if err := validateSlug(target); err != nil {
+			return actionResponse{OK: false, Message: err.Error()}, http.StatusBadRequest
+		}
+		// `flow done` flips status, snapshots git, and runs the headless KB /
+		// project-update close-out sweep (the slow part — within runFlowCommand's
+		// 2-minute budget). Output is returned so the UI can confirm which phases
+		// actually ran.
+		out, err := s.runFlowCommand("done", target)
+		if err != nil {
+			return actionResponse{OK: false, Message: err.Error(), Output: out}, http.StatusInternalServerError
+		}
+		return actionResponse{OK: true, Message: "marked " + target + " done", Output: out}, http.StatusOK
 	case "delete", "restore":
 		if err := validateSlug(target); err != nil {
 			return actionResponse{OK: false, Message: err.Error()}, http.StatusBadRequest
@@ -323,7 +336,45 @@ func (s *Server) destroyDeletedEntity(kind, slug string) (actionResponse, int) {
 	if err := tx.Commit(); err != nil {
 		return actionResponse{OK: false, Message: err.Error()}, http.StatusInternalServerError
 	}
+	// The row is gone; reclaim the on-disk directory the entity owned
+	// (tasks/<slug>, projects/<slug>, playbooks/<slug>) — its brief, updates,
+	// inbox.jsonl, and workspace. Best-effort: the authoritative delete is the
+	// row, so a leftover dir shouldn't fail the action, but destroy must fully
+	// clean up rather than orphaning files in ~/.flow.
+	if dir := s.entityDir(kind, slug); dir != "" {
+		_ = os.RemoveAll(dir)
+	}
 	return actionResponse{OK: true, Message: "deleted " + kind + " " + slug}, http.StatusOK
+}
+
+// entityDir resolves the ~/.flow directory that backs a trashable entity, with
+// the result confined to <FlowRoot>/<tasks|projects|playbooks>/ so a crafted
+// slug can never escape the data tree.
+func (s *Server) entityDir(kind, slug string) string {
+	if validateSlug(slug) != nil {
+		return ""
+	}
+	var sub string
+	switch strings.TrimSpace(kind) {
+	case "task":
+		sub = "tasks"
+	case "project":
+		sub = "projects"
+	case "playbook":
+		sub = "playbooks"
+	default:
+		return ""
+	}
+	root := strings.TrimSpace(s.cfg.FlowRoot)
+	if root == "" {
+		return ""
+	}
+	base := filepath.Clean(filepath.Join(root, sub)) + string(os.PathSeparator)
+	dir := filepath.Clean(filepath.Join(root, sub, slug))
+	if !strings.HasPrefix(dir, base) {
+		return ""
+	}
+	return dir
 }
 
 func entityTable(kind string) (string, error) {

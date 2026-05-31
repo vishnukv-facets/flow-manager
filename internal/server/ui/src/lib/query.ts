@@ -185,7 +185,10 @@ export function useSearch(query: string) {
     staleTime: 2000,
     queryFn: () =>
       apiGet<SearchResponse>(
-        `/api/search?q=${encodeURIComponent(q)}&in=tasks,projects,playbooks,updates,memories&limit=8`,
+        // `in` takes document scopes (briefs cover task/project/playbook briefs);
+        // entity-type names like "tasks" are invalid and 400. The palette's
+        // scope chips filter the returned groups client-side.
+        `/api/search?q=${encodeURIComponent(q)}&in=all&limit=8`,
       ),
   })
 }

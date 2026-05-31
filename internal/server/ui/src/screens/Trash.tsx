@@ -1,6 +1,7 @@
 import { RotateCcw, Trash2, Flame } from 'lucide-react'
 import { useUiData, useAction } from '../lib/query'
 import { EmptyState, Loading } from '../components/ui'
+import { confirmAction } from '../lib/confirm'
 import type { TrashItem } from '../lib/types'
 
 export function Trash() {
@@ -37,16 +38,28 @@ export function Trash() {
               <button
                 className="btn sm"
                 disabled={action.isPending}
-                onClick={() => action.mutate({ kind: 'restore', target: it.slug, entity_kind: it.kind })}
+                onClick={async () => {
+                  const ok = await confirmAction({
+                    title: `Restore this ${it.kind}?`,
+                    body: `“${it.name}” will be moved back into your active ${it.kind}s.`,
+                    confirmLabel: 'Restore',
+                  })
+                  if (ok) action.mutate({ kind: 'restore', target: it.slug, entity_kind: it.kind })
+                }}
               >
                 <RotateCcw size={13} /> Restore
               </button>
               <button
-                className="btn sm"
+                className="btn sm danger"
                 disabled={action.isPending}
-                onClick={() => {
-                  if (confirm(`Permanently delete ${it.kind} "${it.name}"? This cannot be undone.`))
-                    action.mutate({ kind: 'destroy', target: it.slug, entity_kind: it.kind })
+                onClick={async () => {
+                  const ok = await confirmAction({
+                    title: `Permanently delete this ${it.kind}?`,
+                    body: `“${it.name}” will be permanently removed. This cannot be undone.`,
+                    confirmLabel: 'Destroy',
+                    danger: true,
+                  })
+                  if (ok) action.mutate({ kind: 'destroy', target: it.slug, entity_kind: it.kind })
                 }}
               >
                 <Flame size={13} /> Destroy

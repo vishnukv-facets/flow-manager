@@ -681,6 +681,50 @@ select.input {
   border-top: 1px solid var(--border);
   margin: 1.3em 0;
 }
+/* [[wiki-link]] cross-references in KB / memory docs */
+.md a.wikilink {
+  color: var(--accent-hi);
+  background: var(--accent-soft);
+  border-radius: var(--r-xs);
+  padding: 0 4px;
+  text-decoration: none;
+  font-weight: 500;
+  cursor: pointer;
+}
+.md a.wikilink:hover {
+  background: var(--accent-soft);
+  text-decoration: underline;
+}
+
+/* inline doc editor (KB + memories) */
+.doc-editor {
+  min-height: 360px;
+  resize: vertical;
+  font-family: var(--font-mono);
+  font-size: 12.5px;
+  line-height: 1.6;
+}
+.backlinks {
+  margin-top: 6px;
+  padding-top: 14px;
+  border-top: 1px solid var(--border-faint);
+}
+.backlink-chip {
+  display: inline-flex;
+  align-items: center;
+  padding: 4px 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--r-pill);
+  background: var(--bg-2);
+  color: var(--text-2);
+  font-size: 12px;
+  cursor: pointer;
+  transition: border-color var(--dur-1) var(--ease), color var(--dur-1) var(--ease);
+}
+.backlink-chip:hover {
+  border-color: var(--accent-line);
+  color: var(--text);
+}
 
 /* ------------------------------ terminal -------------------------------- */
 :root {
@@ -753,6 +797,32 @@ select.input {
   border: none;
   outline: none;
   font-size: 15px;
+}
+.palette-scopes {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  padding: 9px 14px;
+  border-bottom: 1px solid var(--border-faint);
+}
+.palette-chip {
+  padding: 3px 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--r-pill);
+  background: var(--bg-2);
+  color: var(--text-2);
+  font-size: 11.5px;
+  cursor: pointer;
+  transition: border-color var(--dur-1) var(--ease), background var(--dur-1) var(--ease), color var(--dur-1) var(--ease);
+}
+.palette-chip:hover {
+  border-color: var(--accent-line);
+  color: var(--text);
+}
+.palette-chip.active {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+  color: var(--text);
 }
 .palette-list {
   max-height: 52vh;
@@ -1065,6 +1135,84 @@ select.input {
   border-radius: var(--r);
   overflow: hidden;
   background: var(--bg);
+  position: relative;
+}
+
+/* inline close-out progress (Mark done) overlaying the terminal area */
+.done-progress {
+  position: absolute;
+  inset: 0;
+  z-index: 20;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+  background: color-mix(in srgb, var(--bg) 78%, transparent);
+  backdrop-filter: blur(3px);
+  animation: ftip-in var(--dur-2) var(--ease-out);
+}
+.done-card {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  width: 100%;
+  max-width: 420px;
+  padding: 20px 22px;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--r-lg);
+  background: var(--bg-1);
+  box-shadow: var(--shadow-pop);
+}
+.done-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.done-steps {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.done-step {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 13px;
+  color: var(--text-3);
+  transition: color var(--dur-1) var(--ease);
+}
+.done-step-icon {
+  display: inline-grid;
+  place-items: center;
+  width: 18px;
+  height: 18px;
+  color: var(--text-3);
+}
+.done-step.running {
+  color: var(--text);
+}
+.done-step.running .done-step-icon {
+  color: var(--accent);
+}
+.done-step.done {
+  color: var(--text-2);
+}
+.done-step.done .done-step-icon {
+  color: var(--ok);
+}
+.done-step.error {
+  color: var(--danger);
+}
+.done-step.error .done-step-icon {
+  color: var(--danger);
+}
+
+.btn.ok {
+  color: var(--ok);
+  border-color: color-mix(in srgb, var(--ok) 45%, transparent);
+  background: var(--ok-soft);
+}
+.btn.ok:hover {
+  border-color: var(--ok);
 }
 .term-bar {
   display: flex;

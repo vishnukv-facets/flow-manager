@@ -898,7 +898,8 @@ func (s *Server) handleKB(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleKBFile(w http.ResponseWriter, r *http.Request) {
-	if !getOnly(w, r) {
+	if r.Method != http.MethodGet && r.Method != http.MethodHead && r.Method != http.MethodPut {
+		w.WriteHeader(http.StatusMethodNotAllowed)
 		return
 	}
 	parts, ok := routeParts(w, r, "/api/kb/")
@@ -920,7 +921,36 @@ func (s *Server) handleKBFile(w http.ResponseWriter, r *http.Request) {
 		http.NotFound(w, r)
 		return
 	}
-	serveMarkdown(w, filepath.Join(s.cfg.FlowRoot, "kb", parts[0]))
+	path := filepath.Join(s.cfg.FlowRoot, "kb", parts[0])
+	if r.Method == http.MethodPut {
+		s.saveKBFile(w, r, path, parts[0])
+		return
+	}
+	serveMarkdown(w, path)
+}
+
+func (s *Server) saveKBFile(w http.ResponseWriter, r *http.Request, path, name string) {
+	// Confine writes to the kb/ dir even if the (already-validated) name somehow
+	// resolves elsewhere — defense in depth, matching saveProjectBrief.
+	cleanBase := filepath.Join(filepath.Clean(s.cfg.FlowRoot), "kb") + string(os.PathSeparator)
+	if !strings.HasPrefix(filepath.Clean(path), cleanBase) {
+		writeError(w, errors.New("invalid KB path"), http.StatusBadRequest)
+		return
+	}
+	body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, 1024*1024))
+	if err != nil {
+		writeError(w, err, http.StatusBadRequest)
+		return
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		writeError(w, err, http.StatusInternalServerError)
+		return
+	}
+	if err := os.WriteFile(path, body, 0o644); err != nil {
+		writeError(w, err, http.StatusInternalServerError)
+		return
+	}
+	writeJSON(w, map[string]any{"ok": true, "name": name})
 }
 
 func (s *Server) handleSearch(w http.ResponseWriter, r *http.Request) {

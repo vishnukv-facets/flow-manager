@@ -33,8 +33,8 @@ export async function apiGetText(path: string): Promise<string> {
   return ''
 }
 
-export async function apiAction(req: ActionRequest): Promise<ActionResponse> {
-  const r = await rpc.request({ method: 'POST', path: '/api/actions', body: req })
+export async function apiAction(req: ActionRequest, timeoutMs?: number): Promise<ActionResponse> {
+  const r = await rpc.request({ method: 'POST', path: '/api/actions', body: req, timeoutMs })
   const data = (r.json ?? {}) as ActionResponse
   if (r.status >= 400 || data.ok === false)
     throw new ApiError(r.status, data.message || errText(r))

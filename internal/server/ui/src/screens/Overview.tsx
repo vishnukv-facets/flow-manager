@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState, type ReactNode } from 'react'
 import { Link, useLocation } from 'wouter'
-import { ArrowRight, Activity, Repeat, AlertTriangle, TerminalSquare, Inbox as InboxIcon } from 'lucide-react'
+import { ArrowRight, Activity, Repeat, AlertTriangle, Snowflake, TerminalSquare, Inbox as InboxIcon } from 'lucide-react'
 import { useInbox, useQuote, useUiData } from '../lib/query'
 import { AgentCard } from '../components/AgentCard'
 import { EmptyState, ErrorNote, Loading, ProviderIcon, SourceIcon, Sparkline } from '../components/ui'
@@ -269,6 +269,10 @@ export function Overview() {
   // `dead` = a session that exited abnormally (stop_failure) — the old UI's
   // "CRASHED"; surface it prominently so it can be restarted.
   const crashed = ui.AGENTS.filter((a) => a.status === 'dead')
+  // `stale` = an in-progress task whose session has gone quiet past the stale
+  // threshold (FLOW_STALE_DAYS, default 3d). These don't show in any other
+  // section, so a "going cold" shelf keeps them from being forgotten.
+  const stale = ui.AGENTS.filter((a) => a.status === 'stale')
   const live = ui.AGENTS.filter((a) => a.status === 'idle' || a.status === 'released' || a.status === 'running')
   const sessions = [...running, ...live.filter((a) => a.status !== 'running')]
   const runsThisWeek = ui.PLAYBOOKS_MC.reduce((n, p) => n + p.runs_week, 0)
@@ -352,6 +356,20 @@ export function Overview() {
               </div>
               <div className="grid cards stagger">
                 {crashed.map((a) => <AgentCard key={a.slug} agent={a} />)}
+              </div>
+            </section>
+          )}
+
+          {stale.length > 0 && (
+            <section>
+              <div className="section-head">
+                <span className="eyebrow"><Snowflake size={13} /> Going cold</span>
+                <span className="section-count">{stale.length}</span>
+                <div className="spacer" />
+                <span className="faint" style={{ fontSize: 12 }}>no activity in a while</span>
+              </div>
+              <div className="grid cards stagger">
+                {stale.map((a) => <AgentCard key={a.slug} agent={a} />)}
               </div>
             </section>
           )}

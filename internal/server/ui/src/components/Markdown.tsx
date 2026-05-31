@@ -9,24 +9,48 @@ import rehypeHighlight from 'rehype-highlight'
 export const Md = memo(function Md({
   source,
   className,
+  onWikiLink,
 }: {
   source: string
   className?: string
+  // When provided, [[name]] tokens render as clickable in-app links that call
+  // this instead of navigating away — used for KB/memory cross-references.
+  onWikiLink?: (name: string) => void
 }) {
+  const src = onWikiLink
+    ? (source || '').replace(/\[\[([^\]\n]+)\]\]/g, (_m, n: string) => `[${n.trim()}](#wiki:${encodeURIComponent(n.trim())})`)
+    : source || ''
   return (
     <div className={`md${className ? ' ' + className : ''}`}>
       <ReactMarkdown
         remarkPlugins={[remarkGfm]}
         rehypePlugins={[[rehypeHighlight, { detect: true, ignoreMissing: true }]]}
         components={{
-          a: ({ children, ...props }) => (
-            <a {...props} target="_blank" rel="noreferrer noopener">
-              {children}
-            </a>
-          ),
+          a: ({ children, href, ...props }) => {
+            if (onWikiLink && href?.startsWith('#wiki:')) {
+              const name = decodeURIComponent(href.slice('#wiki:'.length))
+              return (
+                <a
+                  className="wikilink"
+                  href={href}
+                  onClick={(e) => {
+                    e.preventDefault()
+                    onWikiLink(name)
+                  }}
+                >
+                  {children}
+                </a>
+              )
+            }
+            return (
+              <a {...props} href={href} target="_blank" rel="noreferrer noopener">
+                {children}
+              </a>
+            )
+          },
         }}
       >
-        {source || ''}
+        {src}
       </ReactMarkdown>
     </div>
   )

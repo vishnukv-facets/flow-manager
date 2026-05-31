@@ -325,6 +325,7 @@ type KBFileView struct {
 	Size     int64  `json:"size"`
 	Entries  int    `json:"entries"`
 	Preview  string `json:"preview"`
+	Content  string `json:"content"`
 }
 
 type WorkdirView struct {

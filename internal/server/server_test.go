@@ -10,6 +10,7 @@ import (
 	"flow/internal/iterm"
 	"flow/internal/monitor"
 	"fmt"
+	"io/fs"
 	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
@@ -880,12 +881,23 @@ func TestDestroyOnlyDeletesTrashItems(t *testing.T) {
 	); err != nil {
 		t.Fatal(err)
 	}
+	// The on-disk task directory must be reclaimed on destroy, not orphaned.
+	taskDir := filepath.Join(root, "tasks", "build-ui")
+	if err := os.MkdirAll(filepath.Join(taskDir, "updates"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(taskDir, "brief.md"), []byte("body"), 0o644); err != nil {
+		t.Fatal(err)
+	}
 	resp, status = srv.runAction(actionRequest{Kind: "destroy", EntityKind: "task", Slug: "build-ui"})
 	if status != http.StatusOK || !resp.OK {
 		t.Fatalf("trash destroy status = %d, resp = %+v", status, resp)
 	}
 	if _, err := flowdb.GetTask(db, "build-ui"); !errors.Is(err, sql.ErrNoRows) {
 		t.Fatalf("task after destroy err = %v, want sql.ErrNoRows", err)
+	}
+	if _, err := os.Stat(taskDir); !errors.Is(err, fs.ErrNotExist) {
+		t.Fatalf("task dir after destroy: stat err = %v, want not-exist (dir should be removed)", err)
 	}
 	var docs int
 	if err := db.QueryRow(`SELECT COUNT(*) FROM search_docs WHERE entity_type = 'task' AND entity_slug = 'build-ui'`).Scan(&docs); err != nil {
