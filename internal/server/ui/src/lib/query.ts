@@ -59,7 +59,16 @@ function qs(params: Record<string, string | boolean | number | undefined>): stri
 
 // ----- queries ------------------------------------------------------------
 export function useUiData() {
-  return useQuery({ queryKey: ['ui-data'], queryFn: () => apiGet<UiData>('/api/ui-data') })
+  // refetchInterval keeps live figures (token tallies, activity, statuses) moving
+  // in near-real-time even between /ws/events pushes — token usage grows mid-turn
+  // without emitting an event, so event-only invalidation would look frozen. The
+  // server recomputes cheaply (transcript usage is mtime-cached); react-query
+  // pauses this while the tab is hidden, so it's not wasteful.
+  return useQuery({
+    queryKey: ['ui-data'],
+    queryFn: () => apiGet<UiData>('/api/ui-data'),
+    refetchInterval: 5000,
+  })
 }
 export function useOverview() {
   return useQuery({ queryKey: ['overview'], queryFn: () => apiGet<OverviewView>('/api/overview') })

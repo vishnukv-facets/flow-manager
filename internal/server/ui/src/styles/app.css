@@ -760,14 +760,20 @@ select.input {
   padding: 12px 14px;
 }
 /* The element xterm.js renders into. No padding (see above); it just fills the
-   padded content area of .flow-term, and FitAddon measures it exactly. */
+   padded content area of .flow-term, and FitAddon measures it exactly.
+   overflow:hidden + the bounded .xterm height below guarantee the grid can never
+   spill past the host — so even if a fit lags a layout change, the prompt stays
+   inside the scrollable viewport instead of being pushed off-screen (the
+   "can't reach the input box until I zoom/refresh" bug). */
 .flow-term .xterm-host {
   flex: 1;
   min-height: 0;
   min-width: 0;
+  overflow: hidden;
 }
-.flow-term .xterm {
-  height: 100%;
+.flow-term .xterm,
+.flow-term .xterm .xterm-viewport {
+  height: 100% !important;
 }
 /* Let the panel background show through; xterm paints cell backgrounds itself. */
 .flow-term .xterm .xterm-viewport {
@@ -2677,54 +2683,35 @@ select.input {
   overflow-y: auto;
 }
 
-/* agent selector tiles */
-.agent-pick {
-  display: flex;
-  gap: 8px;
-}
-.agent-tile {
-  display: flex;
+/* agent selector — a 2-state segmented switch (Claude / Codex), built on
+   .segmented so it matches the permission control beside it. The active
+   provider's segment is accent-filled so the toggle state reads at a glance. */
+.agent-seg button {
+  display: inline-flex;
   align-items: center;
-  gap: 8px;
-  flex: 1;
-  min-width: 0;
-  padding: 9px 12px;
-  border: 1px solid var(--border);
-  border-radius: var(--r-sm);
-  background: var(--bg-2);
-  color: var(--text-2);
-  font-size: 13px;
-  cursor: pointer;
-  transition: border-color var(--dur-1) var(--ease), background var(--dur-1) var(--ease);
+  gap: 7px;
+  max-width: 160px;
 }
-.agent-tile:hover {
-  border-color: var(--accent-line);
+.agent-seg button .clip {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
-.agent-tile.active {
-  border-color: var(--accent);
+.agent-seg button img,
+.agent-seg button svg {
+  flex: none;
+}
+.agent-seg button.active {
   background: var(--accent-soft);
   color: var(--text);
+  box-shadow: none;
 }
-.agent-tile.disabled {
+.agent-seg button:disabled {
+  opacity: 0.45;
   cursor: not-allowed;
-  opacity: 0.5;
-  border-style: dashed;
-  background: var(--bg-1);
 }
-.agent-tile.disabled:hover {
-  border-color: var(--border);
-}
-.agent-tile.disabled img {
+.agent-seg button:disabled img {
   filter: grayscale(1);
-}
-.agent-tile-note {
-  margin-left: auto;
-  font-family: var(--font-mono);
-  font-size: 9.5px;
-  text-transform: uppercase;
-  letter-spacing: 0.04em;
-  color: var(--text-3);
-  white-space: nowrap;
 }
 
 /* recent-workdir quick-pick pills (New task form) */

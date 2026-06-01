@@ -33,18 +33,23 @@ func TestCompleteUTF8PrefixReplacesInvalidBytes(t *testing.T) {
 	}
 }
 
-// TokensUsed is the last turn's full total (context occupancy, incl. cache);
-// TokensSession is cumulative NEW work, EXCLUDING cache re-reads.
+// TokensUsed is the last turn's full total (context occupancy, incl. cache).
+// TokensSession is cumulative "work done" — fresh input + output, EXCLUDING both
+// cache re-reads AND cache-creation churn.
 func TestAccumulateTranscriptUsageSumsClaudeSession(t *testing.T) {
 	var stats transcriptUsageStats
-	accumulateTranscriptUsage(&stats, []byte(`{"type":"assistant","message":{"model":"claude","usage":{"input_tokens":10,"cache_read_input_tokens":1000,"output_tokens":20}}}`))
+	// Turn 1 also writes 5000 tokens to cache (cache_creation) — that must NOT
+	// count toward session work (it's the 5-min-TTL re-caching that inflated real
+	// sessions ~10x).
+	accumulateTranscriptUsage(&stats, []byte(`{"type":"assistant","message":{"model":"claude","usage":{"input_tokens":10,"cache_read_input_tokens":1000,"cache_creation_input_tokens":5000,"output_tokens":20}}}`))
 	accumulateTranscriptUsage(&stats, []byte(`{"type":"assistant","message":{"model":"claude","usage":{"input_tokens":5,"cache_read_input_tokens":1100,"output_tokens":30}}}`))
 	if stats.TokensUsed != 1135 { // context = last turn total: 5+1100+30
 		t.Fatalf("TokensUsed = %d, want 1135 (context = last turn)", stats.TokensUsed)
 	}
-	// freshTotal per turn excludes cache_read: (10+20) + (5+30) = 65 (not 2165).
+	// work = fresh input + output, excluding cache_read AND cache_creation:
+	// (10+20) + (5+30) = 65 (NOT 2165 with cache_read, NOT 5065 with cache_creation).
 	if stats.TokensSession != 65 {
-		t.Fatalf("TokensSession = %d, want 65 (cumulative, cache-reads excluded)", stats.TokensSession)
+		t.Fatalf("TokensSession = %d, want 65 (work only: cache reads + cache_creation excluded)", stats.TokensSession)
 	}
 }
 

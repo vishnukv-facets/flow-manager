@@ -32,27 +32,22 @@ const tmuxConfigBody = `# flow tmux defaults (auto-managed; safe to delete — f
 # Edit your personal ~/.tmux.conf for permanent customization — it is
 # sourced at the bottom of this file and wins on conflicts.
 
-# Mouse wheel scrolls tmux history. Enters copy-mode automatically;
-# press 'q' or Escape to exit. Drag-select copies to OS clipboard on
-# any modern terminal (OSC 52). This is the #1 ergonomic miss in
-# default tmux.
-set -g mouse on
+# Mouse OFF. The browser terminal (xterm.js) is the real UI: it owns scrolling
+# (its own scrollback, seeded from tmux history on attach) and text selection
+# (native selection → clipboard). With mouse ON, tmux grabs the wheel — and
+# because flow runs the agent with mouse tracking disabled, a single scroll
+# drops the pane into copy-mode: the view freezes, a "[pos/total]" indicator
+# appears, and the render duplicates/garbles. tmux is invisible plumbing here,
+# so it must never touch the mouse.
+set -g mouse off
 
-# Clipboard pass-through (OSC 52). With mouse mode on, drag-select
-# enters tmux copy-mode and never reaches the browser as a DOM
-# selection; without this, the highlight is invisible to xterm.js
-# and nothing ever lands on the OS clipboard. ` + "`on`" + ` makes tmux emit
-# OSC 52 for its own copy commands too (not just inner apps), which
-# is what lets flow's browser terminal capture drag-selections and
-# write them to the page's clipboard.
+# Size each window to the latest (browser) client, not the smallest of all
+# clients, so the grid tracks the browser terminal on resize.
+set -g window-size latest
+
+# Let an inner app's own OSC 52 reach the outer terminal. Harmless with mouse
+# off; the browser terminal's native selection handles drag-to-copy.
 set -g set-clipboard on
-
-# Mouse-drag-end: copy to the active clipboard target (which is now
-# OSC 52 → outer terminal) and exit copy-mode, so a single drag is
-# the entire copy gesture. Bind both copy-mode and copy-mode-vi so
-# this works regardless of the user's mode-keys preference.
-bind-key -T copy-mode    MouseDragEnd1Pane send-keys -X copy-pipe-and-cancel
-bind-key -T copy-mode-vi MouseDragEnd1Pane send-keys -X copy-pipe-and-cancel
 
 # Hide tmux's status bar. flow's web UI already shows the session name,
 # status, and branch in its own chrome, so the bar is redundant — and the
@@ -119,8 +114,16 @@ func ensureSharedTerminalScrollOptions(name string) error {
 	if name == "" {
 		return fmt.Errorf("tmux session name not set")
 	}
-	if out, err := sharedTerminalCommand("set-option", "-t", name, "mouse", "on"); err != nil {
-		return fmt.Errorf("enable tmux mouse for %s: %w: %s", name, err, strings.TrimSpace(string(out)))
+	// Mouse OFF (session-scoped, so it wins over any global). The browser
+	// terminal owns scrolling and selection; tmux owning the wheel drops the
+	// pane into copy-mode on a single scroll and garbles the render. This also
+	// flips existing sessions on reattach, not just freshly-created ones.
+	if out, err := sharedTerminalCommand("set-option", "-t", name, "mouse", "off"); err != nil {
+		return fmt.Errorf("disable tmux mouse for %s: %w: %s", name, err, strings.TrimSpace(string(out)))
+	}
+	// Track the latest (browser) client's size so the pane matches the xterm grid.
+	if out, err := sharedTerminalCommand("set-option", "-t", name, "window-size", "latest"); err != nil {
+		return fmt.Errorf("set tmux window-size for %s: %w: %s", name, err, strings.TrimSpace(string(out)))
 	}
 	// Hide the status bar on already-running sessions too (new sessions get it
 	// via the creation args). flow's UI shows session info in its own chrome,
@@ -134,44 +137,27 @@ func ensureSharedTerminalScrollOptions(name string) error {
 	if out, err := sharedTerminalCommand("set-window-option", "-t", name+":", "history-limit", sharedTerminalHistoryLimit); err != nil {
 		return fmt.Errorf("set tmux history limit for %s: %w: %s", name, err, strings.TrimSpace(string(out)))
 	}
-	if err := ensureSharedTerminalCopyBindings(); err != nil {
-		return err
-	}
+	// Clear any copy-mode a previous (mouse-on) attach left the pane stuck in, so
+	// the live view isn't frozen. Best-effort: it errors with "not in a mode"
+	// when the pane is already live, which is fine to ignore.
+	_, _ = sharedTerminalCommand("send-keys", "-t", name, "-X", "cancel")
 	return nil
 }
 
 func ensureSharedTerminalDefaultScrollOptions() error {
-	if out, err := sharedTerminalCommand("set-option", "-g", "mouse", "on"); err != nil {
-		return fmt.Errorf("enable tmux mouse globally: %w: %s", err, strings.TrimSpace(string(out)))
+	// Mouse off (see ensureSharedTerminalScrollOptions): the browser terminal
+	// owns scrolling/selection; tmux must not grab the wheel into copy-mode.
+	if out, err := sharedTerminalCommand("set-option", "-g", "mouse", "off"); err != nil {
+		return fmt.Errorf("disable tmux mouse globally: %w: %s", err, strings.TrimSpace(string(out)))
+	}
+	if out, err := sharedTerminalCommand("set-option", "-g", "window-size", "latest"); err != nil {
+		return fmt.Errorf("set tmux window-size globally: %w: %s", err, strings.TrimSpace(string(out)))
 	}
 	if out, err := sharedTerminalCommand("set-option", "-g", "set-clipboard", "on"); err != nil {
 		return fmt.Errorf("enable tmux OSC 52 clipboard globally: %w: %s", err, strings.TrimSpace(string(out)))
 	}
 	if out, err := sharedTerminalCommand("set-window-option", "-g", "history-limit", sharedTerminalHistoryLimit); err != nil {
 		return fmt.Errorf("set tmux global history limit: %w: %s", err, strings.TrimSpace(string(out)))
-	}
-	if err := ensureSharedTerminalCopyBindings(); err != nil {
-		return err
-	}
-	return nil
-}
-
-// ensureSharedTerminalCopyBindings rebinds MouseDragEnd1Pane to
-// copy-pipe-and-cancel in both copy-mode and copy-mode-vi. Without this
-// the user's selection sits in tmux's internal buffer and never reaches
-// the OS clipboard via OSC 52 — which, combined with mouse-mode being
-// on, is why drag-to-copy appears broken in the browser terminal.
-// Bindings are server-global in tmux, so a single call covers every
-// session attached to the running server.
-func ensureSharedTerminalCopyBindings() error {
-	for _, table := range []string{"copy-mode", "copy-mode-vi"} {
-		if out, err := sharedTerminalCommand(
-			"bind-key", "-T", table,
-			"MouseDragEnd1Pane",
-			"send-keys", "-X", "copy-pipe-and-cancel",
-		); err != nil {
-			return fmt.Errorf("bind tmux MouseDragEnd1Pane in %s: %w: %s", table, err, strings.TrimSpace(string(out)))
-		}
 	}
 	return nil
 }

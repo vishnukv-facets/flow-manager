@@ -12,6 +12,22 @@ func TestContextWindowForModel(t *testing.T) {
 	if got := contextWindowForModel("claude", "claude-opus-4-6"); got != 1000000 {
 		t.Fatalf("opus-4-6 = %d, want 1000000", got)
 	}
+	// The bug this fixes: opus-4-8 (and any future opus-4.6+) must be 1M, not the
+	// 200k that the old hardcoded 4-6/4-7 check produced (which clamped the bar to
+	// a bogus "381k/381k").
+	if got := contextWindowForModel("claude", "claude-opus-4-8"); got != 1000000 {
+		t.Fatalf("opus-4-8 = %d, want 1000000", got)
+	}
+	if got := contextWindowForModel("claude", "claude-opus-4-8-20260101"); got != 1000000 {
+		t.Fatalf("dated opus-4-8 = %d, want 1000000", got)
+	}
+	if got := contextWindowForModel("claude", "claude-opus-4-8[1m]"); got != 1000000 {
+		t.Fatalf("opus-4-8[1m] = %d, want 1000000", got)
+	}
+	// Older Opus 4 (pre-4.6) stays 200k; the [1m] tag still bumps it.
+	if got := contextWindowForModel("claude", "claude-opus-4-1"); got != 200000 {
+		t.Fatalf("opus-4-1 = %d, want 200000", got)
+	}
 	if got := contextWindowForModel("claude", "claude-sonnet-4-5"); got != 200000 {
 		t.Fatalf("sonnet-4-5 = %d, want 200000", got)
 	}

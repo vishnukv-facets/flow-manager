@@ -202,11 +202,17 @@ type transcriptUsageStats struct {
 	// window).
 	TokensUsed int
 	TokensMax  int
-	// TokensSession is the cumulative tokens CONSUMED this session — new work
-	// only, EXCLUDING cache re-reads (which would double-count the whole context
-	// every turn and balloon a long session into the hundreds of millions, e.g.
-	// 538M). Accumulated per turn via freshTotal(). This is the header pill
-	// ("tokens used this session").
+	// TokensSession is the cumulative "work done" this session: tokens the model
+	// actually generated plus genuinely-fresh input — EXCLUDING both cache
+	// re-reads AND cache-creation churn. Accumulated per turn via freshTotal().
+	// This is the header pill ("tokens used this session") and what the Mission
+	// Control "tokens · all sessions" panel sums, so the two correlate.
+	//
+	// Why exclude cache_creation: Claude's prompt cache has a 5-minute TTL, so a
+	// long session re-writes the SAME context to cache dozens of times. Summing
+	// cache_creation counts that churn as fresh work and inflates a session ~10x
+	// (e.g. a 236k-context session showed 20M). Cache reads inflate even worse
+	// (~538M). Both are real billed cost but not "work"; we report work.
 	TokensSession int
 	Model         string
 	LastTimestamp string
@@ -276,8 +282,8 @@ func sessionTranscriptUsageStats(path string) transcriptUsageStats {
 				} else if used := payload.Info.TotalTokenUsage.total(); used > 0 {
 					stats.TokensUsed = used
 				}
-				if total := payload.Info.TotalTokenUsage.total(); total > 0 {
-					stats.TokensSession = total // Codex: reported running total
+				if fresh := payload.Info.TotalTokenUsage.freshTotal(); fresh > 0 {
+					stats.TokensSession = fresh // Codex: running total, cache-excluded
 				}
 				if payload.Info.ModelContextWindow > 0 {
 					stats.TokensMax = payload.Info.ModelContextWindow
@@ -300,20 +306,26 @@ func (u transcriptTokenUsage) total() int {
 		u.ReasoningOutputTokens
 }
 
-// freshTotal counts only NEW work for a turn — it EXCLUDES cache *reads*
-// (re-reading context already counted on earlier turns). Summing total() per
-// turn double-counts the cached context every turn, ballooning a session into
-// the hundreds of millions (e.g. 218k context × thousands of turns ≈ 538M);
-// freshTotal is the accurate "tokens consumed this session" figure. Claude
-// reports new input in InputTokens with cache reads separate in
-// CacheReadInputTokens; Codex bundles the cached portion into InputTokens,
-// exposed as CachedInputTokens, so subtract it.
+// freshTotal is a turn's "work done": tokens the model generated plus
+// genuinely-fresh input, EXCLUDING both cache reads and cache-creation.
+//
+//   - Cache reads: re-reading already-counted context every turn. Summing them
+//     double-counts the whole window each turn (~538M for a long session).
+//   - Cache creation: re-writing the SAME context to cache when Claude's 5-min
+//     cache TTL lapses. Summing it counts the same context dozens of times and
+//     inflates a session ~10x (a 236k-context session summed to 20M).
+//
+// Both are real billed tokens but represent caching mechanics, not work, so we
+// drop them and report (fresh input + output + reasoning). Claude reports fresh
+// input in InputTokens (cache reads are separate in CacheReadInputTokens); Codex
+// bundles the cached portion into InputTokens, exposed as CachedInputTokens, so
+// subtract it.
 func (u transcriptTokenUsage) freshTotal() int {
 	in := u.InputTokens - u.CachedInputTokens
 	if in < 0 {
 		in = 0
 	}
-	return in + u.CacheCreationInputTokens + u.OutputTokens + u.ReasoningOutputTokens
+	return in + u.OutputTokens + u.ReasoningOutputTokens
 }
 
 func parseTranscriptLine(line []byte, offset int64) []TranscriptEntry {

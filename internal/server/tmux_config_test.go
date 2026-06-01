@@ -37,11 +37,10 @@ func TestEnsureTmuxConfigWritesFileWhenAbsent(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, want := range []string{
-		"set -g mouse on",
+		"set -g mouse off",
+		"set -g window-size latest",
 		"set -g set-clipboard on",
 		"set -g history-limit 2147483647",
-		"bind-key -T copy-mode    MouseDragEnd1Pane send-keys -X copy-pipe-and-cancel",
-		"bind-key -T copy-mode-vi MouseDragEnd1Pane send-keys -X copy-pipe-and-cancel",
 		"~/.tmux.conf",
 	} {
 		if !strings.Contains(string(contents), want) {
@@ -123,15 +122,19 @@ func TestEnsureSharedTerminalScrollOptionsAppliesPerSession(t *testing.T) {
 
 	got := strings.TrimSpace(commandLog(commands))
 	for _, want := range []string{
-		"set-option -t flow-build-ui mouse on",
+		"set-option -t flow-build-ui mouse off",
+		"set-option -t flow-build-ui window-size latest",
 		"set-option -t flow-build-ui set-clipboard on",
 		"set-window-option -t flow-build-ui: history-limit 2147483647",
-		"bind-key -T copy-mode MouseDragEnd1Pane send-keys -X copy-pipe-and-cancel",
-		"bind-key -T copy-mode-vi MouseDragEnd1Pane send-keys -X copy-pipe-and-cancel",
+		"send-keys -t flow-build-ui -X cancel",
 	} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("missing tmux command %q in:\n%s", want, got)
 		}
+	}
+	// Copy-mode bindings are gone with mouse off — make sure we don't re-add them.
+	if strings.Contains(got, "MouseDragEnd1Pane") {
+		t.Fatalf("unexpected copy-mode binding with mouse off:\n%s", got)
 	}
 }
 
@@ -151,11 +154,10 @@ func TestEnsureSharedTerminalDefaultScrollOptionsAppliesBeforeNewWindows(t *test
 
 	got := strings.TrimSpace(commandLog(commands))
 	for _, want := range []string{
-		"set-option -g mouse on",
+		"set-option -g mouse off",
+		"set-option -g window-size latest",
 		"set-option -g set-clipboard on",
 		"set-window-option -g history-limit 2147483647",
-		"bind-key -T copy-mode MouseDragEnd1Pane send-keys -X copy-pipe-and-cancel",
-		"bind-key -T copy-mode-vi MouseDragEnd1Pane send-keys -X copy-pipe-and-cancel",
 	} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("missing tmux command %q in:\n%s", want, got)
@@ -208,12 +210,11 @@ func TestEnsureSharedTerminalSessionSetsMaxHistoryBeforeNewWindow(t *testing.T) 
 	}
 
 	got := strings.TrimSpace(commandLog(commands))
-	want := "set-option -g mouse on ; set-option -g status off ; set-option -g set-clipboard on ; " +
-		"bind-key -T copy-mode MouseDragEnd1Pane send-keys -X copy-pipe-and-cancel ; " +
-		"bind-key -T copy-mode-vi MouseDragEnd1Pane send-keys -X copy-pipe-and-cancel ; " +
+	want := "set-option -g mouse off ; set-option -g window-size latest ; set-option -g status off ; " +
+		"set-option -g set-clipboard on ; " +
 		"set-window-option -g history-limit 2147483647 ; new-session"
 	if !strings.Contains(got, want) {
-		t.Fatalf("tmux creation command must apply mouse + status-off + OSC 52 clipboard + copy bindings + max history before new-session; missing %q in:\n%s", want, got)
+		t.Fatalf("tmux creation command must apply mouse-off + window-size + status-off + OSC 52 clipboard + max history before new-session; missing %q in:\n%s", want, got)
 	}
 }
 

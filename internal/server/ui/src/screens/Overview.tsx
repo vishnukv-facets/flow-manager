@@ -92,8 +92,9 @@ function useGreeting() {
 }
 
 // Mission Control analytics: activity-day streaks (the same active days that
-// light up the 12-week calendar above) and per-provider context-token totals
-// across every tracked session. Uses the real Claude/Codex logos so the split
+// light up the 12-week calendar above) and per-provider tokens-used totals
+// across every tracked session — the SUM of each session's "tok" pill, so the
+// panel and the cards agree. Uses the real Claude/Codex logos so the split
 // reads at a glance.
 function StatsPanel({ stats }: { stats: UiStats }) {
   return (
@@ -113,7 +114,7 @@ function StatsPanel({ stats }: { stats: UiStats }) {
           <div className="stats-sub">active · 12 wk</div>
         </div>
       </div>
-      <div className="stats-tok-cap">context in play · all sessions</div>
+      <div className="stats-tok-cap">tokens used · all sessions</div>
       <div className="stats-tokens">
         <div className="stats-tok-row">
           <span className="stats-tok-name"><ProviderIcon provider="claude" size={14} /> Claude</span>

@@ -706,10 +706,24 @@ func (s *Server) ensureSharedTerminalSession(launch terminalLaunch, cols, rows i
 		args = append(args, "-f", cfgPath)
 	}
 	args = append(args,
+		// Mouse OFF. The browser terminal (xterm.js) is the real UI: it owns
+		// scrolling (its own capture-pane-seeded scrollback) and text selection
+		// (native DOM selection → clipboard). With mouse ON, tmux grabs the wheel
+		// and — because the agent runs with mouse tracking disabled — a single
+		// scroll drops the pane into copy-mode, which freezes the view, paints a
+		// "[pos/total]" indicator, and garbles/duplicates the render. tmux is just
+		// invisible plumbing here, so it must never touch the mouse.
 		"set-option",
 		"-g",
 		"mouse",
-		"on",
+		"off",
+		";",
+		// Size the pane to the latest (i.e. our browser) client rather than the
+		// smallest of all clients, so the grid tracks the browser on resize.
+		"set-option",
+		"-g",
+		"window-size",
+		"latest",
 		";",
 		// Disable tmux's status bar. flow's own UI already shows the session
 		// name/status/branch in its chrome, so the bar is redundant — and the
@@ -720,34 +734,12 @@ func (s *Server) ensureSharedTerminalSession(launch terminalLaunch, cols, rows i
 		"status",
 		"off",
 		";",
-		// Make tmux's own copy commands forward selections to the outer
-		// terminal via OSC 52. Without this, dragging-to-select in the
-		// browser terminal puts text into tmux's internal paste buffer
-		// but never reaches the page's clipboard.
+		// Let inner-app OSC 52 reach the outer terminal (harmless with mouse off;
+		// the browser's own selection→clipboard handles drag-to-copy).
 		"set-option",
 		"-g",
 		"set-clipboard",
 		"on",
-		";",
-		// Bind mouse-drag-end to copy-and-cancel so a single drag is the
-		// whole copy gesture (instead of leaving the user stranded in
-		// copy-mode). Bind both copy-mode and copy-mode-vi so this works
-		// regardless of the user's mode-keys preference.
-		"bind-key",
-		"-T",
-		"copy-mode",
-		"MouseDragEnd1Pane",
-		"send-keys",
-		"-X",
-		"copy-pipe-and-cancel",
-		";",
-		"bind-key",
-		"-T",
-		"copy-mode-vi",
-		"MouseDragEnd1Pane",
-		"send-keys",
-		"-X",
-		"copy-pipe-and-cancel",
 		";",
 		"set-window-option",
 		"-g",

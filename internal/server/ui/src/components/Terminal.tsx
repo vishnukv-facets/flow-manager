@@ -126,6 +126,7 @@ export function TaskTerminal({ slug, restartKey = 0, onStatus }: Props) {
     let ws: WebSocket | null = null
     let wsOpened = false
     let lastSize = ''
+    let sawFirstOutput = false // first output frame is the history replay
 
     const send = (obj: unknown) => {
       if (ws && ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify(obj))
@@ -332,8 +333,17 @@ export function TaskTerminal({ slug, restartKey = 0, onStatus }: Props) {
         } catch {
           return
         }
-        if (m.type === 'output' && m.data != null) term.write(m.data)
-        else if (m.type === 'status') onStatus?.('status', m.message ?? '')
+        if (m.type === 'output' && m.data != null) {
+          term.write(m.data, () => {
+            // After the initial history replay (one big frame), refit and pin to
+            // the bottom so the live prompt is visible, not scrolled off below.
+            if (!sawFirstOutput) {
+              sawFirstOutput = true
+              fitNow()
+              term.scrollToBottom()
+            }
+          })
+        } else if (m.type === 'status') onStatus?.('status', m.message ?? '')
         else if (m.type === 'error') onStatus?.('error', m.message ?? 'terminal error')
       }
       sock.onclose = () => {
@@ -352,6 +362,12 @@ export function TaskTerminal({ slug, restartKey = 0, onStatus }: Props) {
     const observer = new ResizeObserver(resize)
     observer.observe(host)
     window.addEventListener('resize', resize)
+    // A tab that was hidden can come back with stale cell metrics; refit on
+    // re-show so the grid matches the viewport (and the prompt stays reachable).
+    const onVisible = () => {
+      if (document.visibilityState === 'visible') resize()
+    }
+    document.addEventListener('visibilitychange', onVisible)
     scheduleFits()
     document.fonts?.ready?.then(() => {
       if (destroyed) return
@@ -375,6 +391,7 @@ export function TaskTerminal({ slug, restartKey = 0, onStatus }: Props) {
       copyGuardCleanup?.()
       observer.disconnect()
       window.removeEventListener('resize', resize)
+      document.removeEventListener('visibilitychange', onVisible)
       host.removeEventListener('mousedown', onHostMouseDown, true)
       dataDisposable.dispose()
       resizeDisposable.dispose()

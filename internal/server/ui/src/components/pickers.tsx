@@ -40,9 +40,10 @@ export function PriorityPicker({ value, onChange }: { value: string; onChange: (
   )
 }
 
-// Agent selector as icon tiles (Claude / Codex) instead of a dropdown.
-// Unavailable providers (binary not on PATH) render greyed-out and unclickable
-// with the reason as a tooltip + a "not installed" note.
+// Agent selector as a segmented switch (Claude / Codex) — one connected control
+// that reads as a toggle, matching the permission segmented control beside it.
+// The active provider's segment is accent-filled. Unavailable providers (binary
+// not on PATH) render greyed-out and unclickable with the reason as a tooltip.
 export function AgentPicker({
   value,
   onChange,
@@ -54,21 +55,23 @@ export function AgentPicker({
 }) {
   const list = providers.length ? providers : [{ id: 'claude', label: 'Claude Code', available: true }]
   return (
-    <div className="agent-pick">
+    <div className="segmented agent-seg" role="radiogroup" aria-label="Agent">
       {list.map((p) => {
         const disabled = p.available === false
+        const active = value === p.id
         return (
           <button
             key={p.id}
             type="button"
+            role="radio"
+            aria-checked={active}
             disabled={disabled}
-            className={`agent-tile${value === p.id ? ' active' : ''}${disabled ? ' disabled' : ''}`}
+            className={active ? 'active' : ''}
             title={disabled ? p.reason || `${p.label} is not installed` : p.label}
             onClick={() => !disabled && onChange(p.id)}
           >
-            <ProviderIcon provider={p.id} size={18} />
+            <ProviderIcon provider={p.id} size={14} />
             <span className="clip">{p.label}</span>
-            {disabled && <span className="agent-tile-note">not installed</span>}
           </button>
         )
       })}

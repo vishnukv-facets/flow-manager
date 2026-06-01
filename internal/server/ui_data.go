@@ -930,9 +930,9 @@ func contextWindowForProvider(provider string) int {
 }
 
 // contextWindowForModel returns the provider's context cap, refined by model
-// when known. Claude Opus 4.6+ ships with a 1M context window; Sonnet, Haiku,
-// and older Opus default to 200k unless the model itself signals otherwise via
-// the JSONL (handled separately for Codex via model_context_window).
+// when known. Claude Opus 4.6+ ships a 1M context window (some model ids also
+// carry a "[1m]" suffix); Sonnet, Haiku, and older Opus are 200k. Codex's window
+// comes from the JSONL (model_context_window), handled by the caller.
 func contextWindowForModel(provider, model string) int {
 	m := strings.ToLower(strings.TrimSpace(model))
 	if m == "" {
@@ -940,12 +940,59 @@ func contextWindowForModel(provider, model string) int {
 	}
 	switch strings.ToLower(strings.TrimSpace(provider)) {
 	case "claude", "claude-code", "claudecode":
-		if strings.Contains(m, "opus-4-6") || strings.Contains(m, "opus-4-7") {
+		if claudeHas1MContext(m) {
 			return 1000000
 		}
 		return 200000
 	}
 	return contextWindowForProvider(provider)
+}
+
+// claudeHas1MContext reports whether a (lowercased) Claude model id has the 1M
+// context window. True for an explicit "[1m]" tag, any Opus 5+, and Opus 4.6+
+// (4-6 / 4-7 / 4-8 / 4-9 …). Earlier Opus 4 (4-0..4-5), Sonnet, and Haiku are
+// 200k. Parsing the minor digit (rather than listing each release) keeps new
+// Opus 4.x models correct without a code change — the gap that made every
+// opus-4-8 session mis-read as 200k and clamp to a bogus "381k/381k" bar.
+func claudeHas1MContext(m string) bool {
+	if strings.Contains(m, "[1m]") {
+		return true
+	}
+	idx := strings.Index(m, "opus-")
+	if idx < 0 {
+		return false
+	}
+	rest := m[idx+len("opus-"):] // e.g. "4-8", "4-8-20260101", "5-0"
+	major, after, ok := leadingInt(rest)
+	if !ok {
+		return false
+	}
+	if major >= 5 {
+		return true
+	}
+	if major == 4 && strings.HasPrefix(after, "-") {
+		if minor, _, ok := leadingInt(after[1:]); ok && minor >= 6 {
+			return true
+		}
+	}
+	return false
+}
+
+// leadingInt reads the leading run of ASCII digits from s, returning the value,
+// the remainder after them, and whether any digit was present.
+func leadingInt(s string) (int, string, bool) {
+	j := 0
+	for j < len(s) && s[j] >= '0' && s[j] <= '9' {
+		j++
+	}
+	if j == 0 {
+		return 0, s, false
+	}
+	n, err := strconv.Atoi(s[:j])
+	if err != nil {
+		return 0, s, false
+	}
+	return n, s[j:], true
 }
 
 func latestTranscriptAction(transcript []uiTranscript) string {
@@ -1406,18 +1453,20 @@ func buildUIStats(live, done []uiAgent, heatmap []uiActivityDay, now time.Time) 
 				continue
 			}
 			seen[a.Slug] = true
-			// TokensUsed is each session's current context-window occupancy (the
-			// "X/258k" bar on its card). We sum that rather than a cumulative
-			// per-turn total: agents re-read their whole cached context every
-			// turn, so summing per-turn usage counts the same tokens dozens of
-			// times and balloons far past what was ever actually consumed.
-			st.TokensTotal += a.TokensUsed
+			// Sum TokensSession (cumulative "work done" per session, cache-excluded)
+			// so this panel equals the SUM of the per-session "tok" pills and the
+			// two finally correlate. (TokensUsed is just the current context-window
+			// occupancy shown on each card's X/max bar — a different axis.)
+			st.TokensTotal += a.TokensSession
 			st.SessionsTotal++
-			if a.Provider == agents.ProviderCodex {
-				st.TokensCodex += a.TokensUsed
+			// Every session is exactly one of codex / claude: the builder defaults
+			// Provider to "claude" when unset and codex is always explicit, so the
+			// else-branch correctly owns claude and any unexpected value.
+			if strings.EqualFold(strings.TrimSpace(a.Provider), agents.ProviderCodex) {
+				st.TokensCodex += a.TokensSession
 				st.SessionsCodex++
 			} else {
-				st.TokensClaude += a.TokensUsed
+				st.TokensClaude += a.TokensSession
 				st.SessionsClaude++
 			}
 		}

@@ -148,8 +148,8 @@ func accumulateTranscriptUsage(stats *transcriptUsageStats, line []byte) {
 	if used := rec.Message.Usage.total(); used > 0 {
 		stats.TokensUsed = used // context occupancy = latest turn's full total
 	}
-	// Session usage = cumulative NEW work, EXCLUDING cache re-reads (which would
-	// double-count the context every turn → hundreds of millions).
+	// Session usage = cumulative "work done", EXCLUDING cache reads AND
+	// cache-creation churn (both inflate a long session; see freshTotal).
 	stats.TokensSession += rec.Message.Usage.freshTotal()
 	if rec.Payload == nil {
 		return
