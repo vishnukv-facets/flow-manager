@@ -6,7 +6,7 @@ import { useDocumentTitle } from '../lib/useDocumentTitle'
 import { AgentCard } from '../components/AgentCard'
 import { EmptyState, ErrorNote, Loading, ProviderIcon, SourceIcon, Sparkline } from '../components/ui'
 import { useFloatTip } from '../components/FloatTip'
-import { ago, compact, fromMinutes } from '../lib/format'
+import { ago, compact, compactTokens, fromMinutes } from '../lib/format'
 import type { ActivityDay, InboxFeedEntry, PlaybookRun, UiStats } from '../lib/types'
 
 const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
@@ -118,17 +118,17 @@ function StatsPanel({ stats }: { stats: UiStats }) {
       <div className="stats-tokens">
         <div className="stats-tok-row">
           <span className="stats-tok-name"><ProviderIcon provider="claude" size={14} /> Claude</span>
-          <span className="mono stats-tok-val">{compact(stats.tokens_claude)}</span>
+          <span className="mono stats-tok-val">{compactTokens(stats.tokens_claude)}</span>
           <span className="faint mono stats-tok-sess">{stats.sessions_claude} sess</span>
         </div>
         <div className="stats-tok-row">
           <span className="stats-tok-name"><ProviderIcon provider="codex" size={14} /> Codex</span>
-          <span className="mono stats-tok-val">{compact(stats.tokens_codex)}</span>
+          <span className="mono stats-tok-val">{compactTokens(stats.tokens_codex)}</span>
           <span className="faint mono stats-tok-sess">{stats.sessions_codex} sess</span>
         </div>
         <div className="stats-tok-row stats-tok-total">
           <span className="stats-tok-name">Combined</span>
-          <span className="mono stats-tok-val">{compact(stats.tokens_total)}</span>
+          <span className="mono stats-tok-val">{compactTokens(stats.tokens_total)}</span>
           <span className="faint mono stats-tok-sess">{stats.sessions_total} sess</span>
         </div>
       </div>

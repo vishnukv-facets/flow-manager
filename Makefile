@@ -8,12 +8,21 @@ LDFLAGS  := -X main.version=$(VERSION)
 
 .PHONY: build ui ui-check rebuild install uninstall test clean
 
+# The web UI bundles under internal/server/static/assets are NOT committed (only
+# static/index.html + brand SVGs are), so on a fresh checkout they're absent.
+# `//go:embed all:static` still compiles, but the UI won't render until built —
+# so auto-build the UI when the bundle is missing. When it's present (normal dev
+# after `make ui`), this is a no-op and `make build` stays a fast Node-free Go build.
 build:
+	@if [ -z "$$(ls internal/server/static/assets/index-*.js 2>/dev/null)" ]; then \
+		echo "UI bundle missing — building it first..."; \
+		$(MAKE) ui; \
+	fi
 	go build -ldflags '$(LDFLAGS)' -o $(BINARY) .
 
 # Rebuild the web UI (Vite + React + TypeScript) into internal/server/static.
-# Built assets are committed and go:embed'd, so plain `make build` / `go build`
-# stay Node-free; run `make ui` only after editing UI source under internal/server/ui.
+# Run after editing UI source under internal/server/ui; the emitted bundles are
+# gitignored, so commit only your source changes.
 ui:
 	cd internal/server/ui && pnpm install && pnpm run build
 

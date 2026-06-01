@@ -56,6 +56,17 @@ export function compact(n: number): string {
   return `${(n / 1_000_000_000).toFixed(2)}B`
 }
 
+// compactTokens is like compact but ALWAYS keeps 2 decimals, so token figures
+// read as e.g. "12.34M" / "248.10k" instead of a rounded "12M". The decimals
+// make live growth visible — with the 5s refetch you can watch the number tick
+// instead of it looking frozen on a rounded value.
+export function compactTokens(n: number): string {
+  if (n < 1000) return String(n)
+  if (n < 1_000_000) return `${(n / 1000).toFixed(2)}k`
+  if (n < 1_000_000_000) return `${(n / 1_000_000).toFixed(2)}M`
+  return `${(n / 1_000_000_000).toFixed(2)}B`
+}
+
 export function titleCase(s: string): string {
   return s.replace(/[-_]/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase())
 }

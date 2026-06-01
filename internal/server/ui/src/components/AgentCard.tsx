@@ -1,7 +1,7 @@
 import { useLocation } from 'wouter'
 import { GitBranch, Clock3, Radar, Coins } from 'lucide-react'
 import type { UiAgent } from '../lib/types'
-import { fromMinutes, fromSeconds, compact } from '../lib/format'
+import { fromMinutes, fromSeconds, compact, compactTokens } from '../lib/format'
 import { ProviderIcon, Sparkline, StatusDot, TokenBar } from './ui'
 import { NudgeComposer } from './NudgeComposer'
 
@@ -65,7 +65,7 @@ export function AgentCard({ agent }: { agent: UiAgent }) {
             className="tag tok-pill"
             title={`${agent.tokens_session.toLocaleString()} tokens used this session · context ${agent.tokens_used.toLocaleString()} / ${agent.tokens_max.toLocaleString()}`}
           >
-            <Coins size={11} /> {compact(agent.tokens_session)} tok
+            <Coins size={11} /> {compactTokens(agent.tokens_session)} tok
           </span>
         )}
       </div>

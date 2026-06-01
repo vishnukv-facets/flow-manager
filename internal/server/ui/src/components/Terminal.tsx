@@ -368,15 +368,44 @@ export function TaskTerminal({ slug, restartKey = 0, onStatus }: Props) {
       if (document.visibilityState === 'visible') resize()
     }
     document.addEventListener('visibilitychange', onVisible)
-    scheduleFits()
-    document.fonts?.ready?.then(() => {
+
+    // The fold bug: if we fit+connect BEFORE the real mono font loads, xterm
+    // measures the fallback font's cell size, computes the wrong row count, and
+    // ends up with a grid taller than the viewport — so the live prompt sits
+    // clipped below the fold, unreachable by scrolling (only a zoom/refresh,
+    // which re-measures, brings it back). document.fonts.load() resolves
+    // specifically when "JetBrains Mono" is ready (more reliable than
+    // fonts.ready, which can resolve before the glyph is actually loaded).
+    const TERM_FONT = '"JetBrains Mono"'
+    const fontReady: Promise<unknown> = document.fonts?.load
+      ? Promise.all([
+          document.fonts.load(`1em ${TERM_FONT}`),
+          document.fonts.load(`bold 1em ${TERM_FONT}`),
+        ]).catch(() => undefined)
+      : Promise.resolve()
+
+    // Gate the first fit+connect on the font (with a hard timeout so a stalled
+    // font load can never leave the terminal unconnected).
+    let started = false
+    const startOnce = () => {
+      if (started || destroyed) return
+      started = true
+      fitNow()
+      openWS()
+      scheduleFits()
+    }
+    void fontReady.then(startOnce)
+    fitTimers.push(setTimeout(startOnce, 250))
+
+    // And always refit once the font resolves, in case the timeout fired first
+    // and we connected with fallback metrics — this corrects the grid + pins to
+    // the bottom so the prompt is reattached to the visible row.
+    void fontReady.then(() => {
       if (destroyed) return
       fitNow()
+      term.scrollToBottom()
       scheduleFits()
     })
-
-    // Initial connect at the fitted size.
-    openWS()
 
     const focusTimer = setTimeout(() => {
       if (!destroyed) term.focus()

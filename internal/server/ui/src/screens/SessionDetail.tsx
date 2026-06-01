@@ -46,7 +46,7 @@ import { Modal } from '../components/Modal'
 import { AgentPicker, PermissionPicker } from '../components/pickers'
 import { TerminalIcon } from '../components/TerminalIcon'
 import { ErrorNote, Loading, ProviderIcon, StatusBadge, TokenBar } from '../components/ui'
-import { compact, dateTime, fromMinutes, fromSeconds } from '../lib/format'
+import { compact, compactTokens, dateTime, fromMinutes, fromSeconds } from '../lib/format'
 
 type Tab = 'brief' | 'diff' | 'transcript' | 'updates'
 
@@ -227,7 +227,7 @@ export function SessionDetail({ slug }: { slug: string }) {
                 className="tag tok-pill"
                 title={`${agent.tokens_session.toLocaleString()} tokens used this session · context ${agent.tokens_used.toLocaleString()} / ${agent.tokens_max.toLocaleString()}`}
               >
-                <Coins size={12} /> {compact(agent.tokens_session)} tok
+                <Coins size={12} /> {compactTokens(agent.tokens_session)} tok
               </span>
             )}
             {monitored && (
