@@ -681,7 +681,7 @@ function BranchPicker({
         <span className="mono clip">{current}</span>
         {busy ? <Loader2 size={11} className="spin" /> : <ChevronDown size={11} />}
       </summary>
-      <div className="menu-pop">
+      <div className="menu-pop branch-pop">
         {others.map((b) => (
           <button
             key={b}
