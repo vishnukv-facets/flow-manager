@@ -18,7 +18,17 @@ const STATUS_LABEL: Record<string, string> = {
   stale: 'stalled',
 }
 
-export function AgentCard({ agent }: { agent: UiAgent }) {
+export function AgentCard({
+  agent,
+  selectable = false,
+  selected = false,
+  onToggle,
+}: {
+  agent: UiAgent
+  selectable?: boolean
+  selected?: boolean
+  onToggle?: () => void
+}) {
   const [, navigate] = useLocation()
   const waiting = agent.status === 'waiting'
   // A finished task should read as "done", not as the residual runtime state
@@ -28,11 +38,21 @@ export function AgentCard({ agent }: { agent: UiAgent }) {
   const badgeStatus = isDone ? 'done' : agent.status
   return (
     <article
-      className="card acard"
+      className={`card acard${selected ? ' selected' : ''}`}
       aria-label={`Open session ${agent.name}`}
       {...clickable(() => navigate(`/session/${agent.slug}`))}
     >
       <div className="acard-top">
+        {selectable && (
+          <input
+            type="checkbox"
+            className="acard-check"
+            checked={selected}
+            aria-label={`Select ${agent.name}`}
+            onClick={(e) => e.stopPropagation()}
+            onChange={() => onToggle?.()}
+          />
+        )}
         <ProviderIcon provider={agent.provider} size={17} />
         <div style={{ flex: 1, minWidth: 0 }}>
           <div className="acard-title clip">{agent.name}</div>
