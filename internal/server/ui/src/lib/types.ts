@@ -332,6 +332,11 @@ export interface ActivityDay {
   tasks?: string[]
 }
 
+export interface TokenDay {
+  date: string
+  tokens: number
+}
+
 export interface QuoteView {
   quote: string
   anime: string
@@ -374,6 +379,7 @@ export interface UiData {
   PLAYBOOKS_MC: PlaybookMC[]
   PROJECTS_MC: ProjectMC[]
   ACTIVITY_HEATMAP: ActivityDay[]
+  TOKEN_SERIES: TokenDay[]
   STATS: UiStats
   CAPABILITIES: Capabilities
   TRASH: { tasks: TrashItem[]; projects: TrashItem[]; playbooks: TrashItem[]; total: number }

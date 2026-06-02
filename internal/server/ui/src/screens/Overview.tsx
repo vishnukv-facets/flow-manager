@@ -1,13 +1,15 @@
 import { useEffect, useMemo, useState, type ReactNode } from 'react'
 import { Link, useLocation } from 'wouter'
-import { ArrowRight, Activity, Repeat, AlertTriangle, Snowflake, TerminalSquare, Flame, Inbox as InboxIcon } from 'lucide-react'
-import { useInbox, useOverview, useQuote, useUiData } from '../lib/query'
+import { ArrowRight, Activity, BarChart3, CalendarClock, Coins, Repeat, AlertTriangle, Snowflake, TerminalSquare, TrendingUp, Flame, Inbox as InboxIcon } from 'lucide-react'
+import { useInbox, useOverview, useQuote, useTasks, useUiData } from '../lib/query'
 import { useDocumentTitle } from '../lib/useDocumentTitle'
 import { AgentCard } from '../components/AgentCard'
-import { EmptyState, ErrorNote, Loading, ProviderIcon, SourceIcon, Sparkline } from '../components/ui'
+import { EmptyState, ErrorNote, Loading, ProviderIcon, SourceIcon, Sparkline, Stat } from '../components/ui'
 import { useFloatTip } from '../components/FloatTip'
 import { ago, compact, compactTokens, dueTone } from '../lib/format'
-import type { ActivityDay, InboxFeedEntry, PlaybookRun, TaskView, UiStats } from '../lib/types'
+import { agendaCount, bucketByDue, type DueBuckets } from '../lib/agenda'
+import { throughputByWeek, timeToDone, tokensByWeek } from '../lib/analytics'
+import type { ActivityDay, InboxFeedEntry, PlaybookRun, ProjectMC, TaskView, TokenDay, UiStats } from '../lib/types'
 
 const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
 const WEEKDAYS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat']
@@ -296,12 +298,153 @@ function PlaybookSpark({ runs, fallback }: { runs?: PlaybookRun[]; fallback: num
   )
 }
 
+// Near-term due-date agenda for the Mission Control main column: overdue /
+// today / this week, each a soonest-first list. Reuses the .lrow row shape from
+// the backlog section so it reads as part of the same console, not a new widget.
+function AgendaBuckets({ due, onOpen }: { due: DueBuckets; onOpen: (slug: string) => void }) {
+  const groups: { key: string; label: string; tasks: TaskView[] }[] = [
+    { key: 'overdue', label: 'Overdue', tasks: due.overdue },
+    { key: 'today', label: 'Today', tasks: due.today },
+    { key: 'week', label: 'This week', tasks: due.week },
+  ]
+  return (
+    <>
+      {groups.map((g) =>
+        g.tasks.length === 0 ? null : (
+          <div key={g.key} className="agenda-bucket">
+            <div className={`agenda-bucket-head ${g.key}`}>
+              {g.label} <span className="faint">· {g.tasks.length}</span>
+            </div>
+            <div className="rows">
+              {g.tasks.map((t) => (
+                <div key={t.slug} className="lrow" onClick={() => onOpen(t.slug)}>
+                  <span className={`prio ${t.priority}`} />
+                  <ProviderIcon provider={t.session_provider} size={14} />
+                  <div className="lrow-main">
+                    <div className="lrow-title clip">{t.name}</div>
+                    <div className="lrow-sub clip">
+                      {t.project_slug || 'no project'}
+                      {t.assignee ? ` · @${t.assignee}` : ''}
+                    </div>
+                  </div>
+                  {t.due_info && (
+                    <span
+                      className={`badge ${dueTone(t.due_date, t.due_info)}`}
+                      style={{ whiteSpace: 'nowrap', height: 'auto', padding: '3px 8px' }}
+                      title={t.due_date ? `Due ${t.due_date}` : undefined}
+                    >
+                      {t.due_info}
+                    </span>
+                  )}
+                </div>
+              ))}
+            </div>
+          </div>
+        ),
+      )}
+    </>
+  )
+}
+
+// Compact duration: sub-day spans read as hours, otherwise days (1 decimal
+// under 10d). Keeps the time-to-done stat legible at a glance.
+function fmtDays(d: number): string {
+  if (d < 1) return `${Math.round(d * 24)}h`
+  return `${d < 10 ? d.toFixed(1) : Math.round(d)}d`
+}
+
+// Mission Control trends: throughput (tasks done/week) and token cost
+// (fresh work tokens/week) as 12-week sparklines, plus median/avg time-to-done.
+// All derived client-side from the task list + server TOKEN_SERIES.
+function TrendsCard({ doneTasks, tokenSeries }: { doneTasks: TaskView[]; tokenSeries: TokenDay[] }) {
+  const throughput = useMemo(() => throughputByWeek(doneTasks, new Date()), [doneTasks])
+  const tokens = useMemo(() => tokensByWeek(tokenSeries), [tokenSeries])
+  const ttd = useMemo(() => timeToDone(doneTasks), [doneTasks])
+  const doneTotal = throughput.reduce((s, w) => s + w.value, 0)
+  const tokenTotal = tokens.reduce((s, w) => s + w.value, 0)
+  return (
+    <section className="card rail-card">
+      <div className="bento-head">
+        <span className="eyebrow"><TrendingUp size={13} /> Trends</span>
+        <div className="spacer" />
+        <span className="faint mono" style={{ fontSize: 10 }}>12 weeks</span>
+      </div>
+      <div className="trend-row">
+        <div className="trend-label">
+          <span className="eyebrow">Throughput</span>
+          <span className="faint mono">{doneTotal} done</span>
+        </div>
+        <Sparkline data={throughput.map((w) => w.value)} flex />
+      </div>
+      <div className="hairline" style={{ margin: '12px 0' }} />
+      <div className="trend-row">
+        <div className="trend-label">
+          <span className="eyebrow"><Coins size={11} /> Token cost</span>
+          <span className="faint mono">{compactTokens(tokenTotal)} fresh</span>
+        </div>
+        <Sparkline data={tokens.map((w) => w.value)} flex />
+      </div>
+      <div className="hairline" style={{ margin: '12px 0' }} />
+      <div className="row" style={{ gap: 0 }}>
+        <Stat label="median to done" value={ttd.count ? fmtDays(ttd.medianDays) : '—'} />
+        <Stat label="avg to done" value={ttd.count ? fmtDays(ttd.avgDays) : '—'} />
+        <Stat label="closed" value={ttd.count} />
+      </div>
+    </section>
+  )
+}
+
+// Per-project completion: done/total as a progress bar per project. Reads
+// PROJECTS_MC.task_counts (already shipped) — no extra data needed.
+function ProjectProgressCard({ projects, onOpen }: { projects: ProjectMC[]; onOpen: (slug: string) => void }) {
+  const shown = projects.filter((p) => p.tasks.total > 0).slice(0, 6)
+  return (
+    <section className="card rail-card">
+      <div className="bento-head">
+        <span className="eyebrow"><BarChart3 size={13} /> Project progress</span>
+        <div className="spacer" />
+        <Link href="/projects" className="btn ghost sm">All <ArrowRight size={13} /></Link>
+      </div>
+      {shown.length === 0 ? (
+        <div className="faint" style={{ padding: 8 }}>No projects with tasks yet.</div>
+      ) : (
+        <div className="col" style={{ gap: 10 }}>
+          {shown.map((p) => {
+            const pct = Math.round((p.tasks.done / p.tasks.total) * 100)
+            return (
+              <div key={p.slug} className="proj-prog" onClick={() => onOpen(p.slug)}>
+                <div className="proj-prog-head">
+                  <span className="clip">{p.name}</span>
+                  <span className="faint mono">{p.tasks.done}/{p.tasks.total}</span>
+                </div>
+                <div className="prog-track">
+                  <div className="prog-fill" style={{ width: `${pct}%` }} />
+                </div>
+              </div>
+            )
+          })}
+        </div>
+      )}
+    </section>
+  )
+}
+
 export function Overview() {
   useDocumentTitle('Mission Control')
   const [, navigate] = useLocation()
   const { data: ui, isLoading, error } = useUiData()
   const { data: overview } = useOverview()
   const { data: inbox } = useInbox()
+  // One task fetch (incl. done) feeds both the agenda lens and the analytics
+  // trends: open tasks drive the due buckets, done tasks drive throughput and
+  // time-to-done. A done task with a past due date must NOT show as "overdue",
+  // so the agenda is built from the open subset only.
+  const { data: allTasks } = useTasks({ include_done: true })
+  const doneTasks = useMemo(() => (allTasks ?? []).filter((t) => t.status === 'done'), [allTasks])
+  const due = useMemo(
+    () => bucketByDue((allTasks ?? []).filter((t) => t.status !== 'done')),
+    [allTasks],
+  )
   const { text: greeting, hourKey } = useGreeting()
   const { data: quote } = useQuote(hourKey)
 
@@ -466,6 +609,18 @@ export function Overview() {
             )}
           </section>
 
+          {agendaCount(due) > 0 && (
+            <section>
+              <div className="section-head">
+                <span className="eyebrow"><CalendarClock size={13} /> Agenda</span>
+                <span className="section-count">{agendaCount(due)}</span>
+                <div className="spacer" />
+                <Link href="/tasks" className="btn ghost sm">Tasks <ArrowRight size={14} /></Link>
+              </div>
+              <AgendaBuckets due={due} onOpen={(slug) => navigate(`/session/${slug}`)} />
+            </section>
+          )}
+
           <section>
             <div className="section-head">
               <span className="eyebrow">High-priority backlog</span>
@@ -524,6 +679,10 @@ export function Overview() {
             <div className="hairline" style={{ margin: '14px 0' }} />
             <StatsPanel stats={ui.STATS} />
           </section>
+
+          <TrendsCard doneTasks={doneTasks} tokenSeries={ui.TOKEN_SERIES ?? []} />
+
+          <ProjectProgressCard projects={ui.PROJECTS_MC} onOpen={(slug) => navigate(`/project/${slug}`)} />
 
           <section className="card rail-card">
             <div className="bento-head">

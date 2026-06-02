@@ -33,6 +33,7 @@ type uiData struct {
 	Playbooks        []uiPlaybook     `json:"PLAYBOOKS_MC"`
 	Projects         []uiProject      `json:"PROJECTS_MC"`
 	ActivityHeatmap  []uiActivityDay  `json:"ACTIVITY_HEATMAP"`
+	TokenSeries      []uiTokenDay     `json:"TOKEN_SERIES"`
 	Stats            uiStats          `json:"STATS"`
 	Capabilities     uiCapabilities   `json:"CAPABILITIES"`
 	Trash            uiTrash          `json:"TRASH"`
@@ -96,6 +97,14 @@ type uiActivityDay struct {
 	Date  string   `json:"date"`
 	Count int      `json:"count"`
 	Tasks []string `json:"tasks,omitempty"`
+}
+
+// uiTokenDay is one day of the token-cost-over-time trend: fresh "work" tokens
+// (cache-excluded, same basis as TokensSession) summed across every tracked
+// session active that day. Aligned to the same 12-week window as the heatmap.
+type uiTokenDay struct {
+	Date   string `json:"date"`
+	Tokens int    `json:"tokens"`
 }
 
 // uiStats are the at-a-glance Mission Control analytics: how consistently the
@@ -456,6 +465,7 @@ func (s *Server) buildUIData() (uiData, error) {
 		dead = &doneCandidates[0]
 	}
 	heatmap := buildActivityHeatmap(taskViews, time.Now())
+	tokenSeries := s.buildTokenSeries(taskViews, time.Now())
 	return uiData{
 		Agents:           agents,
 		DeadAgent:        dead,
@@ -468,6 +478,7 @@ func (s *Server) buildUIData() (uiData, error) {
 		Playbooks:        playbooks,
 		Projects:         projects,
 		ActivityHeatmap:  heatmap,
+		TokenSeries:      tokenSeries,
 		Stats:            buildUIStats(agents, doneCandidates, heatmap, time.Now()),
 		Capabilities:     s.uiCapabilities(),
 		Trash:            s.uiTrash(),
@@ -1317,6 +1328,76 @@ func laterTimestamp(a, b string) string {
 		return b
 	}
 	return a
+}
+
+// localDay parses an RFC3339 timestamp and returns its local calendar day as
+// YYYY-MM-DD, or "" if the timestamp is empty/unparseable. Used to bucket
+// per-turn token usage into the days the heatmap and token-series grids use.
+func localDay(ts string) string {
+	if ts == "" {
+		return ""
+	}
+	t, err := time.Parse(time.RFC3339, ts)
+	if err != nil {
+		return ""
+	}
+	return t.In(time.Local).Format("2006-01-02")
+}
+
+// buildTokenSeries sums per-day "work" tokens (cache-excluded freshTotal; see
+// transcriptUsageStats.TokensByDay) across every tracked session into a 12-week
+// daily grid — the token-cost-over-time trend. It reuses the cached transcript
+// usage, so for sessions already parsed this tick the lookups are warm; done
+// sessions never change and stay cached. The window and Sunday alignment match
+// buildActivityHeatmap so the two dashboards line up day-for-day.
+func (s *Server) buildTokenSeries(tasks []TaskView, now time.Time) []uiTokenDay {
+	now = now.In(time.Local)
+	today := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, now.Location())
+	weekdayOffset := int(today.Weekday())
+	thisWeekSunday := today.AddDate(0, 0, -weekdayOffset)
+	start := thisWeekSunday.AddDate(0, 0, -77) // 11 prior weeks + this week = 12
+	days := make([]uiTokenDay, 84)
+	index := make(map[string]int, len(days))
+	for i := range days {
+		date := start.AddDate(0, 0, i).Format("2006-01-02")
+		days[i] = uiTokenDay{Date: date}
+		index[date] = i
+	}
+	// One session may back several task rows (e.g. a worktree clone); dedupe by
+	// resolved transcript path so a day's tokens aren't double-counted.
+	seen := map[string]bool{}
+	for _, tv := range tasks {
+		if tv.SessionID == nil || strings.TrimSpace(*tv.SessionID) == "" {
+			continue
+		}
+		provider := "claude"
+		if tv.SessionProvider != nil && *tv.SessionProvider != "" {
+			provider = *tv.SessionProvider
+		}
+		task := &flowdb.Task{
+			Slug:            tv.Slug,
+			WorkDir:         tv.WorkDir,
+			WorktreePath:    nullStringFromPtr(tv.WorktreePath),
+			SessionProvider: provider,
+			SessionID:       sql.NullString{String: *tv.SessionID, Valid: true},
+			SessionPath:     nullStringFromPtr(tv.SessionPath),
+		}
+		path, err := sessionJSONLPath(s.cfg.DB, task)
+		if err != nil || path == "" || seen[path] {
+			continue
+		}
+		seen[path] = true
+		entry, err := s.transcripts.get(path)
+		if err != nil {
+			continue
+		}
+		for day, tok := range entry.usage.TokensByDay {
+			if i, ok := index[day]; ok {
+				days[i].Tokens += tok
+			}
+		}
+	}
+	return days
 }
 
 func buildActivityHeatmap(tasks []TaskView, now time.Time) []uiActivityDay {
