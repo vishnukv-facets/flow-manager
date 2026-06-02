@@ -249,6 +249,7 @@ func (h *terminalHub) registerFloatingLaunch(launch terminalLaunch, title string
 			Created:  time.Now(),
 		}
 	}
+	h.persistFloatingLocked()
 	h.mu.Unlock()
 	// Let the tray (sourced from the UiData snapshot) pick up the new session.
 	if h.server != nil {
@@ -265,29 +266,53 @@ func (h *terminalHub) registerFloatingLaunch(launch terminalLaunch, title string
 // tray, marking which ones currently have a live PTY attached. Order is left
 // to the client (it sorts by created_at).
 func (h *terminalHub) floatingSessions() []floatingSessionInfo {
+	type snap struct {
+		id, provider, title, created, sid string
+		running                           bool
+	}
 	h.mu.Lock()
-	defer h.mu.Unlock()
-	out := make([]floatingSessionInfo, 0, len(h.floatingLaunches))
+	snaps := make([]snap, 0, len(h.floatingLaunches))
 	for id, launch := range h.floatingLaunches {
 		meta := h.floatingMeta[id]
 		provider := meta.Provider
 		if provider == "" {
 			provider = launch.Provider
 		}
+		sid := launch.SessionID
 		running := false
 		if sess := h.sessions[id]; sess != nil {
 			running = sess.running()
+			// Codex captures its real thread id after launch; prefer it so the
+			// runtime-state lookup keys on the id the hook actually reports.
+			if cap := strings.TrimSpace(sess.sessionID); cap != "" {
+				sid = cap
+			}
 		}
 		created := ""
 		if !meta.Created.IsZero() {
 			created = meta.Created.UTC().Format(time.RFC3339)
 		}
+		snaps = append(snaps, snap{id: id, provider: provider, title: meta.Title, created: created, sid: sid, running: running})
+	}
+	h.mu.Unlock()
+
+	// Resolve waiting state outside the hub lock (it's a DB read). Adhoc
+	// sessions have no task row, but the agent hook still records their runtime
+	// state keyed by session_id, so "awaiting your input" is queryable here.
+	out := make([]floatingSessionInfo, 0, len(snaps))
+	for _, s := range snaps {
+		waiting, why := false, ""
+		if s.sid != "" && h.server != nil && h.server.cfg.DB != nil {
+			if st, err := flowdb.AgentRuntimeStateBySessionID(h.server.cfg.DB, s.provider, s.sid); err == nil && st != nil && st.Status == "waiting" {
+				waiting = true
+				if st.Message.Valid {
+					why = strings.TrimSpace(st.Message.String)
+				}
+			}
+		}
 		out = append(out, floatingSessionInfo{
-			ID:       id,
-			Provider: provider,
-			Title:    meta.Title,
-			Running:  running,
-			Created:  created,
+			ID: s.id, Provider: s.provider, Title: s.title, Running: s.running,
+			Waiting: waiting, WaitingWhy: why, Created: s.created,
 		})
 	}
 	return out
@@ -305,6 +330,7 @@ func (h *terminalHub) stopFloating(id string) bool {
 	delete(h.floatingMeta, id)
 	sess := h.sessions[id]
 	delete(h.sessions, id)
+	h.persistFloatingLocked()
 	h.mu.Unlock()
 	if sess != nil {
 		if h.server != nil && h.server.inboxMonitors != nil {
@@ -1424,40 +1450,49 @@ func (s *terminalSession) sendHistory(client *terminalClient) {
 }
 
 func (s *terminalSession) addClient(client *terminalClient, replay bool) {
-	s.mu.Lock()
-	s.clients[client] = struct{}{}
-	status := s.exitStatus
-	closed := s.closed
-	provider := s.provider
-	sessionID := s.sessionID
-	s.mu.Unlock()
+	// Seed the history replay BEFORE this client joins the broadcast set.
+	//
+	// captureReplay execs `tmux capture-pane` (slow, tens of ms). If the client
+	// were already in s.clients during that window, a concurrent readPTY →
+	// broadcast could queue LIVE output frames AHEAD of this history dump. The
+	// client's FIFO send channel would then carry [live…, history], so the
+	// browser paints newer text first and the big history dump lands underneath
+	// it — exactly the "scrollback is reversed / blocks out of order" bug.
+	//
+	// So: run the slow capture first (outside the lock), then queue status +
+	// replay and join the broadcast set together under s.mu. queue() is
+	// non-blocking, so holding the lock across it can't deadlock with broadcast.
+	// Every live frame this client receives is now ordered strictly after the
+	// replayed history.
+	//
+	// For tmux-backed sessions captureReplay returns a FRESH rendered
+	// capture-pane (clean final state of every history line, full scrollback),
+	// not flow's raw byte stream — the raw stream is tmux redraws + status-bar
+	// paints that strand stacked "[flow-…]" bars and reflow garble.
+	var replayData []byte
+	if replay {
+		replayData = s.captureReplay()
+	}
 
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	provider := s.provider
 	if provider == "" {
 		provider = agents.ProviderClaude
 	}
 	message := "connected to " + provider
-	if sessionID != "" {
-		message += " session " + sessionID
+	if s.sessionID != "" {
+		message += " session " + s.sessionID
 	} else {
 		message += " session pending capture"
 	}
 	client.queue(terminalWSMessage{Type: "status", Message: message})
-	if replay {
-		// For tmux-backed sessions, replay a FRESH rendered capture-pane of the
-		// pane history rather than flow's raw accumulated byte stream. The raw
-		// stream is a sequence of tmux redraws + status-bar paints; dumping it
-		// into the browser terminal strands stacked "[flow-…]" status bars and
-		// reflow garble in scrollback. capture-pane is the final rendered state
-		// of every history line — clean, and it spans tmux's full (effectively
-		// unlimited) history so the browser can scroll to the start. Fall back to
-		// the accumulated scrollback (the non-tmux/direct-PTY path) if capture is
-		// unavailable.
-		if replayData := s.captureReplay(); len(replayData) > 0 {
-			client.queue(terminalWSMessage{Type: "output", Data: string(replayData)})
-		}
+	if len(replayData) > 0 {
+		client.queue(terminalWSMessage{Type: "output", Data: string(replayData)})
 	}
-	if closed {
-		client.queue(terminalWSMessage{Type: "status", Message: status})
+	s.clients[client] = struct{}{}
+	if s.closed {
+		client.queue(terminalWSMessage{Type: "status", Message: s.exitStatus})
 	}
 }
 

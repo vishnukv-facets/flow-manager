@@ -14,6 +14,7 @@ import type {
   ProjectView,
   QuoteView,
   SearchResponse,
+  SettingsResponse,
   TaskView,
   TranscriptResponse,
   UiAgent,
@@ -69,6 +70,12 @@ export function useUiData() {
     queryKey: ['ui-data'],
     queryFn: () => apiGet<UiData>('/api/ui-data'),
     refetchInterval: 5000,
+  })
+}
+export function useSettings() {
+  return useQuery({
+    queryKey: ['settings'],
+    queryFn: () => apiGet<SettingsResponse>('/api/settings'),
   })
 }
 export function useHealth() {

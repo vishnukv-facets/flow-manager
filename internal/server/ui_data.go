@@ -49,11 +49,13 @@ type uiData struct {
 // floatingSessionInfo is one adhoc floating (Ask Flow) session as surfaced to
 // the tray. Running reflects whether its PTY is currently attached.
 type floatingSessionInfo struct {
-	ID       string `json:"id"`
-	Provider string `json:"provider"`
-	Title    string `json:"title"`
-	Running  bool   `json:"running"`
-	Created  string `json:"created_at"`
+	ID         string `json:"id"`
+	Provider   string `json:"provider"`
+	Title      string `json:"title"`
+	Running    bool   `json:"running"`
+	Waiting    bool   `json:"waiting"`
+	WaitingWhy string `json:"waiting_why,omitempty"`
+	Created    string `json:"created_at"`
 }
 
 // uiUser carries the operator's display name so the dashboard can greet

@@ -44,6 +44,9 @@ type actionRequest struct {
 	PermissionMode string `json:"permission_mode"`
 	Mkdir          bool   `json:"mkdir"`
 
+	// Settings carries key→value pairs for the update-settings action.
+	Settings map[string]string `json:"settings,omitempty"`
+
 	AttachmentFiles []*multipart.FileHeader `json:"-"`
 }
 
@@ -260,6 +263,8 @@ func (s *Server) runAction(req actionRequest) (actionResponse, int) {
 		return s.overviewChat(req)
 	case "close-floating-terminal":
 		return s.closeFloatingTerminal(req)
+	case "update-settings":
+		return s.updateSettings(req)
 	default:
 		return actionResponse{OK: false, Message: "unknown action " + req.Kind}, http.StatusBadRequest
 	}

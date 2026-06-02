@@ -377,6 +377,98 @@
 .cap-row:last-child {
   border-bottom: 0;
 }
+/* editable settings (config registry) */
+.config-form {
+  display: grid;
+  gap: 13px;
+}
+.config-field {
+  display: grid;
+  gap: 5px;
+}
+.config-field-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.config-src {
+  font-family: var(--font-mono);
+  font-size: 9.5px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  padding: 1px 6px;
+  border-radius: 999px;
+  color: var(--text-3);
+  background: var(--bg-3);
+}
+.config-src.config {
+  color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 16%, transparent);
+}
+.config-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  color: var(--text-2);
+  cursor: pointer;
+  user-select: none;
+}
+.config-help {
+  font-size: 11.5px;
+  color: var(--text-3);
+  line-height: 1.4;
+}
+.config-actions {
+  display: flex;
+  justify-content: flex-end;
+  padding-top: 4px;
+}
+/* redesigned settings page: summary bar + labelled sections */
+.settings-summary {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  margin-bottom: 22px;
+  padding: 0;
+  overflow: hidden;
+}
+.settings-summary .sum-item {
+  padding: 13px 16px;
+  border-right: 1px solid var(--border-faint);
+  min-width: 0;
+}
+.settings-summary .sum-item:last-child {
+  border-right: 0;
+}
+.sum-label {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--text-3);
+  margin-bottom: 5px;
+}
+.sum-value {
+  font-size: 13.5px;
+  color: var(--text);
+}
+.sum-value.mono {
+  font-family: var(--font-mono);
+  font-size: 12.5px;
+}
+.settings-section {
+  margin-bottom: 22px;
+}
+.settings-section-head {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  margin: 0 2px 11px;
+}
+.settings-section-hint {
+  font-size: 11.5px;
+  color: var(--text-3);
+}
 .cap-dot {
   width: 8px;
   height: 8px;
@@ -869,7 +961,9 @@ select.input {
 }
 .floating-terminal {
   position: fixed;
-  z-index: 90;
+  /* Base only — the live z is set inline (see FLOATING_Z_BASE/nextZ); this keeps
+     the window above the fullscreen session terminal (95) if inline is absent. */
+  z-index: 97;
   width: min(720px, calc(100vw - 24px));
   height: min(460px, calc(100vh - 96px));
   min-height: 320px;
@@ -995,6 +1089,24 @@ select.input {
 .floating-terminal.hidden {
   display: none;
 }
+/* Bottom-right resize grip — an L-corner that drags the window's size. */
+.floating-terminal-resize {
+  position: absolute;
+  right: 2px;
+  bottom: 2px;
+  width: 14px;
+  height: 14px;
+  z-index: 3;
+  cursor: nwse-resize;
+  border-right: 2px solid color-mix(in srgb, var(--accent-line) 80%, transparent);
+  border-bottom: 2px solid color-mix(in srgb, var(--accent-line) 80%, transparent);
+  border-bottom-right-radius: 6px;
+  opacity: 0.5;
+  touch-action: none;
+}
+.floating-terminal-resize:hover {
+  opacity: 1;
+}
 
 /* Adhoc Ask Flow tray — a bottom-right dock of session chips. Server-backed,
    so it survives navigation and reload; one chip per live adhoc session. */
@@ -1002,17 +1114,78 @@ select.input {
   position: fixed;
   right: 16px;
   bottom: 16px;
-  z-index: 80;
+  /* Above the fullscreen session terminal (95) so chips stay clickable in
+     full-view mode; below the floating windows and modal scrim (100). */
+  z-index: 97;
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 0;
+  max-width: 320px;
+}
+/* Header pill that doubles as the collapsed state — click to retract the chip
+   list into the corner / expand it back upward. */
+.adhoc-tray-toggle {
+  align-self: flex-end;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 5px 9px 5px 12px;
+  background: #151720;
+  border: 1px solid color-mix(in srgb, var(--accent-line) 55%, #111);
+  border-radius: 999px;
+  box-shadow: 0 12px 30px -16px rgba(8, 10, 18, 0.6);
+  color: #8e95a8;
+  cursor: pointer;
+  transition: border-color 140ms ease, color 140ms ease;
+}
+.adhoc-tray-toggle:hover {
+  border-color: color-mix(in srgb, var(--accent) 50%, #111);
+  color: #cfd2dc;
+}
+.adhoc-tray-toggle .eyebrow {
+  color: inherit;
+}
+.adhoc-tray-count {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 18px;
+  height: 18px;
+  padding: 0 5px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--accent) 22%, #151720);
+  color: #e8e7ef;
+  font-size: 11px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+}
+.adhoc-tray-caret {
+  margin-left: -1px;
+  color: inherit;
+  transition: transform 220ms cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+.adhoc-tray.collapsed .adhoc-tray-caret {
+  transform: rotate(180deg);
+}
+.adhoc-tray-list {
+  display: grid;
+  grid-template-rows: 1fr;
+  transition: grid-template-rows 220ms cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+.adhoc-tray.collapsed .adhoc-tray-list {
+  grid-template-rows: 0fr;
+}
+.adhoc-tray-list-inner {
   display: flex;
   flex-direction: column;
   align-items: stretch;
   gap: 6px;
-  max-width: 320px;
-}
-.adhoc-tray-label {
-  align-self: flex-end;
-  color: #8e95a8;
-  margin-bottom: 2px;
+  min-height: 0;
+  /* clip the chips as they slide away; padding lives inside so it collapses
+     too (and leaves room for the chips' drop shadow when open) */
+  overflow: hidden;
+  padding-top: 8px;
 }
 .adhoc-chip {
   display: grid;
@@ -1074,6 +1247,83 @@ select.input {
     bottom: 12px;
     max-width: calc(100vw - 24px);
   }
+}
+
+/* Attention popups — appear ONLY when a tray/floating session is waiting on
+   you. Top-right notification stack; each card is a prompt with Open/Dismiss.
+   No resting icon when nothing needs you. */
+.attn-stack {
+  position: fixed;
+  top: 64px;
+  right: 16px;
+  z-index: 96;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  width: 340px;
+  max-width: calc(100vw - 32px);
+}
+.attn-pop {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 11px 12px;
+  background: #0f1015;
+  border: 1px solid color-mix(in srgb, var(--warn) 55%, #111);
+  border-radius: 11px;
+  box-shadow: 0 18px 46px -20px rgba(8, 10, 18, 0.66);
+  animation: attn-pop-in 180ms var(--ease, ease);
+}
+@keyframes attn-pop-in {
+  from {
+    opacity: 0;
+    transform: translateY(-6px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+.attn-pop-dot {
+  width: 8px;
+  height: 8px;
+  flex: none;
+  border-radius: 999px;
+  background: var(--warn);
+  box-shadow: 0 0 0 4px color-mix(in srgb, var(--warn) 18%, transparent);
+  animation: attn-pulse-dot 1.6s ease-in-out infinite;
+}
+@keyframes attn-pulse-dot {
+  0%,
+  100% {
+    box-shadow: 0 0 0 3px color-mix(in srgb, var(--warn) 26%, transparent);
+  }
+  50% {
+    box-shadow: 0 0 0 6px color-mix(in srgb, var(--warn) 0%, transparent);
+  }
+}
+.attn-pop-icon {
+  flex: none;
+  display: inline-flex;
+}
+.attn-pop-main {
+  flex: 1;
+  min-width: 0;
+}
+.attn-pop-title {
+  font-size: 12.5px;
+  font-weight: 650;
+  color: #f2f0eb;
+}
+.attn-pop-sub {
+  font-size: 11px;
+  color: var(--text-3);
+}
+.attn-pop-actions {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
 }
 /* Absolutely fill the host so FitAddon always measures the same box and xterm
    manages its OWN viewport/screen heights. (Forcing .xterm-viewport height:100%
