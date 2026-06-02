@@ -1951,11 +1951,44 @@ select.input {
   display: flex;
   align-items: center;
   gap: 10px;
+  width: 100%;
   padding: 8px 12px;
   background: var(--bg-2);
   font-family: var(--font-mono);
   font-size: 12px;
+  border: 0;
   border-bottom: 1px solid var(--border-faint);
+  color: inherit;
+  cursor: pointer;
+  text-align: left;
+}
+.diff-file-head:hover {
+  background: var(--bg-3);
+}
+.diff-chevron {
+  flex: none;
+  color: var(--text-3);
+  transition: transform var(--dur-1) var(--ease);
+}
+.diff-chevron.collapsed {
+  transform: rotate(-90deg);
+}
+/* a file changed since the last visit — accent the frame + badge */
+.diff-file.changed {
+  border-color: var(--accent-line);
+}
+.diff-new-badge {
+  flex: none;
+  font-size: 9.5px;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--accent-hi);
+  background: var(--accent-soft);
+  border-radius: var(--r-xs);
+  padding: 1px 6px;
+}
+.diff-new-count {
+  color: var(--accent-hi);
 }
 .diff-code {
   font-family: var(--font-mono);
@@ -3541,6 +3574,140 @@ summary.detail-branch.as-button:hover {
 .dep-chip.blocks {
   color: var(--accent-hi);
   border-color: var(--accent-line);
+}
+
+/* ---- orchestration tree (SessionDetail "tree" tab) -------------------- */
+.orch-tree {
+  font-size: 12px;
+  line-height: 1.5;
+  overflow-x: auto;
+}
+.orch-row {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding: 3px 6px;
+  border-radius: var(--r-xs);
+  cursor: pointer;
+  min-width: 0;
+}
+.orch-row:hover {
+  background: var(--bg-3);
+}
+.orch-row.focus {
+  background: var(--accent-soft);
+  cursor: default;
+  box-shadow: inset 2px 0 0 var(--accent-hi);
+}
+.orch-row.is-done .orch-name {
+  color: var(--text-3);
+  text-decoration: line-through;
+  text-decoration-color: var(--border-faint);
+}
+/* box-drawing connectors — preserve runs of spaces, never wrap */
+.orch-branch {
+  white-space: pre;
+  color: var(--text-3);
+  flex: none;
+}
+.orch-name {
+  font-weight: 500;
+  min-width: 0;
+}
+.orch-slug {
+  font-size: 10.5px;
+  flex: none;
+}
+.orch-multi {
+  font-size: 10px;
+  color: var(--warn);
+  border: 1px solid color-mix(in srgb, var(--warn) 30%, transparent);
+  border-radius: var(--r-xs);
+  padding: 0 5px;
+  flex: none;
+}
+.orch-live {
+  font-size: 10px;
+  color: var(--ok);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  flex: none;
+}
+
+/* ---- due-date agenda (Mission Control main column) ------------------- */
+.agenda-bucket + .agenda-bucket {
+  margin-top: 12px;
+}
+.agenda-bucket-head {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 10.5px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--text-3);
+  margin: 0 0 5px 2px;
+}
+.agenda-bucket-head.overdue {
+  color: var(--danger);
+}
+.agenda-bucket-head.today {
+  color: var(--warn);
+}
+
+/* ---- Mission Control analytics: trends + project progress ------------ */
+.trend-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+.trend-label {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  flex: none;
+  min-width: 96px;
+}
+.trend-label .eyebrow {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+.trend-label .mono {
+  font-size: 11px;
+}
+.trend-row .spark {
+  flex: 1;
+}
+.proj-prog {
+  cursor: pointer;
+}
+.proj-prog-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 4px;
+  font-size: 12px;
+}
+.proj-prog-head .mono {
+  font-size: 10.5px;
+  flex: none;
+}
+.prog-track {
+  height: 5px;
+  border-radius: var(--r-pill);
+  background: var(--bg-3);
+  overflow: hidden;
+}
+.prog-fill {
+  height: 100%;
+  border-radius: var(--r-pill);
+  background: var(--accent);
+  transition: width var(--dur-2) var(--ease);
+}
+.proj-prog:hover .prog-fill {
+  background: var(--accent-hi);
 }
 
 /* brief panel — float the Edit affordance so the brief starts at the top */

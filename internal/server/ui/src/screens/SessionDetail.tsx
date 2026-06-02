@@ -11,6 +11,7 @@ import {
   Check,
   CheckCircle2,
   ChevronDown,
+  ChevronsDownUp,
   Circle,
   Coins,
   GitBranch,
@@ -19,6 +20,7 @@ import {
   Maximize2,
   Minimize2,
   MoreHorizontal,
+  Network,
   PanelRightClose,
   PanelRightOpen,
   Pause,
@@ -38,6 +40,7 @@ import {
   useTask,
   useTaskBridge,
   useTaskTranscript,
+  useTasks,
   useUiData,
 } from '../lib/query'
 import { apiAction } from '../lib/api'
@@ -45,15 +48,17 @@ import { useDocumentTitle } from '../lib/useDocumentTitle'
 import { pushToast } from '../lib/toast'
 import { confirmAction } from '../lib/confirm'
 import type { DiffFile, TranscriptEntry, UiAgent } from '../lib/types'
+import { buildFamilyTree, countNodes, nodeStatus, type OrchNode } from '../lib/orchestration'
+import { changedSinceLook, commitLook } from '../lib/difflook'
 import { TaskTerminal } from '../components/Terminal'
 import { Md } from '../components/Markdown'
 import { Modal } from '../components/Modal'
 import { AgentPicker, PermissionPicker } from '../components/pickers'
 import { TerminalIcon } from '../components/TerminalIcon'
-import { ErrorNote, Loading, ProviderIcon, StatusBadge, TokenBar } from '../components/ui'
+import { EmptyState, ErrorNote, Loading, ProviderIcon, StatusBadge, StatusDot, TokenBar } from '../components/ui'
 import { compact, compactTokens, dateTime, fromMinutes, fromSeconds } from '../lib/format'
 
-type Tab = 'brief' | 'diff' | 'transcript' | 'updates'
+type Tab = 'brief' | 'diff' | 'transcript' | 'updates' | 'tree'
 
 export function SessionDetail({ slug }: { slug: string }) {
   const [, navigate] = useLocation()
@@ -71,6 +76,7 @@ export function SessionDetail({ slug }: { slug: string }) {
   const [diffModal, setDiffModal] = useState(false)
   const [transcriptModal, setTranscriptModal] = useState(false)
   const [updatesModal, setUpdatesModal] = useState(false)
+  const [treeModal, setTreeModal] = useState(false)
   const [reopened, setReopened] = useState(false) // user revisited a done task → allow the live terminal to mount
   const [doneRunning, setDoneRunning] = useState(false) // flow-done close-out in progress → show inline step panel
   const [editingName, setEditingName] = useState(false)
@@ -79,6 +85,20 @@ export function SessionDetail({ slug }: { slug: string }) {
 
   const { data: ui } = useUiData()
   const done = task?.status === 'done'
+  // The orchestration tree is only meaningful when this task is part of a
+  // spawn/tell/wait family — hide the tab otherwise so solo tasks stay clean.
+  const hasFamily = !!(
+    task &&
+    (task.parent_slug || (task.parents?.length ?? 0) > 0 || (task.children?.length ?? 0) > 0)
+  )
+  // If the tree tab was active and we land on a task with no family, fall back
+  // to the brief so the body doesn't render against a vanished tab. Gate on
+  // `task` being loaded: while the next task is still fetching, hasFamily is
+  // transiently false, and resetting then would wrongly drop the tree tab when
+  // clicking through a family.
+  useEffect(() => {
+    if (task && tab === 'tree' && !hasFamily) setTab('brief')
+  }, [task, tab, hasFamily])
   // Once a done task has been "revisited", let the live terminal mount even
   // though task.status is still done — the backend resumes its prior session.
   const canTerminal = open && (!done || reopened)
@@ -487,7 +507,7 @@ export function SessionDetail({ slug }: { slug: string }) {
           <div className="session-side card" style={{ padding: 0 }}>
             <SideInfo task={task} agent={agent} />
             <div className="tabs" style={{ padding: '0 12px' }}>
-              {(['brief', 'diff', 'transcript', 'updates'] as Tab[]).map((t) => (
+              {(['brief', 'diff', 'transcript', 'updates', ...(hasFamily ? ['tree'] : [])] as Tab[]).map((t) => (
                 <button key={t} className={`tab${tab === t ? ' active' : ''}`} onClick={() => setTab(t)}>
                   {t === 'diff' && agent?.diff?.files ? `diff (${agent.diff.files})` : t}
                 </button>
@@ -495,7 +515,7 @@ export function SessionDetail({ slug }: { slug: string }) {
             </div>
             <div className="tab-body" style={{ padding: '14px 14px' }}>
               {tab === 'brief' && <BriefTab slug={slug} summary={agent?.summary} />}
-              {tab === 'diff' && <DiffTab files={agent?.diff_files} error={agentError} onExpand={() => setDiffModal(true)} />}
+              {tab === 'diff' && <DiffTab files={agent?.diff_files} error={agentError} onExpand={() => setDiffModal(true)} slug={slug} trackLook />}
               {tab === 'transcript' && (
                 <TranscriptTab
                   slug={slug}
@@ -507,13 +527,14 @@ export function SessionDetail({ slug }: { slug: string }) {
               {tab === 'updates' && (
                 <UpdatesTab slug={slug} updates={task.updates} onExpand={() => setUpdatesModal(true)} />
               )}
+              {tab === 'tree' && hasFamily && <TreeTab slug={slug} onExpand={() => setTreeModal(true)} />}
             </div>
           </div>
         )}
       </div>
 
       <Modal open={diffModal} onClose={() => setDiffModal(false)} title={`Changes · ${agent?.diff?.files ?? 0} files`} width={1100}>
-        <DiffTab files={agent?.diff_files} error={agentError} />
+        <DiffTab files={agent?.diff_files} error={agentError} slug={slug} />
       </Modal>
 
       <Modal open={transcriptModal} onClose={() => setTranscriptModal(false)} title="Transcript" width={1000}>
@@ -522,6 +543,10 @@ export function SessionDetail({ slug }: { slug: string }) {
 
       <Modal open={updatesModal} onClose={() => setUpdatesModal(false)} title="Updates" width={900}>
         <UpdatesTab slug={slug} updates={task.updates} startOpen />
+      </Modal>
+
+      <Modal open={treeModal} onClose={() => setTreeModal(false)} title="Orchestration tree" width={760}>
+        <TreeTab slug={slug} />
       </Modal>
     </div>
   )
@@ -790,41 +815,96 @@ function BriefTab({ slug, summary }: { slug: string; summary?: string }) {
   return <Md source={data} />
 }
 
-function DiffTab({ files, error, onExpand }: { files?: DiffFile[]; error?: unknown; onExpand?: () => void }) {
+function DiffTab({
+  files,
+  error,
+  onExpand,
+  slug,
+  trackLook,
+}: {
+  files?: DiffFile[]
+  error?: unknown
+  onExpand?: () => void
+  slug?: string
+  trackLook?: boolean
+}) {
+  // Per-file collapse — a set of collapsed filenames (all expanded by default).
+  const [collapsed, setCollapsed] = useState<Set<string>>(new Set())
+  // "Since I last looked" — files whose signature changed since the last visit.
+  // Computed once per mount against the stored baseline, which is then advanced
+  // so the next visit compares against this one.
+  const [changed, setChanged] = useState<Set<string>>(new Set())
+  const looked = useRef(false)
+  useEffect(() => {
+    if (!trackLook || !slug || !files || files.length === 0 || looked.current) return
+    setChanged(changedSinceLook(slug, files))
+    commitLook(slug, files)
+    looked.current = true
+  }, [trackLook, slug, files])
+
   if (error) return <ErrorNote error={error} />
   if (!files || files.length === 0) return <div className="faint">No local git changes.</div>
+
+  const allCollapsed = collapsed.size === files.length
+  const toggle = (name: string) =>
+    setCollapsed((s) => {
+      const next = new Set(s)
+      if (next.has(name)) next.delete(name)
+      else next.add(name)
+      return next
+    })
+  const toggleAll = () => setCollapsed(allCollapsed ? new Set() : new Set(files.map((f) => f.name)))
+
   return (
     <div>
-      {onExpand && (
-        <div className="row" style={{ marginBottom: 10 }}>
-          <span className="faint mono" style={{ fontSize: 11 }}>{files.length} files changed</span>
-          <div className="spacer" />
+      <div className="row" style={{ marginBottom: 10 }}>
+        <span className="faint mono" style={{ fontSize: 11 }}>
+          {files.length} file{files.length === 1 ? '' : 's'} changed
+          {changed.size > 0 && (
+            <span className="diff-new-count"> · {changed.size} new since last look</span>
+          )}
+        </span>
+        <div className="spacer" />
+        <button className="btn ghost sm" onClick={toggleAll} title={allCollapsed ? 'Expand all files' : 'Collapse all files'}>
+          <ChevronsDownUp size={13} /> {allCollapsed ? 'Expand all' : 'Collapse all'}
+        </button>
+        {onExpand && (
           <button className="btn ghost sm" onClick={onExpand}>
             <Maximize2 size={13} /> Full view
           </button>
-        </div>
-      )}
-      {files.map((f) => (
-        <div key={f.name} className="diff-file">
-          <div className="diff-file-head">
-            <span className="clip" style={{ flex: 1 }}>{f.name}</span>
-            <span className="diffstat"><span className="add">+{f.add}</span> <span className="rem">−{f.rem}</span></span>
-          </div>
-          <div className="diff-code">
-            {(f.hunks ?? []).map((h, hi) => (
-              <div key={hi}>
-                <div className="diff-hunk-head">{h.header}</div>
-                {h.lines.map((l, li) => (
-                  <div key={li} className={`diff-line ${l.type}`}>
-                    <span className="ln">{l.n}</span>
-                    <span className="cd">{l.type === 'add' ? '+' : l.type === 'rem' ? '−' : ' '}{l.code}</span>
+        )}
+      </div>
+      {files.map((f) => {
+        const isCollapsed = collapsed.has(f.name)
+        const isChanged = changed.has(f.name)
+        return (
+          <div key={f.name} className={`diff-file${isChanged ? ' changed' : ''}`}>
+            <button className="diff-file-head" onClick={() => toggle(f.name)} aria-expanded={!isCollapsed}>
+              <ChevronDown size={13} className={`diff-chevron${isCollapsed ? ' collapsed' : ''}`} />
+              <span className="clip" style={{ flex: 1, textAlign: 'left' }}>{f.name}</span>
+              {isChanged && (
+                <span className="diff-new-badge" title="Changed since you last viewed this diff">new</span>
+              )}
+              <span className="diffstat"><span className="add">+{f.add}</span> <span className="rem">−{f.rem}</span></span>
+            </button>
+            {!isCollapsed && (
+              <div className="diff-code">
+                {(f.hunks ?? []).map((h, hi) => (
+                  <div key={hi}>
+                    <div className="diff-hunk-head">{h.header}</div>
+                    {h.lines.map((l, li) => (
+                      <div key={li} className={`diff-line ${l.type}`}>
+                        <span className="ln">{l.n}</span>
+                        <span className="cd">{l.type === 'add' ? '+' : l.type === 'rem' ? '−' : ' '}{l.code}</span>
+                      </div>
+                    ))}
                   </div>
                 ))}
               </div>
-            ))}
+            )}
           </div>
-        </div>
-      ))}
+        )
+      })}
     </div>
   )
 }
@@ -947,4 +1027,111 @@ function UpdateBody({ slug, filename }: { slug: string; filename: string }) {
   )
   if (isLoading) return <Loading label="update" />
   return <Md source={data || ''} />
+}
+
+// ---- orchestration tree --------------------------------------------------
+// Renders the focus task's family (root ancestor → all descendants) as a
+// box-drawing tree, built client-side from the live /api/tasks list so spawns
+// and running/done transitions appear without extra plumbing. See
+// lib/orchestration.ts for the (cycle-safe) assembly.
+function TreeTab({ slug, onExpand }: { slug: string; onExpand?: () => void }) {
+  const [, navigate] = useLocation()
+  const { data: tasks, isLoading, error } = useTasks({ include_done: true })
+  if (isLoading) return <Loading label="tree" />
+  if (error) return <ErrorNote error={error} />
+  const root = tasks ? buildFamilyTree(tasks, slug) : null
+  if (!root) {
+    return (
+      <EmptyState
+        icon={<Network size={20} />}
+        title="No orchestration tree"
+        hint="This task has no parent or child tasks yet. Spawn a child to delegate work and it'll show up here."
+      />
+    )
+  }
+  const total = countNodes(root)
+  return (
+    <div className="col" style={{ gap: 8 }}>
+      {onExpand && (
+        <div className="row" style={{ marginBottom: 2 }}>
+          <span className="faint mono" style={{ fontSize: 11 }}>
+            {total} task{total === 1 ? '' : 's'} in family
+          </span>
+          <div className="spacer" />
+          <button className="btn ghost sm" onClick={onExpand}>
+            <Maximize2 size={13} /> Full view
+          </button>
+        </div>
+      )}
+      <div className="orch-tree">
+        <OrchRow
+          node={root}
+          focusSlug={slug}
+          ancestorLines={[]}
+          isLast
+          isRoot
+          onOpen={(s) => navigate(`/session/${s}`)}
+        />
+      </div>
+    </div>
+  )
+}
+
+function OrchRow({
+  node,
+  focusSlug,
+  ancestorLines,
+  isLast,
+  isRoot,
+  onOpen,
+}: {
+  node: OrchNode
+  focusSlug: string
+  ancestorLines: boolean[]
+  isLast: boolean
+  isRoot: boolean
+  onOpen: (slug: string) => void
+}) {
+  const t = node.task
+  const focus = t.slug === focusSlug
+  // Each ancestor level contributes a "│  " (parent has more siblings below) or
+  // "   " (parent was the last child) segment; the node's own branch is "├─ "
+  // unless it's the last child ("└─ "). The root draws no branch glyph.
+  const prefix = ancestorLines.map((last) => (last ? '   ' : '│  ')).join('')
+  const branch = isRoot ? '' : isLast ? '└─ ' : '├─ '
+  return (
+    <>
+      <div
+        className={`orch-row${focus ? ' focus' : ''}${t.status === 'done' ? ' is-done' : ''}`}
+        onClick={focus ? undefined : () => onOpen(t.slug)}
+        title={focus ? 'Current task' : `Open ${t.slug}`}
+      >
+        <span className="orch-branch mono">{prefix}{branch}</span>
+        <StatusDot status={nodeStatus(t)} />
+        <span className="orch-name clip">{t.name}</span>
+        <span className="orch-slug mono faint clip">{t.slug}</span>
+        <ProviderIcon provider={t.session_provider} size={12} />
+        {node.extraParents > 0 && (
+          <span
+            className="orch-multi mono"
+            title={`Also a child of ${node.extraParents} other parent task${node.extraParents === 1 ? '' : 's'}`}
+          >
+            +{node.extraParents} parent{node.extraParents === 1 ? '' : 's'}
+          </span>
+        )}
+        {t.live && <span className="orch-live mono">live</span>}
+      </div>
+      {node.children.map((c, i) => (
+        <OrchRow
+          key={c.task.slug}
+          node={c}
+          focusSlug={focusSlug}
+          ancestorLines={isRoot ? [] : [...ancestorLines, isLast]}
+          isLast={i === node.children.length - 1}
+          isRoot={false}
+          onOpen={onOpen}
+        />
+      ))}
+    </>
+  )
 }

@@ -216,6 +216,13 @@ type transcriptUsageStats struct {
 	TokensSession int
 	Model         string
 	LastTimestamp string
+	// TokensByDay attributes each turn's freshTotal() (work tokens) to the
+	// local calendar day (YYYY-MM-DD) of its timestamp — the basis for the
+	// token-cost-over-time trend. Claude reports per-turn fresh input+output in
+	// message.usage, which maps cleanly to a day. Codex reports running totals
+	// via payload.Info rather than per-turn deltas, so Codex sessions contribute
+	// little here; that's a known limitation of the per-day breakdown.
+	TokensByDay map[string]int
 }
 
 type transcriptUsageRecord struct {

@@ -150,7 +150,19 @@ func accumulateTranscriptUsage(stats *transcriptUsageStats, line []byte) {
 	}
 	// Session usage = cumulative "work done", EXCLUDING cache reads AND
 	// cache-creation churn (both inflate a long session; see freshTotal).
-	stats.TokensSession += rec.Message.Usage.freshTotal()
+	fresh := rec.Message.Usage.freshTotal()
+	stats.TokensSession += fresh
+	// Per-day attribution for the token-cost trend: bucket this turn's fresh
+	// work by the local day of its timestamp. Same freshTotal() basis as
+	// TokensSession, so the trend and the session pill stay consistent.
+	if fresh > 0 {
+		if day := localDay(rec.Timestamp); day != "" {
+			if stats.TokensByDay == nil {
+				stats.TokensByDay = map[string]int{}
+			}
+			stats.TokensByDay[day] += fresh
+		}
+	}
 	if rec.Payload == nil {
 		return
 	}
