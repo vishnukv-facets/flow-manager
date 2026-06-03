@@ -133,13 +133,26 @@ func AppendInboxEvent(slug string, ev InboundEvent) error {
 	if path == "" {
 		return errors.New("monitor: cannot resolve inbox path (no FLOW_ROOT or HOME)")
 	}
+	meta := ClassifyInboxEvent(ev)
+	// Dedup Slack events by (channel, ts). The same Slack event can be
+	// delivered twice over one socket when it's visible to both the bot and
+	// the authorizing user (user-scoped event subscriptions overlap the
+	// bot's), and reconnects/backfill can replay it. (channel, ts) uniquely
+	// identifies a Slack message or reaction, so a second copy is a no-op.
+	// GitHub events are exempt: Channel=repo, TS=updated_at, so two distinct
+	// events on a repo can share a timestamp-second without being duplicates.
+	if meta.Source == "slack" && ev.Channel != "" && ev.TS != "" {
+		if inboxContainsSlackEvent(slug, ev.Channel, ev.TS) {
+			return nil
+		}
+	}
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return fmt.Errorf("monitor: mkdir task dir: %w", err)
 	}
 	entry := InboxEntry{
 		EnqueuedAt: time.Now().UTC().Format(time.RFC3339),
 		Event:      ev,
-		Meta:       ClassifyInboxEvent(ev),
+		Meta:       meta,
 	}
 	line, err := json.Marshal(entry)
 	if err != nil {
@@ -155,6 +168,73 @@ func AppendInboxEvent(slug string, ev InboundEvent) error {
 		return fmt.Errorf("monitor: append inbox.jsonl: %w", err)
 	}
 	return nil
+}
+
+// inboxContainsSlackEvent reports whether a Slack event with the given
+// (channel, ts) is already recorded in the task's inbox. Used by
+// AppendInboxEvent to make duplicate socket deliveries idempotent. A read
+// error (other than a missing file, which yields an empty slice) is treated
+// as "not present" so a transient read failure never blocks a real append.
+func inboxContainsSlackEvent(slug, channel, ts string) bool {
+	entries, err := ReadInboxEntries(slug)
+	if err != nil {
+		return false
+	}
+	for _, e := range entries {
+		if e.Meta.Source == "slack" && e.Event.Channel == channel && e.Event.TS == ts {
+			return true
+		}
+	}
+	return false
+}
+
+// inboxParticipantUserIDs returns the set of distinct event author user IDs
+// recorded in a task's inbox — i.e. everyone who has spoken or reacted in the
+// monitored thread. Used by DM auto-registration to match a DM recipient
+// against the threads they participate in. A read error yields an empty set.
+func inboxParticipantUserIDs(slug string) map[string]bool {
+	out := map[string]bool{}
+	entries, err := ReadInboxEntries(slug)
+	if err != nil {
+		return out
+	}
+	for _, e := range entries {
+		if uid := strings.TrimSpace(e.Event.UserID); uid != "" {
+			out[uid] = true
+		}
+	}
+	return out
+}
+
+// inboxThreadRootsForChannel returns the distinct thread_ts values among a
+// channel's message entries in the inbox — the set of threads that channel is
+// known to use. DM backfill consults conversations.replies for each so threaded
+// DM replies (invisible to conversations.history) can be recovered. A root
+// equal to its own message ts (an unthreaded message) is still included; it's a
+// harmless single-message "thread" to query.
+func inboxThreadRootsForChannel(slug, channel string) []string {
+	entries, err := ReadInboxEntries(slug)
+	if err != nil {
+		return nil
+	}
+	want := normalizeSlackChannelID(channel)
+	seen := map[string]bool{}
+	var roots []string
+	for _, e := range entries {
+		if e.Event.Kind != "message" && e.Event.Kind != "app_mention" {
+			continue
+		}
+		if normalizeSlackChannelID(e.Event.Channel) != want {
+			continue
+		}
+		root := strings.TrimSpace(e.Event.ThreadTS)
+		if root == "" || seen[root] {
+			continue
+		}
+		seen[root] = true
+		roots = append(roots, root)
+	}
+	return roots
 }
 
 // ReadInboxEntries returns all entries currently in the task's

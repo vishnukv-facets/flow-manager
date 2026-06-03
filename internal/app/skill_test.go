@@ -373,6 +373,19 @@ func TestSkillMentionsPlaybooks(t *testing.T) {
 	}
 }
 
+func TestSkillMentionsDMMonitoring(t *testing.T) {
+	got := string(embeddedSkill)
+	for _, want := range []string{
+		"slack-dm:",
+		"flow update task <your-slug> --tag slack-dm:",
+		"DM is a separate channel",
+	} {
+		if !strings.Contains(got, want) {
+			t.Errorf("skill missing DM-monitoring guidance %q", want)
+		}
+	}
+}
+
 func TestSkillMentionsSoftDelete(t *testing.T) {
 	got := string(embeddedSkill)
 	for _, want := range []string{

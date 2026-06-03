@@ -272,20 +272,230 @@ name and the first line of the message; if Slack's `channels:read`
 scope is missing, flow falls back to the author name alone rather
 than erroring.
 
-**Configuration.**
+**Following a reply into DMs.** Sometimes the agent is asked to answer
+someone *privately* rather than in the thread. A DM is a separate channel
+the task isn't watching, so the recipient's replies would normally fall off
+flow's radar. When the agent opens a DM it registers that channel on its
+task with a `slack-dm:<channel>` tag (via `flow update task … --tag`), and
+the listener then routes messages in that DM — matched by **channel ID
+alone**, since DMs aren't threaded — into the same `inbox.jsonl`. One task
+can follow its origin thread plus any number of DMs at once.
 
-| Env var                       | Purpose                                                        |
-| ----------------------------- | -------------------------------------------------------------- |
-| `FLOW_SLACK_APP_TOKEN`        | App-level token (`xapp-…`) — required for Socket Mode          |
-| `SLACK_BOT_TOKEN`             | Bot/user token (`xoxb-…` / `xoxp-…`) for Web API calls         |
-| `FLOW_SLACK_SELF_USER_IDS`    | Comma-separated Slack user IDs whose reactions count as you    |
-| `FLOW_SLACK_TRIGGER_EMOJI`    | Trigger emoji shortnames (default: `claude`)                   |
-| `FLOW_SLACK_SOCKET_MODE`      | `0` to disable Socket Mode while leaving tokens configured     |
-| `FLOW_SLACK_OPEN_TARGET`      | `ui` (default, browser terminal) or `iterm` (legacy iTerm tab) |
+This requires the Slack app to receive the user's DM events: under **Event
+Subscriptions → "Subscribe to events on behalf of users"**, add `message.im`
+(and `message.mpim` for group DMs), backed by the matching `im:history` /
+`mpim:history` user-token scopes, then reinstall the app. Duplicate socket
+deliveries (the same event seen by both the bot and the user) are collapsed
+by `(channel, ts)` at inbox-append time.
 
-The listener starts automatically when `flow ui serve` runs with the
-above tokens set. Without tokens, the rest of flow works unchanged —
-Slack is opt-in.
+### Setting up the Slack app (Socket Mode + Events) — step by step
+
+This is the part people get stuck on. flow talks to Slack over **Socket
+Mode** (an outbound WebSocket — no public URL, no inbound webhook, works
+behind a firewall) and consumes the **Events API** over that socket. The
+walkthrough below gets you from zero to a working integration. Do it once.
+
+> **One concept first.** Slack has *three* kinds of token and flow uses all
+> three. An **app-level token** (`xapp-…`) opens the Socket Mode WebSocket.
+> A **bot token** (`xoxb-…`) makes Web API reads (channel/thread/user
+> lookups). A **user token** (`xoxp-…`) is what unlocks DM following and DM
+> backfill, because the bot can't see *your* DMs — only you can. Reactions
+> and public/private channel threads work with just the app + bot token;
+> the user token is only needed once you want flow to follow DMs.
+
+#### 1. Create the app (fastest path: paste a manifest)
+
+Go to <https://api.slack.com/apps> → **Create New App** → **From an app
+manifest** → pick your workspace → paste the YAML below. This wires Socket
+Mode, every event subscription, and every OAuth scope flow uses in one shot.
+(Prefer clicking? Skip to the scope/event reference tables further down and
+toggle them by hand — the manifest just front-loads that work.)
+
+```yaml
+display_information:
+  name: flow
+  description: Turns your Slack reactions and replies into Claude/Codex work.
+features:
+  bot_user:
+    display_name: flow
+    always_online: true
+oauth_config:
+  scopes:
+    bot:
+      - reactions:read      # see :claude:/:codex: reactions (the core trigger)
+      - channels:history    # read public-channel thread replies (live monitor)
+      - groups:history      # read private-channel thread replies
+      - channels:read       # resolve channel name + members for task titles
+      - groups:read         # same, for private channels
+      - users:read          # resolve author display names for titles/inbox
+      - app_mentions:read   # receive @flow mentions
+      - im:read             # DM metadata (optional, see notes)
+      - mpim:read           # group-DM metadata (optional, see notes)
+      - chat:write          # post replies back to Slack (only if you enable writes)
+      - reactions:write     # add reactions back (only if you enable writes)
+    user:
+      - im:history          # receive + backfill 1:1 DMs (DM following)
+      - mpim:history        # receive + backfill group DMs (DM following)
+      - channels:history    # optional, user-scoped channel events (overlaps bot)
+      - groups:history      # optional, user-scoped private-channel events
+settings:
+  event_subscriptions:
+    bot_events:
+      - reaction_added
+      - message.channels
+      - message.groups
+      - app_mention
+    user_events:
+      - message.im
+      - message.mpim
+  socket_mode_enabled: true
+  org_deploy_enabled: false
+  token_rotation_enabled: false
+```
+
+The `user_events` block is what the README elsewhere calls **"Subscribe to
+events on behalf of users"** — it is *separate* from `bot_events` and is the
+only way `message.im` / `message.mpim` reach flow. Scopes alone don't deliver
+events; the event subscription is what does.
+
+#### 2. Create the app-level token (Socket Mode)
+
+The manifest turns Socket Mode *on* but does **not** create the token for it.
+Go to **Settings → Basic Information → App-Level Tokens → Generate Token and
+Scopes**:
+
+- Name it anything (e.g. `socket`).
+- Add the **`connections:write`** scope (this is what Socket Mode needs).
+- Generate it. Copy the **`xapp-…`** value → this is `FLOW_SLACK_APP_TOKEN`.
+
+#### 3. Install the app and grab the bot + user tokens
+
+Go to **Settings → Install App** → **Install to Workspace** → approve. Then,
+under **OAuth & Permissions → OAuth Tokens**:
+
+- **Bot User OAuth Token** (`xoxb-…`) → `FLOW_SLACK_TOKEN`.
+- **User OAuth Token** (`xoxp-…`) → `FLOW_SLACK_USER_TOKEN` *(only present if
+  you kept the `user` scopes; required for DM following)*.
+
+> **Reinstall whenever you change scopes or events.** Slack only grants new
+> scopes / starts delivering new event types after a reinstall. If you edit
+> the manifest or toggle a checkbox later, hit **Install to Workspace** again
+> or flow will silently never see the new events.
+
+#### 4. Find your own Slack user ID
+
+flow only acts on reactions from *you* (so a coworker's `:claude:` is harmless
+noise). In Slack, click your profile → **⋮** → **Copy member ID** (looks like
+`U01ABCDEF`). That's `FLOW_SLACK_SELF_USER_IDS` (comma-separate if you have
+more than one identity).
+
+#### 5. Give the tokens to flow
+
+Easiest: open **Mission Control → Settings** (`flow ui serve`, then the gear)
+and paste the three tokens + your user ID into the **Slack** group. flow
+writes them to `~/.flow/config.json` and restarts the listener live — no
+server bounce. Settings persisted this way always win over shell env vars.
+
+Prefer the shell? Export them before `flow ui serve` instead:
+
+```bash
+export FLOW_SLACK_APP_TOKEN=xapp-1-...          # app-level token (Socket Mode)
+export FLOW_SLACK_TOKEN=xoxb-...                # bot token (Web API reads)
+export FLOW_SLACK_USER_TOKEN=xoxp-...           # user token (DM following) — optional
+export FLOW_SLACK_SELF_USER_IDS=U01ABCDEF       # your Slack member ID(s)
+export FLOW_SLACK_TRIGGER_EMOJI=claude,codex    # optional; default is just "claude"
+flow ui serve
+```
+
+#### 6. Verify it's actually connected
+
+`flow ui serve` logs to stderr (and to `~/.flow/logs/ui-serve.log` when run
+with `--bg`). A healthy start looks like:
+
+```
+[slack listener] started (Socket Mode connecting)
+[slack listener] hello received
+[slack listener] connected
+```
+
+Mission Control surfaces the same state (connecting / connected / suppressed)
+so you can confirm at a glance. Now react to any thread with `:claude:` — a
+task should appear and a session should open.
+
+#### Scope → feature reference
+
+If you'd rather hand-pick scopes than paste the manifest, here's what each one
+buys you. The **core trigger** works with the first row alone; everything else
+is incremental.
+
+| Token | Scope | Unlocks |
+| ----- | ----- | ------- |
+| **App** (`xapp-`) | `connections:write` | The Socket Mode WebSocket itself — nothing works without it |
+| **Bot** (`xoxb-`) | `reactions:read` | Seeing your `:claude:` / `:codex:` reaction — the core trigger |
+| Bot | `channels:history`, `groups:history` | Streaming new thread replies into the task inbox (public / private) |
+| Bot | `channels:read`, `groups:read`, `users:read` | Building nice task titles ("Alice — fix the deploy") instead of falling back to bare IDs |
+| Bot | `app_mentions:read` | Reacting to `@flow` mentions |
+| Bot | `im:read`, `mpim:read` | DM metadata lookups (optional — most DM work uses the user token) |
+| Bot | `chat:write`, `reactions:write` | Posting replies / reactions *back* to Slack — only used if you set `FLOW_SLACK_WRITES_ENABLED=1` (off by default) |
+| **User** (`xoxp-`) | `im:history`, `mpim:history` | **DM following** — receiving and backfilling DM replies the bot can't see |
+| User | `channels:history`, `groups:history` | Optional, user-scoped channel events (overlaps the bot's; flow dedups by `(channel, ts)` so it's safe to have both) |
+
+#### Event → feature reference
+
+| Event | Side | Feature |
+| ----- | ---- | ------- |
+| `reaction_added` | bot | The trigger — your reaction creates/opens a task |
+| `message.channels` | bot | New public-channel thread replies wake the session |
+| `message.groups` | bot | Same, private channels |
+| `app_mention` | bot | `@flow` mentions |
+| `message.im` | **user** | 1:1 DM replies wake the session (DM following) |
+| `message.mpim` | **user** | Group-DM replies wake the session |
+
+### Configuration reference (env / Settings UI)
+
+Every key below is settable in **Mission Control → Settings** (persisted to
+`~/.flow/config.json`) *or* as an environment variable. Secrets are
+write-only in the UI — flow never reads them back. The `SLACK_*` column lists
+shell-env aliases that also resolve (handy if you already export standard
+Slack vars), but the Settings UI always reads/writes the `FLOW_SLACK_*` key.
+
+| Setting key | Env aliases | Default | Purpose |
+| ----------- | ----------- | ------- | ------- |
+| `FLOW_SLACK_APP_TOKEN` | `SLACK_APP_TOKEN` | — | App-level token (`xapp-…`); **required** for Socket Mode |
+| `FLOW_SLACK_TOKEN` | `SLACK_BOT_TOKEN`, `SLACK_TOKEN` | — | Bot token (`xoxb-…`) for Web API reads; **required** |
+| `FLOW_SLACK_USER_TOKEN` | `SLACK_USER_TOKEN` | — | User token (`xoxp-…`); required for DM following / DM backfill |
+| `FLOW_SLACK_WRITE_TOKEN` | `SLACK_WRITE_TOKEN` | — | Optional dedicated "post on my behalf" token; falls back to the bot/user token |
+| `FLOW_SLACK_SELF_USER_IDS` | — | — | Comma-separated Slack member IDs whose reactions/messages count as *you* |
+| `FLOW_SLACK_TRIGGER_EMOJI` | — | `claude` | Reaction shortname(s) that spawn a session; comma-separate for routing, e.g. `claude,codex` |
+| `FLOW_SLACK_SOCKET_MODE` | — | `true` | Set `0`/`false` to leave tokens configured but not connect |
+| `FLOW_SLACK_OPEN_TARGET` | — | `ui` | `ui` (browser terminal) or `iterm` (legacy iTerm tab) |
+| `FLOW_SLACK_AUTOOPEN` | — | `true` | Open a session automatically when a thread is triggered |
+| `FLOW_SLACK_WRITES_ENABLED` | — | `false` | Gate for posting back to Slack; **off** by default |
+| `FLOW_SLACK_API_BASE_URL` | — | `https://slack.com/api` | Override the Slack API base (testing / proxies only) |
+
+The listener starts automatically when `flow ui serve` runs with the app +
+bot tokens set and `FLOW_SLACK_SOCKET_MODE` not disabled. Without tokens, the
+rest of flow works unchanged — Slack is opt-in.
+
+> **Run exactly one flow server on a given Slack app token.** Socket Mode
+> routes each event to a *single* connected socket, so a second `flow ui
+> serve` (a stray smoke-test server, a worktree build) would split — and
+> possibly drop — your events into the wrong task inboxes. flow guards this
+> with a machine-wide flock keyed on the app token: the first process wins
+> the slot and the rest show as **suppressed** in Mission Control rather than
+> fighting for events. If Slack looks dead, check for a second flow process.
+
+#### Troubleshooting
+
+| Symptom | Likely cause |
+| ------- | ------------ |
+| Log shows `connection error` right after start | App not installed to the workspace, `xapp-` token missing the `connections:write` scope, app/user tokens from *different* apps, or admin approval pending |
+| `not starting: SocketModeEnabled() is false` | App or bot token missing, or `FLOW_SLACK_SOCKET_MODE=0` |
+| Listener `suppressed` in Mission Control | Another flow process already holds the Socket Mode lock for this app token — stop it |
+| Reactions do nothing | Your member ID isn't in `FLOW_SLACK_SELF_USER_IDS`, or the emoji isn't in `FLOW_SLACK_TRIGGER_EMOJI` |
+| Thread replies don't wake the session | Missing `channels:history` / `groups:history`, or you changed scopes without reinstalling |
+| DM replies don't wake the session | No user token, or `message.im` / `message.mpim` not subscribed under "on behalf of users", or app not reinstalled after adding them |
+| Task titles show raw IDs instead of names | Missing `channels:read` / `users:read` — flow falls back to the author ID rather than erroring |
 
 ## GitHub integration — assigned work and review threads
 
@@ -360,6 +570,72 @@ Run `gh auth login` first, or provide the usual `GH_TOKEN` /
 `GITHUB_TOKEN` environment that `gh api` supports. Without
 `FLOW_GH_ENABLED=1`, the rest of flow works unchanged — GitHub is
 opt-in.
+
+## Settings & configuration
+
+flow has one configuration system shared by the CLI, the listeners, and
+Mission Control. Every operator-tunable knob is one of two things: a
+**setting** (durable, lives in `~/.flow/config.json`, editable in the UI) or
+a **runtime/bootstrap env var** (per-invocation, like `FLOW_ROOT` or
+`FLOW_TERM`). The tables in this section are the complete list of settings;
+the runtime env vars are documented inline where they're relevant
+([terminal backend](#what-you-get), [data directory](#your-data--local-portable-yours)).
+
+### How settings resolve
+
+There are three layers, highest priority first:
+
+1. **`~/.flow/config.json`** — what the Settings UI writes. Stored `0600`
+   because it can hold tokens. A non-empty value here wins over everything.
+2. **Shell environment** — exported before `flow ui serve`. Used when
+   `config.json` doesn't set the key.
+3. **Built-in default** — the fallback baked into flow.
+
+At boot the server exports every `config.json` value into its own process
+environment, so the rest of the code (which reads `os.Getenv` at call time)
+honors UI-managed values uniformly. This is why a setting changed in the UI
+takes effect without re-exporting anything.
+
+### Editing settings in Mission Control
+
+`flow ui serve` → the **gear** icon. Each setting shows its current value, its
+source (`config` / `env` / `default`), and inline help. **Secrets are
+write-only**: flow never sends a stored token back to the browser, and an
+empty secret field means "leave the stored value unchanged" — so you never
+have to retype a token you can't read. Saving a Slack or GitHub key
+**hot-restarts** that listener so new tokens / toggles apply live, without
+bouncing the server.
+
+Anything not in `config.json` falls back to the inherited shell env, so the
+two approaches compose: bake stable values into your shell rc, override or
+add secrets in the UI.
+
+### General settings
+
+Beyond the [Slack](#configuration-reference-env--settings-ui) and
+[GitHub](#github-integration--assigned-work-and-review-threads) groups, these
+tune Mission Control itself:
+
+| Setting key | Type | Default | Purpose |
+| ----------- | ---- | ------- | ------- |
+| `FLOW_STALE_DAYS` | int | `3` | In-progress sessions quiet longer than this many days are flagged **stale** in the UI |
+| `FLOW_MISSION_QUOTE` | bool | `true` | Show the rotating anime quote beside the Mission Control greeting (also toggleable with `flow ui serve --no-quote`) |
+
+### Everything at a glance
+
+| Group | Keys |
+| ----- | ---- |
+| **Slack** | `FLOW_SLACK_APP_TOKEN`, `FLOW_SLACK_TOKEN`, `FLOW_SLACK_USER_TOKEN`, `FLOW_SLACK_WRITE_TOKEN`, `FLOW_SLACK_SOCKET_MODE`, `FLOW_SLACK_SELF_USER_IDS`, `FLOW_SLACK_TRIGGER_EMOJI`, `FLOW_SLACK_OPEN_TARGET`, `FLOW_SLACK_AUTOOPEN`, `FLOW_SLACK_WRITES_ENABLED` — see the [Slack reference](#configuration-reference-env--settings-ui) |
+| **GitHub** | `FLOW_GH_ENABLED`, `FLOW_GH_SELF_LOGINS`, `FLOW_GH_REPOS`, `FLOW_GH_POLL_INTERVAL`, `FLOW_GH_AUTOOPEN` — see the [GitHub reference](#github-integration--assigned-work-and-review-threads) |
+| **General** | `FLOW_STALE_DAYS`, `FLOW_MISSION_QUOTE` — above |
+
+> **Runtime env vars (not settings).** A handful of variables are read
+> per-invocation and intentionally *not* in the Settings UI:
+> `FLOW_ROOT` (override `~/.flow/`), `FLOW_TERM`
+> (`warp`/`iterm`/`terminal`/`zellij`/`kitty`), `FLOW_PROJECT` / `FLOW_TASK`
+> (injected into spawned sessions), and `FLOW_HOOK_OWNED` (marks a
+> flow-owned terminal for the Codex agent-hooks gate). These belong in your
+> shell rc or are set by flow itself, not in `config.json`.
 
 ## Install
 
@@ -601,10 +877,12 @@ to flow-owned terminals (`FLOW_HOOK_OWNED=1`) so ordinary Codex
 sessions opened in the same repo never forward events into Mission
 Control.
 
-`flow ui serve` also accepts `--host`, `--port`, and `--bg`. Default
-is `127.0.0.1:8787`. The Go HTTP server is a single binary — no node
-runtime, no build step, no package install. The static UI ships
-inside the binary.
+`flow ui serve` also accepts `--host`, `--port`, `--bg` (run detached,
+logging to `~/.flow/logs/ui-serve.log`), and `--no-quote` (hide the
+Mission Control anime quote). Default bind is `127.0.0.1:8787`; binding a
+non-loopback host prints a loud warning since Mission Control has no auth.
+The Go HTTP server is a single binary — no node runtime, no build step, no
+package install. The static UI ships inside the binary.
 
 ## Your data — local, portable, yours
 
@@ -666,6 +944,85 @@ Pick whichever fits your workflow:
 To move flow to a new machine: copy `~/.flow/` over, install the
 binary, and run `flow init` once — it'll pick up the existing data
 and reinstall the skill + hook.
+
+## Building from source
+
+The released binary is self-contained — most users never build flow. If you're
+hacking on it (or the Mission Control UI), here's the full picture.
+
+### Prerequisites
+
+- **Go 1.25+** — for the binary itself. The SQLite driver is pure Go
+  (`modernc.org/sqlite`), so there's **no CGO and no C toolchain** to install.
+- **Node 18+ and [pnpm](https://pnpm.io)** — *only* if you're building the UI.
+  The web app is Vite + React + TypeScript and lives under
+  `internal/server/ui/`. You don't need Node to build the Go binary when a UI
+  bundle already exists.
+
+### Make targets
+
+| Target | What it does |
+| ------ | ------------ |
+| `make build` | Builds `./flow`. **Auto-builds the UI first if the bundle is missing** (see below), otherwise a fast Node-free Go build. Version is injected via `-ldflags` (override with `make build VERSION=v1.2.3`). |
+| `make ui` | Rebuilds the web UI (`pnpm install && pnpm run build` in `internal/server/ui`) into `internal/server/static/`. Run after editing UI source. |
+| `make ui-check` | Type-checks the UI (`tsc --noEmit`) without emitting — fast feedback while editing. |
+| `make rebuild` | `make ui` then `make build` — the one-shot after touching anything under `internal/server/ui`. |
+| `make install` | Builds, copies the binary to `~/.local/bin/flow`, offers to add that to your `PATH`, and installs the flow skill + SessionStart hook. Then tells you to run `flow init`. |
+| `make uninstall` | Removes the skill/hook and the installed binary. |
+| `make test` | `go test ./...` — fast, no network, no real iTerm/Claude (externals are mocked). |
+| `make clean` | Removes the built binary. |
+
+> `make install` puts the binary in `~/.local/bin` (not `/usr/local/bin`) so a
+> `rm -rf` of your clone never breaks your shell, and it does **not** create
+> `~/.flow/` — run `flow init` once afterward to create the database, knowledge
+> base, skill, and hook.
+
+### Where the UI assets live, and how they render
+
+This trips people up on a fresh clone, so it's worth understanding.
+
+```
+internal/server/ui/              # UI SOURCE (Vite + React + TS) — you edit here
+  src/ …                         #   components, pages, styles
+  public/*.svg                   #   brand marks, copied verbatim into the bundle
+  vite.config.ts                 #   outDir = ../static, emptyOutDir = true
+
+internal/server/static/          # BUILD OUTPUT — what the binary embeds
+  index.html                     #   committed (entry point)
+  *.svg                          #   committed (brand marks, copied from ui/public)
+  assets/index-*.js  *.css  *.woff2   # GITIGNORED — regenerated by `make ui`
+
+internal/server/server.go        # //go:embed all:static  → bundles static/ into the binary
+```
+
+The Go server embeds the entire `static/` tree at compile time
+(`//go:embed all:static`) and serves it at `/`, falling back to `index.html`
+for client-routed paths. **There is no Node runtime, no build step, and no
+package install when you run `flow ui serve`** — the UI is already inside the
+binary.
+
+**The fresh-clone gotcha.** The hashed JS/CSS/font bundles under
+`static/assets/` are *gitignored* — they're large and churn on every change —
+so a clean checkout has no bundle and the UI renders blank. Two things save
+you:
+
+- `//go:embed all:static` still compiles because `static/index.html` and the
+  brand SVGs are committed; and
+- `make build` detects the missing `static/assets/index-*.js` and runs
+  `make ui` for you before compiling. So `make build` (or `make install`) on a
+  clean clone Just Works — the *first* build is slower because it builds the UI.
+
+**When you edit the UI**, run `make rebuild` (or `make ui` then `make build`).
+Because Vite builds with `emptyOutDir: true`, it wipes and regenerates
+`static/` — `index.html` and the brand SVGs (from `ui/public/`) are reproduced,
+and `static/assets/` gets fresh hashed filenames. **Commit only your `ui/`
+source changes**; leave the regenerated `static/assets/` out (it's gitignored).
+
+**Iterating the UI with hot reload.** Run `flow ui serve` (the Go backend) on
+`:8787`, then `pnpm dev` inside `internal/server/ui` for a Vite dev server on
+`:5173` that proxies `/api` and `/ws` to the backend. You get HMR without
+rebuilding the Go binary on every change; when you're happy, `make rebuild` to
+bake it in.
 
 ## Where flow runs (and where we'd love help)
 

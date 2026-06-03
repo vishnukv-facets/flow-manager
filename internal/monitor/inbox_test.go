@@ -81,6 +81,85 @@ func TestAppendInboxEvent_AppendsMultipleLines(t *testing.T) {
 	}
 }
 
+func TestAppendInboxEvent_DedupsSlackByChannelAndTS(t *testing.T) {
+	// The same Slack event can be delivered twice over one socket when it's
+	// visible to both the bot and the authorizing user (the user-scoped event
+	// subscriptions overlap the bot's), and reconnects/backfill can replay it.
+	// (channel, ts) uniquely identifies a Slack message, so the second copy
+	// must be a no-op rather than a duplicate inbox entry / double wake.
+	slug := inboxTestSlug(t)
+	ev := InboundEvent{
+		Kind:        "message",
+		Channel:     "D_ALICE",
+		ChannelType: "im",
+		TS:          "1700000100.000001",
+		ThreadTS:    "1700000100.000001",
+		UserID:      "U_alice",
+		Text:        "thanks!",
+	}
+	for i := 0; i < 2; i++ {
+		if err := AppendInboxEvent(slug, ev); err != nil {
+			t.Fatalf("append %d: %v", i, err)
+		}
+	}
+	entries, err := ReadInboxEntries(slug)
+	if err != nil {
+		t.Fatalf("read err = %v", err)
+	}
+	if len(entries) != 1 {
+		t.Fatalf("duplicate (channel, ts) should append once; len = %d", len(entries))
+	}
+	if entries[0].Event.Text != "thanks!" {
+		t.Errorf("kept entry wrong: %+v", entries[0].Event)
+	}
+}
+
+func TestAppendInboxEvent_DistinctSlackTSBothAppend(t *testing.T) {
+	// Dedup must key on ts, not just channel — two different messages in the
+	// same DM channel are distinct events and both belong in the inbox.
+	slug := inboxTestSlug(t)
+	for _, ts := range []string{"1700000100.000001", "1700000200.000002"} {
+		ev := InboundEvent{Kind: "message", Channel: "D_ALICE", ChannelType: "im", TS: ts, ThreadTS: ts, UserID: "U_alice", Text: "msg-" + ts}
+		if err := AppendInboxEvent(slug, ev); err != nil {
+			t.Fatalf("append %s: %v", ts, err)
+		}
+	}
+	entries, err := ReadInboxEntries(slug)
+	if err != nil {
+		t.Fatalf("read err = %v", err)
+	}
+	if len(entries) != 2 {
+		t.Fatalf("distinct ts should both append; len = %d", len(entries))
+	}
+}
+
+func TestAppendInboxEvent_DoesNotDedupGitHub(t *testing.T) {
+	// GitHub events carry Channel=repo and TS=updated_at, so two distinct
+	// events on one repo can share a timestamp-second without being
+	// duplicates. Dedup is Slack-only; GitHub events must never be collapsed.
+	slug := inboxTestSlug(t)
+	for _, kind := range []string{"pr_comment", "pr_review"} {
+		ev := InboundEvent{
+			Kind:        kind,
+			Channel:     "acme/app",
+			ChannelType: "github",
+			TS:          "2026-06-03T10:00:00Z", // identical updated_at
+			UserID:      "octocat",
+			Text:        kind + " body",
+		}
+		if err := AppendInboxEvent(slug, ev); err != nil {
+			t.Fatalf("append %s: %v", kind, err)
+		}
+	}
+	entries, err := ReadInboxEntries(slug)
+	if err != nil {
+		t.Fatalf("read err = %v", err)
+	}
+	if len(entries) != 2 {
+		t.Fatalf("GitHub events sharing (channel, ts) must not dedup; len = %d", len(entries))
+	}
+}
+
 func TestAppendInboxEvent_RoundtripPreservesFields(t *testing.T) {
 	slug := inboxTestSlug(t)
 	ev := InboundEvent{
