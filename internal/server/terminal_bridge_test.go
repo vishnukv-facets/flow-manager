@@ -104,3 +104,92 @@ func TestTrimScrollbackToLineBoundary(t *testing.T) {
 		t.Fatalf("under-cap buffer was trimmed: %d != %d", len(got), len(line))
 	}
 }
+
+func TestNormalizeCapturedPaneStripsBackgroundAndPadding(t *testing.T) {
+	// A real capture-pane -e diff-add row: green background (ESC[48;5;22m) over
+	// the content, padded across the full pane width, reset at the end. Replayed
+	// into a narrower grid this wraps and the green background bleeds onto the
+	// overflow rows. The normalizer must drop the background (so nothing can
+	// bleed regardless of width) while keeping the foreground + text.
+	pad := bytes.Repeat([]byte(" "), 150)
+	line := append([]byte("\x1b[38;5;77m\x1b[48;5;22m 434 +\x1b[38;5;231m.slack-wizard {"), pad...)
+	line = append(line, []byte("\x1b[39m\x1b[49m")...)
+
+	got := normalizeCapturedPaneForTerminal(append(append([]byte(nil), line...), '\n'))
+
+	if bytes.Contains(got, []byte("\x1b[48;5;22m")) {
+		t.Fatalf("green background SGR survived — it must be stripped: %q", got)
+	}
+	if bytes.Contains(got, pad) {
+		t.Fatalf("trailing space padding survived normalization: %q", got)
+	}
+	// Foreground colors and the line content must be preserved.
+	if !bytes.Contains(got, []byte(".slack-wizard {")) {
+		t.Fatalf("line content was lost: %q", got)
+	}
+	if !bytes.Contains(got, []byte("\x1b[38;5;77m")) || !bytes.Contains(got, []byte("\x1b[38;5;231m")) {
+		t.Fatalf("foreground colors were dropped: %q", got)
+	}
+	if !bytes.HasSuffix(got, []byte("\r\n")) {
+		t.Fatalf("output not CRLF-terminated: %q", got)
+	}
+}
+
+func TestStripBackgroundSGR(t *testing.T) {
+	cases := []struct {
+		name string
+		in   string
+		want string
+	}{
+		// Extended fg + extended bg in one sequence: keep fg, drop bg.
+		{"fg+extbg", "\x1b[38;5;77m\x1b[48;5;22mX", "\x1b[38;5;77mX"},
+		// Combined params: fg(38;5;231) + bg(48;5;237) → keep only fg.
+		{"combined", "\x1b[38;5;231;48;5;237m❯", "\x1b[38;5;231m❯"},
+		// Named background (42) dropped; named foreground (32) kept.
+		{"named", "\x1b[32;42mok", "\x1b[32mok"},
+		// Background-only sequence is removed entirely.
+		{"bg-only", "a\x1b[41mb", "ab"},
+		// Default-background (49) dropped; default-foreground (39) kept.
+		{"defaults", "\x1b[39;49mz", "\x1b[39mz"},
+		// Truecolor background dropped, truecolor foreground kept.
+		{"truecolor", "\x1b[38;2;1;2;3m\x1b[48;2;9;9;9mq", "\x1b[38;2;1;2;3mq"},
+		// Bare reset and full reset are preserved verbatim.
+		{"resets", "\x1b[0m\x1b[mw", "\x1b[0m\x1b[mw"},
+		// Attribute (bold=1) preserved alongside dropped bg.
+		{"bold+bg", "\x1b[1;44mB", "\x1b[1mB"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := string(stripBackgroundSGR([]byte(tc.in))); got != tc.want {
+				t.Fatalf("stripBackgroundSGR(%q) = %q, want %q", tc.in, got, tc.want)
+			}
+		})
+	}
+}
+
+func TestStripTrailingCellPaddingPreservesInteriorAndBorders(t *testing.T) {
+	cases := []struct {
+		name string
+		in   string
+		want string
+	}{
+		// No trailing padding, no SGR: unchanged.
+		{"plain", "hello world", "hello world"},
+		// Box-drawing table rows end in a border glyph, not a space: untouched.
+		{"table-border", "\u2502 cell value             \u2502", "\u2502 cell value             \u2502"},
+		// Interior spaces (alignment) are never trimmed \u2014 only the trailing run.
+		{"interior-spaces", "a    b      ", "a    b"},
+		// Spaces interleaved with the trailing resets: peel both, keep the resets.
+		{"interleaved", "x  \x1b[39m \x1b[49m", "x\x1b[39m\x1b[49m"},
+		// A bare ESC[m reset (empty params) still counts as a trailing SGR.
+		{"bare-reset", "y   \x1b[m", "y\x1b[m"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := string(stripTrailingCellPadding([]byte(tc.in)))
+			if got != tc.want {
+				t.Fatalf("stripTrailingCellPadding(%q) = %q, want %q", tc.in, got, tc.want)
+			}
+		})
+	}
+}

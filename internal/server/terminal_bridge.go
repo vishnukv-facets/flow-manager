@@ -825,11 +825,127 @@ func normalizeCapturedPaneForTerminal(data []byte) []byte {
 		return nil
 	}
 	data = bytes.ReplaceAll(data, []byte("\r\n"), []byte("\n"))
-	data = bytes.ReplaceAll(data, []byte("\n"), []byte("\r\n"))
+	// Drop BACKGROUND colors from the replayed scrollback. This is the root fix
+	// for the colored-block bleed (green diff rows, grey input rows) the browser
+	// terminal showed on attach.
+	//
+	// Why background, and why only the replay: tmux stores every history line at
+	// the width the pane had when it was written and never reflows it on resize,
+	// so capture-pane replays lines as wide as the widest client this session
+	// ever had (often 150–175 cols). Replayed into a narrower browser grid those
+	// lines autowrap, and xterm keeps the active background across the wrap —
+	// painting the overflow rows too. A run of such rows (a diff block, a pasted
+	// prompt) stacks into a solid colored brick that bleeds over neighbours. We
+	// can't reflow multi-width history, and the width comes from real content
+	// (not just trailing padding), so the only width-independent cure is to stop
+	// the background from existing in the reconstructed history. Foreground and
+	// attributes are kept, so the scrollback stays readable (diff +/- markers,
+	// status colors, etc.). The LIVE stream is NOT normalized — it renders at the
+	// matched pane width — so interactive output keeps its full background color.
+	data = stripBackgroundSGR(data)
+	// Then collapse each line's trailing whitespace so a long blank (now
+	// background-less) run can't wrap into stray empty rows. Trailing whitespace
+	// is never display-significant in a terminal (blank cells), so this is safe.
+	lines := bytes.Split(data, []byte("\n"))
+	for i, line := range lines {
+		lines[i] = stripTrailingCellPadding(line)
+	}
+	data = bytes.Join(lines, []byte("\r\n"))
 	if !bytes.HasSuffix(data, []byte("\r\n")) {
 		data = append(data, '\r', '\n')
 	}
 	return data
+}
+
+// sgrSeqRE matches one SGR (Select Graphic Rendition) sequence: ESC [ params m.
+var sgrSeqRE = regexp.MustCompile(`\x1b\[([0-9;]*)m`)
+
+// stripBackgroundSGR removes background-color parameters from every SGR sequence
+// in the captured replay while preserving foreground colors and text attributes.
+// Background params are: 40–47 / 100–107 (named), 48;5;n and 48;2;r;g;b
+// (extended), and 49 (default-background). 38;… (extended foreground) is kept
+// together with its color spec. A sequence that carried only background is
+// dropped entirely; bare resets (ESC[m / ESC[0m) are preserved. See
+// normalizeCapturedPaneForTerminal for why the replayed scrollback must shed its
+// background to avoid wrap-bleed.
+func stripBackgroundSGR(data []byte) []byte {
+	return sgrSeqRE.ReplaceAllFunc(data, func(seq []byte) []byte {
+		params := string(sgrSeqRE.FindSubmatch(seq)[1])
+		if params == "" || params == "0" {
+			return seq // reset-all — keep verbatim
+		}
+		toks := strings.Split(params, ";")
+		kept := make([]string, 0, len(toks))
+		for i := 0; i < len(toks); i++ {
+			switch t := toks[i]; {
+			case isSimpleBgParam(t):
+				// drop named bg / default-bg
+			case t == "48":
+				// extended background — skip "48" and its color spec
+				if i+2 < len(toks) && toks[i+1] == "5" {
+					i += 2
+				} else if i+4 < len(toks) && toks[i+1] == "2" {
+					i += 4
+				}
+			case t == "38":
+				// extended foreground — keep "38" and its color spec
+				if i+2 < len(toks) && toks[i+1] == "5" {
+					kept = append(kept, toks[i:i+3]...)
+					i += 2
+				} else if i+4 < len(toks) && toks[i+1] == "2" {
+					kept = append(kept, toks[i:i+5]...)
+					i += 4
+				} else {
+					kept = append(kept, t)
+				}
+			default:
+				kept = append(kept, t)
+			}
+		}
+		if len(kept) == 0 {
+			return nil // sequence was background-only
+		}
+		return []byte("\x1b[" + strings.Join(kept, ";") + "m")
+	})
+}
+
+func isSimpleBgParam(t string) bool {
+	switch t {
+	case "40", "41", "42", "43", "44", "45", "46", "47",
+		"100", "101", "102", "103", "104", "105", "106", "107",
+		"49":
+		return true
+	}
+	return false
+}
+
+// trailingSGRRE matches a single SGR (color/attribute) sequence anchored at the
+// end of a line, e.g. ESC[49m, ESC[0m, ESC[m, ESC[0;39;49m.
+var trailingSGRRE = regexp.MustCompile(`\x1b\[[0-9;]*m$`)
+
+// stripTrailingCellPadding removes a line's trailing run of spaces while
+// preserving the SGR reset sequences tmux emits at end-of-line — so the parser
+// state stays clean but the wide trailing padding that fuels the wrap-bleed (see
+// normalizeCapturedPaneForTerminal) is gone. Spaces may be interleaved with the
+// trailing resets, so we peel spaces and SGRs off the end alternately, then
+// re-append the collected resets in their original order.
+func stripTrailingCellPadding(line []byte) []byte {
+	var suffix []byte // trailing SGR sequences to re-append, in original order
+	for {
+		trimmed := bytes.TrimRight(line, " ")
+		if len(trimmed) != len(line) {
+			line = trimmed
+			continue
+		}
+		loc := trailingSGRRE.FindIndex(line)
+		if loc == nil {
+			break
+		}
+		seq := append([]byte(nil), line[loc[0]:loc[1]]...)
+		suffix = append(seq, suffix...)
+		line = line[:loc[0]]
+	}
+	return append(line, suffix...)
 }
 
 func sharedTerminalKillSession(name string) error {

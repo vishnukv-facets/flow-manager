@@ -141,6 +141,16 @@ export function TaskTerminal({ slug, kind = 'task', restartKey = 0, provider, on
     let sawFirstOutput = false // first output frame is the history replay
     let historyInFlight = false
     let lastHistoryReq = 0
+    // Follow-tail. While true, every drained write and every (re)fit re-pins the
+    // viewport to the bottom so the live input box + footer stay visible. A
+    // one-shot scrollToBottom loses the stick: the big history replay parses
+    // ASYNCHRONOUSLY, so its tail (prompt + footer) lands AFTER the early pin,
+    // and a late cols-change fit reflows the buffer (xterm preserves the top
+    // line, not the bottom) — either way the prompt slides below the fold and
+    // stays there until a manual resize/refresh. We drop follow only when the
+    // user deliberately scrolls up, and restore it when they return to bottom.
+    let follow = true
+    const atBottom = () => term.buffer.active.viewportY >= term.buffer.active.baseY
 
     const send = (obj: unknown) => {
       if (ws && ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify(obj))
@@ -220,6 +230,9 @@ export function TaskTerminal({ slug, kind = 'task', restartKey = 0, provider, on
       if (lines !== 0) {
         term.scrollLines(lines)
         wheelRemainder -= lines
+        // Scrolling up to read history detaches from the tail; scrolling back to
+        // the bottom re-attaches so live output resumes auto-following.
+        follow = atBottom()
         // Reached the top scrolling up: pull the full history so the start of
         // the session is reachable even for repaint-style agents.
         if (lines < 0 && term.buffer.active.viewportY <= 0) requestFullHistory()
@@ -233,13 +246,20 @@ export function TaskTerminal({ slug, kind = 'task', restartKey = 0, provider, on
     term.attachCustomKeyEventHandler((event) => {
       if (event.type !== 'keydown') return true
       if (!event.shiftKey || event.altKey || event.ctrlKey || event.metaKey) return true
-      if (event.code === 'PageUp') term.scrollPages(-1)
-      else if (event.code === 'PageDown') term.scrollPages(1)
-      else if (event.code === 'Home') {
+      if (event.code === 'PageUp') {
+        term.scrollPages(-1)
+        follow = atBottom()
+      } else if (event.code === 'PageDown') {
+        term.scrollPages(1)
+        follow = atBottom()
+      } else if (event.code === 'Home') {
         term.scrollToTop()
+        follow = false
         requestFullHistory()
-      } else if (event.code === 'End') term.scrollToBottom()
-      else return true
+      } else if (event.code === 'End') {
+        term.scrollToBottom()
+        follow = true
+      } else return true
       event.preventDefault()
       return false
     })
@@ -397,6 +417,11 @@ export function TaskTerminal({ slug, kind = 'task', restartKey = 0, provider, on
         resizeFrame = 0
         fitNow()
         term.refresh(0, Math.max(0, term.rows - 1))
+        // A fit can change cols and reflow the whole buffer; xterm preserves the
+        // top visible line, not the bottom, so the tail slides below the fold.
+        // Re-pinning here while following is the step the one-shot version
+        // missed — it's exactly why a manual resize used to be the workaround.
+        if (follow) term.scrollToBottom()
         openWS()
       })
     }
@@ -451,13 +476,16 @@ export function TaskTerminal({ slug, kind = 'task', restartKey = 0, provider, on
         }
         if (m.type === 'output' && m.data != null) {
           term.write(m.data, () => {
-            // After the initial history replay (one big frame), refit and pin to
-            // the bottom so the live prompt is visible, not scrolled off below.
+            // The first output frame is the history replay — refit to it.
             if (!sawFirstOutput) {
               sawFirstOutput = true
               fitNow()
-              term.scrollToBottom()
             }
+            // Re-pin on EVERY drained write while following — not just the first.
+            // The replay's tail (live prompt + footer) parses after the initial
+            // pin, so pinning here keeps the input box glued to the bottom as the
+            // stream settles. No-op once already at the bottom.
+            if (follow) term.scrollToBottom()
           })
         } else if (m.type === 'history' && m.data != null) {
           // Authoritative full-history reseed (server sendHistory): rebuild the
@@ -468,6 +496,9 @@ export function TaskTerminal({ slug, kind = 'task', restartKey = 0, provider, on
           // would race ahead of queued writes. Newer live frames land below the
           // history (the bottom rows, off-screen while the user reads the top).
           historyInFlight = false
+          // This reseed only fires because the user scrolled to the top — keep
+          // follow off so incoming live frames don't yank them back down.
+          follow = false
           term.write('\x1b[3J\x1b[2J\x1b[H')
           term.write(m.data, () => term.scrollToTop())
         } else if (m.type === 'status') onStatus?.('status', m.message ?? '')
@@ -537,7 +568,7 @@ export function TaskTerminal({ slug, kind = 'task', restartKey = 0, provider, on
     void fontReady.then(() => {
       if (destroyed) return
       fitNow()
-      term.scrollToBottom()
+      if (follow) term.scrollToBottom()
       scheduleFits()
     })
 
