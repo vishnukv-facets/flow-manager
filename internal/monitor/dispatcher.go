@@ -36,6 +36,15 @@ type TaskOpener interface {
 	OpenInUI(slug string) error
 }
 
+// MessageObserver observes messages the reaction pipeline does not own
+// (untracked threads). The steering cascade implements it. It lives in this
+// package — not steering — so Dispatcher can hold one without an import
+// cycle (steering already imports monitor). *steering.Cascade satisfies it
+// structurally.
+type MessageObserver interface {
+	Observe(ctx context.Context, ev InboundEvent) error
+}
+
 // Dispatcher routes parsed InboundEvents into flow tasks. It is the
 // integration layer between the side-effect-free DecideReaction and the
 // actual filesystem / database / process effects (flow spawn, inbox
@@ -44,8 +53,9 @@ type TaskOpener interface {
 // All side-effect operations live behind package-level function vars or
 // the Opener interface so tests can swap in pure-Go fakes.
 type Dispatcher struct {
-	DB     *sql.DB
-	Opener TaskOpener
+	DB      *sql.DB
+	Opener  TaskOpener
+	Steerer MessageObserver // optional: routes untracked messages into the steering cascade
 }
 
 // NewDispatcher constructs a dispatcher bound to db. opener may be nil
@@ -124,10 +134,14 @@ func (d *Dispatcher) dispatchMessage(ctx context.Context, ev InboundEvent) error
 	// DMs are monitored as threads too: when the agent opens or replies in a DM,
 	// the tool-use hook registers slack-thread:<dm-channel>:<thread_ts> on the
 	// task, so a DM message routes through the thread match above — scoped to the
-	// specific conversation, not the whole DM channel (which would pull in every
-	// unrelated topic the operator discusses with that person).
+	// specific conversation, not the whole DM channel.
 	//
-	// Untracked conversation — we haven't been asked to handle it.
+	// Untracked conversation — not owned by the reaction pipeline. Hand it to the
+	// steerer (if wired) to triage; Stage 0 inside the cascade decides whether
+	// it's even in scope. A nil steerer (CLI contexts) drops it as before.
+	if d.Steerer != nil {
+		return d.Steerer.Observe(ctx, ev)
+	}
 	return nil
 }
 
@@ -343,7 +357,7 @@ notifications. The first line of each inbox entry is the parsed event;
 fetch full thread history via the Slack MCP if you need more context
 than the event payload carries.
 
-**Classifying inbox events.** For each inbox entry, compare ` + "`event.user_id`" + ` against
+**Classifying inbox events.** For each inbox entry, compare `+"`event.user_id`"+` against
 the operator IDs listed above. Events authored by the operator are
 coordination signals from the human you work with — read them, let them
 adjust your plan, but **do not treat them as external follow-ups that
