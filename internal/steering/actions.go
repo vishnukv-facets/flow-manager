@@ -3,6 +3,7 @@ package steering
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"os/exec"
 	"strings"
@@ -136,4 +137,27 @@ func feedForwardMessage(item flowdb.FeedItem) string {
 		fmt.Fprintf(&b, "Why it may relate: %s\n", r)
 	}
 	return b.String()
+}
+
+// ErrAutonomyDenied is returned when an autonomous (non-manual) action is
+// blocked by the autonomy policy.
+var ErrAutonomyDenied = errors.New("steering: action denied by autonomy policy")
+
+// ApplyAction performs action on a feed item. manual=true (operator-initiated)
+// bypasses the autonomy gate — the operator IS the authorization. manual=false
+// (autonomous) must pass autonomy.Allow(action, item.Confidence) or it returns
+// ErrAutonomyDenied without side effects. Only make_task and forward are
+// supported in P1.3; reply/afk_reply (outward sends) arrive in P2.
+func ApplyAction(ctx context.Context, db *sql.DB, item flowdb.FeedItem, action Action, autonomy AutonomyPolicy, manual bool) error {
+	if !manual && !autonomy.Allow(action, item.Confidence) {
+		return ErrAutonomyDenied
+	}
+	switch action {
+	case ActionMakeTask:
+		return MakeTaskFromFeed(ctx, db, item)
+	case ActionForward:
+		return ForwardFeed(ctx, db, item)
+	default:
+		return fmt.Errorf("steering: action %q not supported in P1.3 (make_task/forward only)", action)
+	}
 }

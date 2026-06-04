@@ -128,3 +128,87 @@ func TestDismissFeed(t *testing.T) {
 		t.Errorf("item should be dismissed")
 	}
 }
+
+func TestApplyActionManualBypassesGate(t *testing.T) {
+	db, err := flowdb.OpenDB(filepath.Join(t.TempDir(), "flow.db"))
+	if err != nil {
+		t.Fatalf("OpenDB: %v", err)
+	}
+	defer db.Close()
+	spawns, _ := stubActionIO(t)
+
+	item := flowdb.FeedItem{ID: "g1", Source: "slack", ThreadKey: "C1:1.1", Summary: "s", SuggestedAction: "make_task", Confidence: 0.1, Status: "new", CreatedAt: "2026-06-05T10:00:00Z"}
+	if _, err := flowdb.UpsertFeedItem(db, item); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+	// manual=true, even with all-off DefaultAutonomy and low confidence → executes.
+	if err := ApplyAction(context.Background(), db, item, ActionMakeTask, DefaultAutonomy(), true); err != nil {
+		t.Fatalf("manual ApplyAction: %v", err)
+	}
+	if len(*spawns) != 1 {
+		t.Errorf("manual action should execute regardless of gate, spawns=%d", len(*spawns))
+	}
+}
+
+func TestApplyActionAutonomousDenied(t *testing.T) {
+	db, err := flowdb.OpenDB(filepath.Join(t.TempDir(), "flow.db"))
+	if err != nil {
+		t.Fatalf("OpenDB: %v", err)
+	}
+	defer db.Close()
+	spawns, _ := stubActionIO(t)
+
+	item := flowdb.FeedItem{ID: "g2", Source: "slack", ThreadKey: "C1:2.1", SuggestedAction: "make_task", Confidence: 0.99, Status: "new", CreatedAt: "2026-06-05T10:00:00Z"}
+	if _, err := flowdb.UpsertFeedItem(db, item); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+	// manual=false + DefaultAutonomy (all disabled) → denied, no execution.
+	err = ApplyAction(context.Background(), db, item, ActionMakeTask, DefaultAutonomy(), false)
+	if err != ErrAutonomyDenied {
+		t.Fatalf("autonomous make_task under default policy should be ErrAutonomyDenied, got %v", err)
+	}
+	if len(*spawns) != 0 {
+		t.Errorf("denied action must NOT execute, spawns=%d", len(*spawns))
+	}
+	if items, _ := flowdb.ListFeedItems(db, "new"); len(items) != 1 {
+		t.Errorf("denied action must leave the feed row untouched ('new')")
+	}
+}
+
+func TestApplyActionAutonomousAllowed(t *testing.T) {
+	db, err := flowdb.OpenDB(filepath.Join(t.TempDir(), "flow.db"))
+	if err != nil {
+		t.Fatalf("OpenDB: %v", err)
+	}
+	defer db.Close()
+	spawns, _ := stubActionIO(t)
+
+	item := flowdb.FeedItem{ID: "g3", Source: "slack", ThreadKey: "C1:3.1", Summary: "s", SuggestedAction: "make_task", Confidence: 0.95, Status: "new", CreatedAt: "2026-06-05T10:00:00Z"}
+	if _, err := flowdb.UpsertFeedItem(db, item); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+	policy := AutonomyPolicy{ActionMakeTask: {Enabled: true, Threshold: 0.80}}
+	if err := ApplyAction(context.Background(), db, item, ActionMakeTask, policy, false); err != nil {
+		t.Fatalf("autonomous allowed ApplyAction: %v", err)
+	}
+	if len(*spawns) != 1 {
+		t.Errorf("allowed autonomous action should execute, spawns=%d", len(*spawns))
+	}
+}
+
+func TestApplyActionUnsupported(t *testing.T) {
+	db, err := flowdb.OpenDB(filepath.Join(t.TempDir(), "flow.db"))
+	if err != nil {
+		t.Fatalf("OpenDB: %v", err)
+	}
+	defer db.Close()
+	stubActionIO(t)
+	item := flowdb.FeedItem{ID: "g4", Source: "slack", ThreadKey: "C1:4.1", SuggestedAction: "reply", Confidence: 0.9, Status: "new", CreatedAt: "2026-06-05T10:00:00Z"}
+	if _, err := flowdb.UpsertFeedItem(db, item); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+	// reply/afk_reply are outward sends — not implemented until P2. Manual or not, ApplyAction errors.
+	if err := ApplyAction(context.Background(), db, item, ActionReply, DefaultAutonomy(), true); err == nil {
+		t.Error("reply action is unsupported in P1.3 and must error")
+	}
+}
