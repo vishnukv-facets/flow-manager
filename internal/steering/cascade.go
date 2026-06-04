@@ -17,12 +17,6 @@ import (
 	"flow/internal/monitor"
 )
 
-// Observer consumes an inbound event for steering. Implemented by *Cascade and
-// consumed by the dispatcher (P1.2b).
-type Observer interface {
-	Observe(ctx context.Context, ev monitor.InboundEvent) error
-}
-
 // Cascade is the triage brain: Stage 0 (free) -> Stage 1 (cheap relevance) ->
 // Stage 2 (cheap score) -> Stage 3 (deep), gated by a verdict cache and an
 // hourly deep-triage budget, surfacing survivors to the Attention feed.
