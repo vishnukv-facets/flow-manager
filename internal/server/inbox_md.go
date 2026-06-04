@@ -200,6 +200,14 @@ func inboxJSONLTitle(ev monitor.InboundEvent) string {
 		return "Issue opened"
 	case "issue_comment":
 		return "Issue comment"
+	case "pr_mentioned":
+		return "PR mention"
+	case "issue_mentioned":
+		return "Issue mention"
+	case "pr_involved":
+		return "PR involvement"
+	case "issue_involved":
+		return "Issue involvement"
 	case "message":
 		return "Slack message"
 	case "app_mention":

@@ -19,6 +19,14 @@ const (
 	GitHubEventPRClosed                 GitHubEventKind = "pr_closed"
 	GitHubEventIssueAssigned            GitHubEventKind = "issue_assigned"
 	GitHubEventIssueComment             GitHubEventKind = "issue_comment"
+	// Discovery kinds for the broader search surface. *Mentioned items are
+	// direct asks (you were @-mentioned) and open a session like the assigned
+	// kinds. *Involved items are notify-only (you authored/assigned/commented
+	// on/were mentioned in them) — a task is created but no session auto-opens.
+	GitHubEventPRMentioned    GitHubEventKind = "pr_mentioned"
+	GitHubEventIssueMentioned GitHubEventKind = "issue_mentioned"
+	GitHubEventPRInvolved     GitHubEventKind = "pr_involved"
+	GitHubEventIssueInvolved  GitHubEventKind = "issue_involved"
 )
 
 type GitHubEvent struct {
@@ -60,12 +68,32 @@ func (ev GitHubEvent) IsPR() bool {
 		ev.Kind == GitHubEventPRComment ||
 		ev.Kind == GitHubEventPRHeadUpdated ||
 		ev.Kind == GitHubEventPRMerged ||
-		ev.Kind == GitHubEventPRClosed
+		ev.Kind == GitHubEventPRClosed ||
+		ev.Kind == GitHubEventPRMentioned ||
+		ev.Kind == GitHubEventPRInvolved
 }
 
 func (ev GitHubEvent) IsIssue() bool {
-	return ev.Kind == GitHubEventIssueAssigned ||
-		ev.Kind == GitHubEventIssueComment
+	return isIssueKind(ev.Kind)
+}
+
+// isIssueKind is the single source of truth for which kinds target an issue
+// (vs a PR). LinkTag, the brief prefix, and the EventKey link-tag all key off
+// it, so a new issue kind only needs adding here.
+func isIssueKind(kind GitHubEventKind) bool {
+	switch kind {
+	case GitHubEventIssueAssigned, GitHubEventIssueComment,
+		GitHubEventIssueMentioned, GitHubEventIssueInvolved:
+		return true
+	}
+	return false
+}
+
+// IsInvolvedOnly reports whether the event is a notify-only "you're involved"
+// discovery hit. The dispatcher creates a task for these but does NOT auto-open
+// a session — they're FYI, not a direct ask.
+func (ev GitHubEvent) IsInvolvedOnly() bool {
+	return ev.Kind == GitHubEventPRInvolved || ev.Kind == GitHubEventIssueInvolved
 }
 
 func (ev GitHubEvent) LinkTag() string {

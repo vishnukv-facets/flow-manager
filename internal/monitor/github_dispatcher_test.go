@@ -288,6 +288,38 @@ func TestGitHubDispatcher_IssueAssignmentCreatesTask(t *testing.T) {
 	}
 }
 
+func TestGitHubDispatcher_MentionedOpensSessionInvolvedNotifyOnly(t *testing.T) {
+	t.Setenv("FLOW_GH_AUTOOPEN", "1")
+	db := dispatcherTestDB(t)
+	spawns, _, opens, restore := stubDispatcherIO(t)
+	defer restore()
+	d := NewGitHubDispatcher(db, nil)
+
+	mention := GitHubEvent{
+		Kind: GitHubEventIssueMentioned, Owner: "Facets-cloud", Repo: "flow-manager", Number: 80,
+		Title: "mention me", URL: "https://github.com/Facets-cloud/flow-manager/issues/80", Author: "octo",
+		EventKey: "issue:Facets-cloud/flow-manager#80:mentioned",
+	}
+	involved := GitHubEvent{
+		Kind: GitHubEventIssueInvolved, Owner: "Facets-cloud", Repo: "flow-manager", Number: 81,
+		Title: "fyi", URL: "https://github.com/Facets-cloud/flow-manager/issues/81", Author: "octo",
+		EventKey: "issue:Facets-cloud/flow-manager#81:involved",
+	}
+	if err := d.Dispatch(context.Background(), mention); err != nil {
+		t.Fatalf("Dispatch mention: %v", err)
+	}
+	if err := d.Dispatch(context.Background(), involved); err != nil {
+		t.Fatalf("Dispatch involved: %v", err)
+	}
+
+	if len(*spawns) != 2 {
+		t.Fatalf("both discovery kinds should create a task; spawns=%d", len(*spawns))
+	}
+	if len(*opens) != 1 || (*opens)[0] != "gh-issue-facets-cloud-flow-manager-80" {
+		t.Fatalf("opens = %v; want only the mentioned item (#80) to auto-open a session", *opens)
+	}
+}
+
 func TestGitHubDispatcher_DuplicateEventKeySuppressesAppend(t *testing.T) {
 	db := dispatcherTestDB(t)
 	_, _, _, restore := stubDispatcherIO(t)

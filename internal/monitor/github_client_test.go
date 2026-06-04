@@ -9,6 +9,8 @@ import (
 
 type fakeGitHubAPIClient struct {
 	search           []githubIssueRecord
+	mentionRows      []githubIssueRecord
+	involvesRows     []githubIssueRecord
 	prs              map[string]githubPullRequestRecord
 	commentPRs       []int
 	commentRows      []githubReviewCommentRecord
@@ -25,10 +27,16 @@ type issueCommentCall struct {
 }
 
 func (f fakeGitHubAPIClient) SearchIssues(_ context.Context, query string) ([]githubIssueRecord, error) {
-	if !strings.Contains(query, "assignee:") {
+	switch {
+	case strings.Contains(query, "mentions:"):
+		return f.mentionRows, nil
+	case strings.Contains(query, "involves:"):
+		return f.involvesRows, nil
+	case strings.Contains(query, "assignee:"):
+		return f.search, nil
+	default:
 		return nil, nil
 	}
-	return f.search, nil
 }
 
 func (f fakeGitHubAPIClient) GetPullRequest(_ context.Context, owner, repo string, number int) (githubPullRequestRecord, error) {
@@ -57,6 +65,92 @@ func (f *fakeGitHubAPIClient) ListReviews(_ context.Context, _ string, _ string,
 func (f *fakeGitHubAPIClient) ListIssueComments(_ context.Context, owner, repo string, number int, _ string) ([]githubIssueCommentRecord, error) {
 	f.issueCommentRefs = append(f.issueCommentRefs, issueCommentCall{Owner: owner, Repo: repo, Number: number})
 	return f.issueCommentRows, nil
+}
+
+func TestGithubIssueRecordKindByQuery(t *testing.T) {
+	prRec := githubIssueRecord{Number: 9, RepositoryURL: "https://api.github.com/repos/o/r", PullRequest: []byte(`{"url":"x"}`), User: githubUser{Login: "u"}}
+	issueRec := githubIssueRecord{Number: 9, RepositoryURL: "https://api.github.com/repos/o/r", User: githubUser{Login: "u"}}
+	cases := []struct {
+		rec   githubIssueRecord
+		query string
+		want  GitHubEventKind
+	}{
+		{prRec, "is:open mentions:me", GitHubEventPRMentioned},
+		{issueRec, "is:open mentions:me", GitHubEventIssueMentioned},
+		{prRec, "is:open involves:me", GitHubEventPRInvolved},
+		{issueRec, "is:open involves:me", GitHubEventIssueInvolved},
+		{prRec, "is:open assignee:me", GitHubEventPRAssigned},
+		{issueRec, "is:open assignee:me", GitHubEventIssueAssigned},
+		{prRec, "is:open is:pr review-requested:me", GitHubEventPRReviewRequested},
+	}
+	for _, c := range cases {
+		ev, ok := c.rec.toGitHubEvent("me", c.query)
+		if !ok || ev.Kind != c.want {
+			t.Errorf("query %q -> kind %q (ok=%v), want %q", c.query, ev.Kind, ok, c.want)
+		}
+	}
+}
+
+func TestQueriesForLoginIncludesDiscoveryWithWatermark(t *testing.T) {
+	p := GitHubPoller{SelfLogins: []string{"me"}}
+	joined := strings.Join(p.queriesForLogin("me", "2026-06-04T00:00:00Z", true), "\n")
+	for _, want := range []string{
+		"assignee:me",
+		"review-requested:me",
+		"mentions:me updated:>=2026-06-04T00:00:00Z",
+		"involves:me updated:>=2026-06-04T00:00:00Z",
+	} {
+		if !strings.Contains(joined, want) {
+			t.Errorf("queries missing %q in:\n%s", want, joined)
+		}
+	}
+	// Skip-on-error path: includeBroad=false drops the broad queries entirely.
+	off := strings.Join(p.queriesForLogin("me", "", false), "\n")
+	if strings.Contains(off, "mentions:") || strings.Contains(off, "involves:") {
+		t.Errorf("broad queries must be omitted when includeBroad=false:\n%s", off)
+	}
+	if !strings.Contains(off, "assignee:me") {
+		t.Errorf("direct queries must always run:\n%s", off)
+	}
+}
+
+func TestGitHubPollerCollapsesDiscoveryByItem(t *testing.T) {
+	db := dispatcherTestDB(t)
+	mk := func(n int) githubIssueRecord {
+		return githubIssueRecord{
+			Number:        n,
+			RepositoryURL: "https://api.github.com/repos/o/r",
+			HTMLURL:       "https://github.com/o/r/issues/" + strconv.Itoa(n),
+			User:          githubUser{Login: "x"},
+		}
+	}
+	client := &fakeGitHubAPIClient{
+		search:       []githubIssueRecord{mk(50)},         // assignee
+		mentionRows:  []githubIssueRecord{mk(70)},          // mention only
+		involvesRows: []githubIssueRecord{mk(50), mk(60)},  // 50 also involved, 60 involved only
+	}
+	p := GitHubPoller{DB: db, Client: client, SelfLogins: []string{"me"}}
+
+	events, err := p.Poll(context.Background())
+	if err != nil {
+		t.Fatalf("Poll: %v", err)
+	}
+	byTag := map[string]GitHubEventKind{}
+	for _, e := range events {
+		if _, dup := byTag[e.LinkTag()]; dup {
+			t.Fatalf("item %s produced more than one event (collapse failed): %#v", e.LinkTag(), events)
+		}
+		byTag[e.LinkTag()] = e.Kind
+	}
+	if byTag["gh-issue:o/r#50"] != GitHubEventIssueAssigned {
+		t.Errorf("#50 (assignee+involves) should collapse to assigned, got %q", byTag["gh-issue:o/r#50"])
+	}
+	if byTag["gh-issue:o/r#60"] != GitHubEventIssueInvolved {
+		t.Errorf("#60 should be involved, got %q", byTag["gh-issue:o/r#60"])
+	}
+	if byTag["gh-issue:o/r#70"] != GitHubEventIssueMentioned {
+		t.Errorf("#70 should be mentioned, got %q", byTag["gh-issue:o/r#70"])
+	}
 }
 
 func TestGitHubPollerEnrichesPullRequestRefs(t *testing.T) {

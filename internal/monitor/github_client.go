@@ -10,6 +10,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"flow/internal/flowdb"
 )
 
 type GitHubPoller struct {
@@ -29,6 +31,30 @@ type GitHubAPIClient interface {
 
 func GitHubPollingEnabled() bool {
 	return envBoolDefault("FLOW_GH_ENABLED", false) && len(GitHubSelfLogins()) > 0
+}
+
+const ghDiscoveryWatermarkKey = "gh_discovery_watermark"
+
+// discoveryWatermark returns the persisted first-enabled timestamp used to gate
+// the broad mentions/involves queries, creating it (set to "now") on first use.
+// The bool is false when no watermark can be established — no DB, or a read/
+// write error — in which case the caller omits the broad queries that cycle
+// rather than risk draining the historical backlog of involved items unfiltered.
+func (p GitHubPoller) discoveryWatermark() (string, bool) {
+	if p.DB == nil {
+		return "", false
+	}
+	wm, err := flowdb.GetMeta(p.DB, ghDiscoveryWatermarkKey)
+	if err != nil {
+		return "", false
+	}
+	if strings.TrimSpace(wm) == "" {
+		wm = flowdb.NowISO()
+		if err := flowdb.SetMeta(p.DB, ghDiscoveryWatermarkKey, wm); err != nil {
+			return "", false
+		}
+	}
+	return wm, true
 }
 
 func GitHubSelfLogins() []string {
@@ -101,28 +127,36 @@ func (p GitHubPoller) Poll(ctx context.Context) ([]GitHubEvent, error) {
 		seen[key] = true
 		events = append(events, ev)
 	}
+	// Gather raw discovery hits across all logins/queries first, then collapse
+	// to one event per item before enriching — so an item matched by several
+	// queries (e.g. assignee AND involves) is enriched and dispatched once, as
+	// its strongest signal. Enrichment (GetPullRequest) runs only on survivors.
+	watermark, includeBroad := p.discoveryWatermark()
+	var searchEvents []GitHubEvent
 	for _, login := range p.SelfLogins {
-		for _, query := range p.queriesForLogin(login) {
+		for _, query := range p.queriesForLogin(login, watermark, includeBroad) {
 			records, err := p.Client.SearchIssues(ctx, query)
 			if err != nil {
 				return events, err
 			}
 			for _, rec := range records {
-				ev, ok := rec.toGitHubEvent(login, query)
-				if ok {
-					if ev.IsPR() {
-						pr, err := p.Client.GetPullRequest(ctx, ev.Owner, ev.Repo, ev.Number)
-						if err != nil {
-							return events, err
-						}
-						ev.BaseRef = pr.Base.Name
-						ev.HeadRef = pr.Head.Name
-						ev.HeadSHA = pr.Head.SHA
-					}
-					add(ev)
+				if ev, ok := rec.toGitHubEvent(login, query); ok {
+					searchEvents = append(searchEvents, ev)
 				}
 			}
 		}
+	}
+	for _, ev := range collapseDiscoveryEvents(searchEvents) {
+		if ev.IsPR() {
+			pr, err := p.Client.GetPullRequest(ctx, ev.Owner, ev.Repo, ev.Number)
+			if err != nil {
+				return events, err
+			}
+			ev.BaseRef = pr.Base.Name
+			ev.HeadRef = pr.Head.Name
+			ev.HeadSHA = pr.Head.SHA
+		}
+		add(ev)
 	}
 	comments, err := p.pollTrackedPRComments(ctx)
 	if err != nil {
@@ -141,7 +175,13 @@ func (p GitHubPoller) Poll(ctx context.Context) ([]GitHubEvent, error) {
 	return events, nil
 }
 
-func (p GitHubPoller) queriesForLogin(login string) []string {
+// queriesForLogin builds the GitHub search queries for one login. The two
+// direct queries (assignee, review-requested) always run and are unfiltered —
+// they're low-volume ownership signals worth backfilling on first run. The two
+// broad queries (mentions, involves) are appended only when includeBroad is set
+// and are gated by `updated:>=watermark` so enabling them never drains the
+// historical backlog of involved items (see Poll's watermark handling).
+func (p GitHubPoller) queriesForLogin(login, watermark string, includeBroad bool) []string {
 	login = strings.TrimSpace(login)
 	if login == "" {
 		return nil
@@ -149,6 +189,13 @@ func (p GitHubPoller) queriesForLogin(login string) []string {
 	base := []string{
 		"is:open assignee:" + login,
 		"is:open is:pr review-requested:" + login,
+	}
+	if includeBroad && strings.TrimSpace(watermark) != "" {
+		filter := " updated:>=" + strings.TrimSpace(watermark)
+		base = append(base,
+			"is:open mentions:"+login+filter,
+			"is:open involves:"+login+filter,
+		)
 	}
 	if len(p.Repos) == 0 {
 		return base
@@ -529,13 +576,8 @@ func (r githubIssueRecord) toGitHubEvent(login, query string) (GitHubEvent, bool
 	if owner == "" || repo == "" || r.Number <= 0 {
 		return GitHubEvent{}, false
 	}
-	kind := GitHubEventIssueAssigned
-	if len(r.PullRequest) > 0 && string(r.PullRequest) != "null" {
-		kind = GitHubEventPRAssigned
-		if strings.Contains(query, "review-requested:"+login) {
-			kind = GitHubEventPRReviewRequested
-		}
-	}
+	isPR := len(r.PullRequest) > 0 && string(r.PullRequest) != "null"
+	kind := discoveryKind(query, login, isPR)
 	labels := make([]string, 0, len(r.Labels))
 	for _, l := range r.Labels {
 		if strings.TrimSpace(l.Name) != "" {
@@ -565,8 +607,79 @@ func (r githubIssueRecord) toGitHubEvent(login, query string) (GitHubEvent, bool
 	}, true
 }
 
+// discoveryKind maps a search hit to an event kind based on which query
+// matched it and whether the item is a PR. review-requested is PR-only; the
+// others apply to both, so the kind carries the PR/issue distinction.
+func discoveryKind(query, login string, isPR bool) GitHubEventKind {
+	switch {
+	case strings.Contains(query, "review-requested:"+login):
+		return GitHubEventPRReviewRequested
+	case strings.Contains(query, "mentions:"+login):
+		if isPR {
+			return GitHubEventPRMentioned
+		}
+		return GitHubEventIssueMentioned
+	case strings.Contains(query, "involves:"+login):
+		if isPR {
+			return GitHubEventPRInvolved
+		}
+		return GitHubEventIssueInvolved
+	default: // assignee:
+		if isPR {
+			return GitHubEventPRAssigned
+		}
+		return GitHubEventIssueAssigned
+	}
+}
+
+// discoveryPriority ranks discovery kinds so an item matched by several queries
+// collapses to its strongest signal. Higher wins. Direct asks (review-request,
+// assigned, mention) outrank the notify-only "involved" tier, which guarantees
+// an item you're both assigned to and merely involved in still opens a session.
+func discoveryPriority(kind GitHubEventKind) int {
+	switch kind {
+	case GitHubEventPRReviewRequested:
+		return 4
+	case GitHubEventPRAssigned, GitHubEventIssueAssigned:
+		return 3
+	case GitHubEventPRMentioned, GitHubEventIssueMentioned:
+		return 2
+	case GitHubEventPRInvolved, GitHubEventIssueInvolved:
+		return 1
+	default:
+		return 0
+	}
+}
+
+// collapseDiscoveryEvents keeps one event per item (by LinkTag), the one with
+// the highest discoveryPriority. Order-stable for the survivors' first sight.
+func collapseDiscoveryEvents(events []GitHubEvent) []GitHubEvent {
+	best := map[string]int{}
+	idx := map[string]int{}
+	out := make([]GitHubEvent, 0, len(events))
+	for _, ev := range events {
+		tag := ev.LinkTag()
+		if tag == "" {
+			out = append(out, ev)
+			continue
+		}
+		pr := discoveryPriority(ev.Kind)
+		if cur, ok := best[tag]; ok {
+			if pr > cur {
+				best[tag] = pr
+				out[idx[tag]] = ev // replace the weaker event in place
+			}
+			continue
+		}
+		best[tag] = pr
+		idx[tag] = len(out)
+		out = append(out, ev)
+	}
+	return out
+}
+
 func linkTagForRecord(kind GitHubEventKind, owner, repo string, number int) string {
-	if kind == GitHubEventIssueAssigned {
+	if isIssueKind(kind) {
 		return fmt.Sprintf("gh-issue:%s/%s#%d", owner, repo, number)
 	}
 	return fmt.Sprintf("gh-pr:%s/%s#%d", owner, repo, number)

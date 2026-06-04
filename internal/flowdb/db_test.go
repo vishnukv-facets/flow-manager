@@ -943,3 +943,24 @@ func TestMigrateSplitHierarchyDependency(t *testing.T) {
 		t.Fatalf("new hierarchy edge must survive re-open (marker should gate the migration); got %v", got.ParentSlug)
 	}
 }
+
+func TestGetSetMeta(t *testing.T) {
+	db := openTempDB(t)
+	// Unset key reads as empty with no error.
+	if v, err := GetMeta(db, "gh_discovery_watermark"); err != nil || v != "" {
+		t.Fatalf("unset GetMeta = %q, %v; want empty, nil", v, err)
+	}
+	if err := SetMeta(db, "gh_discovery_watermark", "2026-06-04T00:00:00Z"); err != nil {
+		t.Fatalf("SetMeta: %v", err)
+	}
+	if v, _ := GetMeta(db, "gh_discovery_watermark"); v != "2026-06-04T00:00:00Z" {
+		t.Fatalf("GetMeta after set = %q", v)
+	}
+	// Second SetMeta upserts (no PK conflict error).
+	if err := SetMeta(db, "gh_discovery_watermark", "2026-07-01T00:00:00Z"); err != nil {
+		t.Fatalf("SetMeta upsert: %v", err)
+	}
+	if v, _ := GetMeta(db, "gh_discovery_watermark"); v != "2026-07-01T00:00:00Z" {
+		t.Fatalf("GetMeta after upsert = %q", v)
+	}
+}

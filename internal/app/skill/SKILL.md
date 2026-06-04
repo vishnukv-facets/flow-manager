@@ -2405,9 +2405,18 @@ starts it with `FLOW_GH_ENABLED=1` and `FLOW_GH_SELF_LOGINS=<login>`.
 Set `FLOW_GH_REPOS=owner/repo,owner/repo2` only when the user wants a
 narrow repo allowlist; unset means all repos visible to the authenticated
 `gh` CLI. The listener turns open assigned issues, open assigned PRs,
-open PRs requesting the user's review, tracked PR review comments,
-top-level PR reviews, PR head updates, and PR merges into flow inbox
-events.
+open PRs requesting the user's review, **open issues/PRs that @-mention
+the user**, tracked PR review comments, top-level PR reviews, PR head
+updates, and PR merges into flow inbox events.
+
+Discovery has two tiers. **Direct asks** — assignment, review-request, or
+an @-mention — create a task AND auto-open a session (you're expected to
+act). **Involvement** — items you authored, were assigned, commented on,
+or were mentioned in (`involves:`) — creates a notify-only task that shows
+in Tasks/Inbox but does NOT auto-open a session; open it yourself if it
+matters. The mention/involves queries are gated by a persisted watermark
+(`gh_discovery_watermark` in `schema_meta`) so enabling them never drains
+the historical backlog — only activity after first-enable surfaces.
 
 GitHub-origin tasks are tagged `github` plus either
 `gh-pr:<owner>/<repo>#<number>` or `gh-issue:<owner>/<repo>#<number>`.
@@ -2436,6 +2445,8 @@ lists tags under the `tags:` line), follow this bootstrap:
    `~/.flow/tasks/<your-slug>/inbox.jsonl` in order. Each line is a JSON
    object `{enqueued_at, event}` where `event.Kind` may include
    `pr_assigned`, `pr_review_requested`, `issue_assigned`,
+   `pr_mentioned`, `issue_mentioned` (you were @-mentioned),
+   `pr_involved`, `issue_involved` (notify-only; you're in the loop),
    `pr_comment`, `issue_comment` (top-level conversation comments),
    `pr_review_comment`, `pr_review_changes_requested`,
    `pr_review_approved`, `pr_head_updated`, `pr_merged`, or `pr_closed`.

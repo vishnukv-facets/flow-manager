@@ -76,7 +76,9 @@ func (d *GitHubDispatcher) Dispatch(ctx context.Context, ev GitHubEvent) error {
 	}
 
 	switch ev.Kind {
-	case GitHubEventPRAssigned, GitHubEventPRReviewRequested, GitHubEventIssueAssigned:
+	case GitHubEventPRAssigned, GitHubEventPRReviewRequested, GitHubEventIssueAssigned,
+		GitHubEventPRMentioned, GitHubEventIssueMentioned,
+		GitHubEventPRInvolved, GitHubEventIssueInvolved:
 		return d.dispatchGitHubItem(ctx, ev)
 	case GitHubEventPRReviewComment, GitHubEventPRReviewChangesRequested, GitHubEventPRReviewApproved,
 		GitHubEventPRComment, GitHubEventIssueComment:
@@ -114,7 +116,10 @@ func (d *GitHubDispatcher) dispatchGitHubItem(ctx context.Context, ev GitHubEven
 			return err
 		}
 	}
-	if !found && githubAutoOpenEnabled() {
+	// Involved-only hits are notify-only: the task is created (so it shows in
+	// Tasks/Inbox) but no session auto-opens — you're in the loop, not directly
+	// asked. Direct asks (assigned/review-requested/mentioned) auto-open as before.
+	if !found && githubAutoOpenEnabled() && !ev.IsInvolvedOnly() {
 		if d.Opener != nil {
 			if err := d.Opener.OpenInUI(slug); err != nil {
 				fmt.Fprintf(os.Stderr, "github monitor: open in UI: %v\n", err)

@@ -1659,6 +1659,34 @@ func schemaMetaSet(db *sql.DB, key string) error {
 	return err
 }
 
+// GetMeta reads a value-bearing key from schema_meta (vs the one-shot markers
+// schemaMetaHas/Set, which only store '1'). Returns "" with nil error when the
+// key is absent, so callers can treat unset and empty alike.
+func GetMeta(db *sql.DB, key string) (string, error) {
+	var v string
+	err := db.QueryRow(`SELECT value FROM schema_meta WHERE key = ?`, key).Scan(&v)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", nil
+	}
+	if err != nil {
+		return "", fmt.Errorf("get meta %s: %w", key, err)
+	}
+	return v, nil
+}
+
+// SetMeta upserts a value-bearing schema_meta key, refreshing applied_at.
+func SetMeta(db *sql.DB, key, value string) error {
+	_, err := db.Exec(
+		`INSERT INTO schema_meta (key, value, applied_at) VALUES (?, ?, ?)
+		 ON CONFLICT(key) DO UPDATE SET value = excluded.value, applied_at = excluded.applied_at`,
+		key, value, NowISO(),
+	)
+	if err != nil {
+		return fmt.Errorf("set meta %s: %w", key, err)
+	}
+	return nil
+}
+
 // ---------- project queries ----------
 
 const ProjectCols = "slug, name, status, priority, work_dir, created_at, updated_at, archived_at, deleted_at"
