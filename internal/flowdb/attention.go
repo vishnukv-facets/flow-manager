@@ -155,3 +155,35 @@ func boolToInt(b bool) int {
 	}
 	return 0
 }
+
+// GetFeedItem fetches a single feed row by id. Returns a wrapped error
+// (including sql.ErrNoRows) when no row matches.
+func GetFeedItem(db *sql.DB, id string) (FeedItem, error) {
+	var it FeedItem
+	var matched, project, priority, urgency, draft, reason, ctx, snooze, acted sql.NullString
+	var isVIP int
+	err := db.QueryRow(
+		`SELECT id, source, thread_key, summary, suggested_action, matched_task,
+		        suggested_project, suggested_priority, urgency, is_vip, confidence,
+		        draft, reason, context_json, status, snooze_until, created_at, acted_at
+		 FROM attention_feed WHERE id = ?`, id,
+	).Scan(
+		&it.ID, &it.Source, &it.ThreadKey, &it.Summary, &it.SuggestedAction, &matched,
+		&project, &priority, &urgency, &isVIP, &it.Confidence,
+		&draft, &reason, &ctx, &it.Status, &snooze, &it.CreatedAt, &acted,
+	)
+	if err != nil {
+		return FeedItem{}, fmt.Errorf("flowdb: get feed item %q: %w", id, err)
+	}
+	it.MatchedTask = matched.String
+	it.SuggestedProject = project.String
+	it.SuggestedPriority = priority.String
+	it.Urgency = urgency.String
+	it.IsVIP = isVIP != 0
+	it.Draft = draft.String
+	it.Reason = reason.String
+	it.ContextJSON = ctx.String
+	it.SnoozeUntil = snooze.String
+	it.ActedAt = acted.String
+	return it, nil
+}

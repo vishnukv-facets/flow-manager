@@ -89,3 +89,25 @@ func TestAttentionFeedSetStatus(t *testing.T) {
 		t.Errorf("dismissed = %+v", d)
 	}
 }
+
+func TestGetFeedItem(t *testing.T) {
+	db := openTempDB(t)
+	defer db.Close()
+
+	in := FeedItem{ID: "g1", Source: "slack", ThreadKey: "C1:1.1", Summary: "hi", SuggestedAction: "make_task", MatchedTask: "kong-split", Confidence: 0.7, Status: "new", CreatedAt: "2026-06-05T10:00:00Z"}
+	if _, err := UpsertFeedItem(db, in); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+
+	got, err := GetFeedItem(db, "g1")
+	if err != nil {
+		t.Fatalf("GetFeedItem: %v", err)
+	}
+	if got.ID != "g1" || got.MatchedTask != "kong-split" || got.SuggestedAction != "make_task" || got.Confidence != 0.7 {
+		t.Errorf("round-trip mismatch: %+v", got)
+	}
+
+	if _, err := GetFeedItem(db, "nope"); err == nil {
+		t.Error("GetFeedItem on a missing id must return an error")
+	}
+}
