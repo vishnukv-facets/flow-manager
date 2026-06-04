@@ -144,6 +144,27 @@ CREATE TABLE IF NOT EXISTS search_docs (
     updated_at    TEXT NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS attention_feed (
+    id                 TEXT PRIMARY KEY,
+    source             TEXT NOT NULL,
+    thread_key         TEXT NOT NULL,
+    summary            TEXT NOT NULL DEFAULT '',
+    suggested_action   TEXT NOT NULL,
+    matched_task       TEXT,
+    suggested_project  TEXT,
+    suggested_priority TEXT,
+    urgency            TEXT,
+    is_vip             INTEGER NOT NULL DEFAULT 0,
+    confidence         REAL NOT NULL DEFAULT 0,
+    draft              TEXT,
+    reason             TEXT,
+    context_json       TEXT,
+    status             TEXT NOT NULL DEFAULT 'new' CHECK (status IN ('new','acted','dismissed','snoozed','deferred')),
+    snooze_until       TEXT,
+    created_at         TEXT NOT NULL,
+    acted_at           TEXT
+);
+
 -- Two FTS indexes over search_docs, partitioned by scope. Transcripts are
 -- enormous (whole-session JSONL — ~100x the size of all briefs/updates/memories
 -- combined) and searched only on demand, so they live in their own index:
@@ -204,6 +225,8 @@ CREATE INDEX IF NOT EXISTS idx_task_dependencies_parent ON task_dependencies(par
 CREATE INDEX IF NOT EXISTS idx_task_dependencies_child ON task_dependencies(child_slug);
 CREATE INDEX IF NOT EXISTS idx_search_docs_scope ON search_docs(scope);
 CREATE INDEX IF NOT EXISTS idx_search_docs_entity ON search_docs(entity_type, entity_slug);
+CREATE INDEX IF NOT EXISTS idx_attention_feed_status ON attention_feed(status);
+CREATE INDEX IF NOT EXISTS idx_attention_feed_thread ON attention_feed(thread_key);
 `
 
 // indexesPostMigrate are indexes that depend on columns added by
