@@ -139,6 +139,13 @@ export function TaskTerminal({ slug, kind = 'task', restartKey = 0, provider, on
     let reconnectBackoff = TERMINAL_RECONNECT_INITIAL_MS
     let lastSize = ''
     let sawFirstOutput = false // first output frame is the history replay
+    // Gate the FIRST socket connect until the terminal font has settled. If we
+    // connect with fallback metrics and then refit wider once JetBrains Mono
+    // loads, the grid width changes → we resize the tmux pane → tmux freezes a
+    // stale-width copy of the live input box into its history (it never reflows),
+    // and that stale copy replays as a DUPLICATE footer on the next attach. Only
+    // connecting once the width is final means no post-open resize, no stale copy.
+    let fontReadyDone = false
     let historyInFlight = false
     let lastHistoryReq = 0
     // Follow-tail. While true, every drained write and every (re)fit re-pins the
@@ -452,6 +459,12 @@ export function TaskTerminal({ slug, kind = 'task', restartKey = 0, provider, on
         (ws && (ws.readyState === WebSocket.OPEN || ws.readyState === WebSocket.CONNECTING))
       )
         return
+      // Don't connect before the font has settled — even if the ResizeObserver's
+      // first layout callback re-enters here early. Connecting at fallback-font
+      // width would force a wider refit once the font loads, resizing the pane
+      // and planting the stale-width duplicate (see fontReadyDone above). The
+      // font handler / stall-guard below re-enter openWS once it's safe.
+      if (!fontReadyDone) return
       fitNow()
       if (term.cols < 2 || term.rows < 2) return
       lastSize = `${term.cols}x${term.rows}`
@@ -559,8 +572,22 @@ export function TaskTerminal({ slug, kind = 'task', restartKey = 0, provider, on
       openWS()
       scheduleFits()
     }
-    void fontReady.then(startOnce)
-    fitTimers.push(setTimeout(startOnce, 250))
+    void fontReady.then(() => {
+      fontReadyDone = true
+      startOnce()
+    })
+    // Stall-guard only. The old value here was 250ms, which lost the race to the
+    // webfont on cold loads — so we connected with fallback metrics, refit wider
+    // once the font arrived, resized the pane, and tmux froze a stale-width copy
+    // of the input box that replayed as a duplicate footer. fontReady already
+    // resolves-or-catches on its own, so this timer now only fires in the
+    // pathological "font never resolves" case; a few seconds there is harmless.
+    fitTimers.push(
+      setTimeout(() => {
+        fontReadyDone = true
+        startOnce()
+      }, 4000),
+    )
 
     // And always refit once the font resolves, in case the timeout fired first
     // and we connected with fallback metrics — this corrects the grid + pins to
