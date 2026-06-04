@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"flow/internal/monitor"
+	"flow/internal/steering"
 )
 
 //go:embed all:static
@@ -57,9 +58,12 @@ func New(cfg Config) *Server {
 	// a server-managed PTY so the Claude session streams into the UI
 	// instead of an iTerm tab.
 	if cfg.DB != nil {
-		slackListener := monitor.NewSlackListener(
-			monitor.NewDispatcher(cfg.DB, &slackTaskOpener{server: s}),
-		)
+		dispatcher := monitor.NewDispatcher(cfg.DB, &slackTaskOpener{server: s})
+		// Attach the steering cascade so untracked messages get triaged into the
+		// Attention feed (surface-only in P1). Stage 0 inside the cascade is the
+		// real scope gate, so handing it every untracked message is cheap.
+		dispatcher.Steerer = steering.NewCascade(cfg.DB, steering.WatchConfigFromEnv())
+		slackListener := monitor.NewSlackListener(dispatcher)
 		slackListener.SetChangeNotifier(func(kind string) {
 			s.publishUIChange(kind)
 		})
