@@ -304,6 +304,43 @@ func TestGitHubPollerDeliversSelfAuthoredIssueComments(t *testing.T) {
 	}
 }
 
+func TestGitHubPollerDropsSelfAuthoredAckComments(t *testing.T) {
+	db := dispatcherTestDB(t)
+	seedGitHubTask(t, "tracked-pr", db, "gh-pr:Facets-cloud/flow-manager#42")
+	client := &fakeGitHubAPIClient{
+		prs: map[string]githubPullRequestRecord{
+			"Facets-cloud/flow-manager#42": {State: "open"},
+		},
+		issueCommentRows: []githubIssueCommentRecord{
+			// Our own agent ack — carries the marker. Must NOT re-wake the session.
+			{NodeID: "IC_ack", Body: "On it — reviewing now.\n\n" + agentAckMarker, User: githubUser{Login: "Me"}},
+			// Our own real instruction — no marker. Must still be delivered.
+			{NodeID: "IC_instr", Body: "fix merge conflicts", User: githubUser{Login: "Me"}},
+			// Someone else quoting the marker — not self-authored, must be delivered.
+			{NodeID: "IC_ext", Body: "you wrote " + agentAckMarker, User: githubUser{Login: "other"}},
+		},
+	}
+	p := GitHubPoller{DB: db, Client: client, SelfLogins: []string{"me"}}
+
+	events, err := p.Poll(context.Background())
+	if err != nil {
+		t.Fatalf("Poll: %v", err)
+	}
+	keys := map[string]bool{}
+	for _, e := range events {
+		keys[e.EventKey] = true
+	}
+	if keys["issue-comment:IC_ack"] {
+		t.Errorf("self-authored ack comment must be dropped (no echo loop); got %#v", events)
+	}
+	if !keys["issue-comment:IC_instr"] {
+		t.Errorf("self-authored non-ack instruction must still be delivered")
+	}
+	if !keys["issue-comment:IC_ext"] {
+		t.Errorf("external comment containing the marker must still be delivered")
+	}
+}
+
 func TestGitHubPollerEmitsClosedAndSkipsCommentsForUnmergedClosedTrackedPR(t *testing.T) {
 	db := dispatcherTestDB(t)
 	seedGitHubTask(t, "tracked-pr", db, "gh-pr:Facets-cloud/flow-manager#42")

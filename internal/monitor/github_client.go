@@ -254,6 +254,9 @@ func (p GitHubPoller) pollTrackedPRComments(ctx context.Context) ([]GitHubEvent,
 			if !ok {
 				continue
 			}
+			if isSelfAckComment(ev.Author, ev.Body, p.SelfLogins) {
+				continue // our own autonomous-agent ack — don't echo it back
+			}
 			// Deliver top-level PR comments even when authored by the operator's
 			// own login. Commenting on a monitored PR is the operator's primary
 			// way to instruct the agent (e.g. "fix merge conflicts"); silently
@@ -289,6 +292,9 @@ func (p GitHubPoller) pollTrackedIssueComments(ctx context.Context) ([]GitHubEve
 			ev, ok := c.toGitHubEvent(issue.Owner, issue.Repo, issue.Number, false)
 			if !ok {
 				continue
+			}
+			if isSelfAckComment(ev.Author, ev.Body, p.SelfLogins) {
+				continue // our own autonomous-agent ack — don't echo it back
 			}
 			// Deliver operator-authored top-level comments too (see the rationale
 			// in pollTrackedPRComments) — they're how the operator talks to the

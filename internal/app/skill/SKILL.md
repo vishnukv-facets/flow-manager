@@ -2463,8 +2463,44 @@ lists tags under the `tags:` line), follow this bootstrap:
    left as-is (not auto-done) so you can decide whether to close it out or
    keep going (e.g. the work moves to a new PR).
 
+**Acknowledge on GitHub before you dig in (autonomous-agent etiquette).**
+The human who assigned, review-requested, mentioned you, or left the comment
+should know an autonomous agent has the item — promptly, in the operator's
+voice, before you start the substantive work:
+
+- **On bootstrap of a GitHub-origin task**, post one acknowledgement on the
+  item *before* analysis:
+  - PR: `gh pr comment <number> --repo <owner>/<repo> --body "<ack>"`
+  - Issue: `gh issue comment <number> --repo <owner>/<repo> --body "<ack>"`
+- **When woken by a new `pr_review_comment`, `pr_review_changes_requested`,
+  `pr_comment`, or `issue_comment`**, post a short reactive ack on that item
+  ("On it — reviewing this now.") before doing the work.
+- **Every ack MUST end with the marker line `<!-- flow-agent-ack -->`** on its
+  own line. The monitor matches this exact marker to recognize the comment as
+  your own ack and drop it, so your ack never wakes you in a loop. Omit it and
+  you will re-trigger yourself on the next poll.
+- **Ack once per item, not per event.** Before the bootstrap ack, scan the
+  item's existing comments (`gh pr view <n> --comments` / `gh issue view <n>
+  --comments`) for `flow-agent-ack`; if one is already present, skip the
+  bootstrap ack and just proceed — don't let a busy PR collect an ack on every
+  bot comment.
+- Posts go as the operator's GitHub identity (not a separate bot), so write in
+  their voice. Suggested wording:
+
+  ```
+  🤖 An autonomous flow agent has picked this up and is looking into it — I'll follow up here.
+
+  <!-- flow-agent-ack -->
+  ```
+- If the ack fails (no write permission, `gh` error), note it and proceed with
+  the work — acking is courtesy, not a gate.
+
 **Anti-patterns specific to GitHub tasks:**
 
+- **Do not re-action your own ack.** A comment you authored that carries the
+  `flow-agent-ack` marker is your acknowledgement; the monitor already drops it,
+  but if you ever see one in the inbox, ignore it — never treat it as a new
+  instruction.
 - **Do not approve on monitor signal alone.** The listener can reopen a
   review task after new commits, but approval only happens after you have
   verified the current diff and checks.
