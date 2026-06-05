@@ -90,6 +90,46 @@ func TestAttentionFeedSetStatus(t *testing.T) {
 	}
 }
 
+func TestResolveOpenFeedItemsByThread(t *testing.T) {
+	db := openTempDB(t)
+	defer db.Close()
+
+	// Two 'new' cards on the same thread, one on a different thread, one already
+	// dismissed on the target thread.
+	mustUpsert := func(id, thread, status string) {
+		t.Helper()
+		if _, err := UpsertFeedItem(db, FeedItem{ID: id, Source: "slack", ThreadKey: thread, SuggestedAction: "reply", Status: status, CreatedAt: "2026-06-05T10:00:00Z"}); err != nil {
+			t.Fatalf("upsert %s: %v", id, err)
+		}
+	}
+	// UpsertFeedItem coalesces 'new' rows by thread_key, so the same-thread pair
+	// must use distinct threads to both stay 'new'; instead seed one new + one
+	// dismissed on the target thread and a new on another thread.
+	mustUpsert("a", "C1:900.1", "new")
+	mustUpsert("b", "C1:900.1", "dismissed") // already resolved — must be untouched
+	mustUpsert("c", "C2:900.2", "new")       // different thread — must be untouched
+
+	n, err := ResolveOpenFeedItemsByThread(db, "C1:900.1", "2026-06-05T12:00:00Z")
+	if err != nil {
+		t.Fatalf("resolve: %v", err)
+	}
+	if n != 1 {
+		t.Fatalf("resolved = %d, want 1 (only the open card on the thread)", n)
+	}
+	got, _ := GetFeedItem(db, "a")
+	if got.Status != "acted" || got.ActedAt != "2026-06-05T12:00:00Z" {
+		t.Errorf("card a = %+v, want acted with stamped acted_at", got)
+	}
+	if other, _ := GetFeedItem(db, "c"); other.Status != "new" {
+		t.Errorf("card c (other thread) status = %q, want new", other.Status)
+	}
+
+	// Empty thread key is a safe no-op.
+	if n, err := ResolveOpenFeedItemsByThread(db, "", "2026-06-05T12:00:00Z"); err != nil || n != 0 {
+		t.Errorf("empty thread key: n=%d err=%v, want 0,nil", n, err)
+	}
+}
+
 func TestFeedItemLinkedTaskRoundTrip(t *testing.T) {
 	db := openTempDB(t)
 	defer db.Close()

@@ -153,6 +153,25 @@ func ListFeedItems(db *sql.DB, status string) ([]FeedItem, error) {
 	return out, rows.Err()
 }
 
+// ResolveOpenFeedItemsByThread marks every still-'new' feed item for a thread as
+// 'acted' — used when the operator handles the thread directly (replies in
+// Slack/GitHub themselves), so the surfaced "needs you" card stops nagging.
+// Returns the number of items resolved (0 when none were open for that thread).
+func ResolveOpenFeedItemsByThread(db *sql.DB, threadKey, actedAt string) (int, error) {
+	if threadKey == "" {
+		return 0, nil
+	}
+	res, err := db.Exec(
+		`UPDATE attention_feed SET status = 'acted', acted_at = ? WHERE thread_key = ? AND status = 'new'`,
+		NullIfEmpty(actedAt), threadKey,
+	)
+	if err != nil {
+		return 0, fmt.Errorf("flowdb: resolve open feed items for thread %q: %w", threadKey, err)
+	}
+	n, _ := res.RowsAffected()
+	return int(n), nil
+}
+
 // SetFeedItemStatus moves a feed item to a new lifecycle status and stamps
 // acted_at. Used when the operator (or an autonomous action) resolves a card.
 func SetFeedItemStatus(db *sql.DB, id, status, actedAt string) error {

@@ -114,6 +114,23 @@ func (c *Cascade) maybeAutoAct(ctx context.Context, feedID string, v Verdict) {
 	c.log("auto-acted %s on %s (confidence %.2f >= threshold)", v.SuggestedAction, feedID, v.Confidence)
 }
 
+// resolveOnOperatorReply stands down any open feed item for a thread when the
+// operator posts there themselves (a self-authored event). They handled it
+// directly — outside flow — so the surfaced "needs your reply" card is now
+// stale. Fires on the live event AND on backfill replay of the operator's own
+// message, so it covers new and recently-missed replies. Connector-blind:
+// works for Slack threads/DMs and GitHub comments alike.
+func (c *Cascade) resolveOnOperatorReply(ev monitor.InboundEvent) {
+	key := monitor.ThreadKey(ev.Channel, ev.ThreadTS)
+	if key == "" {
+		return
+	}
+	n, err := flowdb.ResolveOpenFeedItemsByThread(c.DB, key, c.now().UTC().Format(time.RFC3339))
+	if err == nil && n > 0 {
+		c.log("operator handled %s directly; resolved %d open feed item(s)", key, n)
+	}
+}
+
 // Observe runs the cascade for one live inbound event. Errors from a stage
 // abort this event's processing but are returned for logging; a dropped event
 // (by any stage) returns nil. Every observed event emits exactly one
@@ -142,6 +159,9 @@ func (c *Cascade) observe(ctx context.Context, ev monitor.InboundEvent, origin s
 
 	s0 := Stage0(ev, cfg)
 	if !s0.Pass {
+		if s0.DropReason == "self-authored" {
+			c.resolveOnOperatorReply(ev)
+		}
 		tr.Disposition, tr.StageReached, tr.DropReason = "dropped", "stage0", s0.DropReason
 		c.emitTrace(tr, start)
 		return nil
@@ -300,6 +320,9 @@ func (c *Cascade) ObserveBatch(ctx context.Context, evs []monitor.InboundEvent) 
 		tr := c.newTrace(ev, "backfill", cleaned)
 		s0 := Stage0(ev, cfg)
 		if !s0.Pass {
+			if s0.DropReason == "self-authored" {
+				c.resolveOnOperatorReply(ev)
+			}
 			tr.Disposition, tr.StageReached, tr.DropReason = "dropped", "stage0", s0.DropReason
 			c.emitTrace(tr, start)
 			continue
