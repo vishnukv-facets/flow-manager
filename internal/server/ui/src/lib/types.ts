@@ -578,6 +578,7 @@ export interface AttentionItem {
   status: string
   created_at: string
   acted_at?: string
+  linked_task?: string
 }
 
 export interface SteeringFunnel {

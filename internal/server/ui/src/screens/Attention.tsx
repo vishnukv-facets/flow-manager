@@ -1,5 +1,6 @@
 import { useState, type ReactNode } from 'react'
-import { AlertTriangle, Check, ExternalLink, Filter, Inbox, ListPlus, Share2 } from 'lucide-react'
+import { useLocation } from 'wouter'
+import { AlertTriangle, ArrowRight, Check, ExternalLink, Filter, Inbox, ListPlus, Play, Share2 } from 'lucide-react'
 import { useAction, useAttention, useAttentionTrace } from '../lib/query'
 import { useDocumentTitle } from '../lib/useDocumentTitle'
 import { EmptyState, ErrorNote, Loading, SourceIcon } from '../components/ui'
@@ -97,6 +98,7 @@ function AttentionCard({
   onAct: (item: AttentionItem, verb: string) => void
 }) {
   const urgent = item.urgency === 'urgent'
+  const [, navigate] = useLocation()
   return (
     <div className={`card att-card${urgent ? ' att-urgent' : ''}`}>
       <div className="att-head row gap">
@@ -124,6 +126,9 @@ function AttentionCard({
           <button type="button" className="btn primary sm" disabled={disabled} onClick={() => onAct(item, 'make-task')}>
             <ListPlus size={13} /> Make task
           </button>
+          <button type="button" className="btn sm" disabled={disabled} onClick={() => onAct(item, 'make-task-start')}>
+            <Play size={13} /> Make task & start
+          </button>
           {item.matched_task ? (
             <button type="button" className="btn sm" disabled={disabled} onClick={() => onAct(item, 'forward')}>
               <Share2 size={13} /> Forward
@@ -134,9 +139,16 @@ function AttentionCard({
           </button>
         </div>
       ) : (
-        <div className="att-resolved faint mono">
-          {item.status}
-          {item.acted_at ? ` · ${item.acted_at.slice(0, 10)}` : ''}
+        <div className="att-resolved row gap faint mono">
+          <span>
+            {item.status}
+            {item.acted_at ? ` · ${item.acted_at.slice(0, 10)}` : ''}
+          </span>
+          {item.linked_task ? (
+            <button type="button" className="btn ghost sm" onClick={() => navigate(`/session/${item.linked_task}`)}>
+              <ArrowRight size={13} /> Go to session
+            </button>
+          ) : null}
         </div>
       )}
     </div>
