@@ -25,7 +25,7 @@ import {
 } from 'lucide-react'
 import { rpc, type ConnStatus } from '../lib/rpc'
 import { getTheme, toggleTheme, type Theme } from '../lib/theme'
-import { useInbox, useUiData } from '../lib/query'
+import { useAttention, useInbox, useUiData } from '../lib/query'
 import { ago } from '../lib/format'
 import { pushToast } from '../lib/toast'
 import { SourceIcon } from './ui'
@@ -101,6 +101,8 @@ export function Shell({ children }: { children: ReactNode }) {
   const [createOpen, setCreateOpen] = useState(false)
   const { data: ui } = useUiData()
   const { data: inbox } = useInbox()
+  const { data: attentionItems } = useAttention('new')
+  const attentionCount = attentionItems?.length ?? 0
   useNotificationToasts(ui, inbox)
 
   useEffect(() => rpc.onStatus(setConn), [])
@@ -151,6 +153,14 @@ export function Shell({ children }: { children: ReactNode }) {
           match: (p) => p === '/inbox',
           badge: unread || undefined,
           tone: 'var(--accent-hi)',
+        },
+        {
+          to: '/attention',
+          label: 'Attention',
+          icon: <Bell size={16} />,
+          match: (p) => p === '/attention',
+          badge: attentionCount || undefined,
+          tone: 'var(--warn)',
         },
       ],
     },
