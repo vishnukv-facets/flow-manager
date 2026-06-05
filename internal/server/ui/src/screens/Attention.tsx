@@ -1,6 +1,6 @@
 import { useEffect, useState, type ReactNode } from 'react'
 import { useLocation } from 'wouter'
-import { AlertTriangle, ArrowRight, AtSign, BellOff, Check, ChevronDown, ExternalLink, Filter, Github, Hash, Inbox, ListPlus, Lock, MessageSquare, Play, Send, Share2 } from 'lucide-react'
+import { AlertTriangle, ArrowRight, AtSign, BellOff, Check, ChevronDown, ExternalLink, Filter, Github, Hash, Inbox, ListPlus, Lock, MessageSquare, Play, RefreshCw, Send, Share2 } from 'lucide-react'
 import { useAction, useAttention, useAttentionDecision, useAttentionTrace } from '../lib/query'
 import { useDocumentTitle } from '../lib/useDocumentTitle'
 import { EmptyState, ErrorNote, Loading, SourceIcon } from '../components/ui'
@@ -200,6 +200,16 @@ function AttentionCard({
           ) : null}
           <button type="button" className="btn ghost sm" disabled={disabled} onClick={() => onAct(item, 'dismiss')}>
             <Check size={13} /> Dismiss
+          </button>
+          <button
+            type="button"
+            className="btn icon ghost sm"
+            title="Re-run triage (re-read task context, refresh the decision)"
+            aria-label="Re-run triage"
+            disabled={disabled}
+            onClick={() => onAct(item, 'retriage')}
+          >
+            <RefreshCw size={13} />
           </button>
           <MuteMenu item={item} disabled={disabled} onAct={onAct} />
         </div>

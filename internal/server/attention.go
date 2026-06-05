@@ -192,6 +192,23 @@ func (s *Server) attentionAct(req actionRequest) (actionResponse, int) {
 		return actionResponse{OK: true, Message: "dismissed " + id}, http.StatusOK
 	case "mute-channel", "mute-sender", "mute-thread":
 		return s.attentionMute(req.AttentionAction, item)
+	case "retriage", "re-triage":
+		// Force a fresh cascade decision on this card (re-reads task context, etc.).
+		// Runs in the background — deep triage outlasts the RPC timeout; the card
+		// updates in place when it finishes.
+		if s.cascade == nil {
+			return actionResponse{OK: false, Message: "steering cascade is not running"}, http.StatusServiceUnavailable
+		}
+		go func(it flowdb.FeedItem) {
+			bctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+			defer cancel()
+			if err := s.cascade.Retriage(bctx, it); err != nil {
+				fmt.Fprintf(os.Stderr, "attention: retriage %s: %v\n", it.ID, err)
+				return
+			}
+			s.publishUIChange("attention")
+		}(item)
+		return actionResponse{OK: true, Message: "re-running triage — the card will update with the fresh decision"}, http.StatusOK
 	case "make-task", "make_task":
 		if err := steering.ApplyAction(context.Background(), s.cfg.DB, item, steering.ActionMakeTask, steering.DefaultAutonomy(), true); err != nil {
 			return actionResponse{OK: false, Message: err.Error()}, http.StatusInternalServerError
