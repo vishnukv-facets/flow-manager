@@ -212,10 +212,8 @@ func (s *Server) attentionAct(req actionRequest) (actionResponse, int) {
 		}
 		return actionResponse{OK: true, Message: "forwarded " + id}, http.StatusOK
 	case "send-reply", "send_reply":
-		// The AGENT sends the reply from its own session (via its MCP tools) —
-		// the server never posts to Slack/GitHub directly. Matched task →
-		// inject into that session; otherwise spawn a fresh reply task. Either
-		// way we open/resume the session so the agent acts now.
+		// An AGENT sends the reply via its own MCP tools — the server never posts
+		// to Slack/GitHub directly.
 		text := strings.TrimSpace(req.ReplyText)
 		if text == "" {
 			text = strings.TrimSpace(item.Draft)
@@ -224,23 +222,30 @@ func (s *Server) attentionAct(req actionRequest) (actionResponse, int) {
 			return actionResponse{OK: false, Message: "send-reply needs a draft or reply_text"}, http.StatusBadRequest
 		}
 		if target := strings.TrimSpace(item.MatchedTask); target != "" {
-			// An agent already owns this thread — hand it the reply (via its inbox)
-			// and resume its session in the background so it posts via its own MCP
-			// tools. The server never posts to Slack itself.
+			// A real flow task already owns this thread — hand it the reply (via
+			// its inbox) and resume its session so it posts. No new task.
 			if err := steering.InjectReplyToTask(context.Background(), s.cfg.DB, item, text, target); err != nil {
 				return actionResponse{OK: false, Message: err.Error()}, http.StatusInternalServerError
 			}
 			s.startSessionAsync(target)
-			return actionResponse{OK: true, Message: "reply handed to session " + target + " — that agent is posting it to Slack"}, http.StatusOK
+			return actionResponse{OK: true, Message: "reply handed to session " + target + " — that agent is posting it"}, http.StatusOK
 		}
-		// No agent owns this thread yet — spawn a reply task primed with the draft
-		// + thread context; that agent reads the thread and posts via its MCP tools.
-		slug, err := steering.MakeReplyTaskFromFeed(context.Background(), s.cfg.DB, item, text)
-		if err != nil {
-			return actionResponse{OK: false, Message: err.Error()}, http.StatusInternalServerError
-		}
-		s.startSessionAsync(slug)
-		return actionResponse{OK: true, Message: "reply task " + slug + " started — that agent is posting it to Slack"}, http.StatusOK
+		// No task owns this thread: the hidden triage-layer agent (Haiku, bypass,
+		// connector MCP — the same headless session layer that surfaced this item)
+		// posts the approved reply directly. No visible task is spawned, and bypass
+		// means no auto-mode permission gate to trip. Runs in the background since
+		// claude -p can outlast the UI's RPC timeout; the card flips to 'acted'
+		// once the agent confirms it posted.
+		go func(it flowdb.FeedItem, reply string) {
+			bctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+			defer cancel()
+			if err := steering.SendReplyViaAgent(bctx, s.cfg.DB, it, reply); err != nil {
+				fmt.Fprintf(os.Stderr, "attention: send-reply via hidden agent: %v\n", err)
+				return
+			}
+			s.publishUIChange("attention")
+		}(item, text)
+		return actionResponse{OK: true, Message: "posting your reply via the triage agent — no task created"}, http.StatusOK
 	default:
 		return actionResponse{OK: false, Message: "unknown attention action: " + req.AttentionAction}, http.StatusBadRequest
 	}
