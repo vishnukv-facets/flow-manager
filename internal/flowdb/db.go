@@ -165,6 +165,32 @@ CREATE TABLE IF NOT EXISTS attention_feed (
     acted_at           TEXT
 );
 
+CREATE TABLE IF NOT EXISTS steering_trace (
+    id                TEXT PRIMARY KEY,
+    created_at        TEXT NOT NULL,
+    origin            TEXT NOT NULL DEFAULT 'live',
+    source            TEXT NOT NULL DEFAULT '',
+    channel           TEXT,
+    channel_type      TEXT,
+    author            TEXT,
+    thread_key        TEXT,
+    text_preview      TEXT,
+    disposition       TEXT NOT NULL,
+    stage_reached     TEXT NOT NULL,
+    drop_reason       TEXT,
+    stage1_relevant   INTEGER,
+    stage2_action     TEXT,
+    stage2_confidence REAL,
+    stage3_action     TEXT,
+    stage3_confidence REAL,
+    final_action      TEXT,
+    final_confidence  REAL,
+    feed_item_id      TEXT,
+    error             TEXT,
+    latency_ms        INTEGER NOT NULL DEFAULT 0,
+    model             TEXT
+);
+
 -- Two FTS indexes over search_docs, partitioned by scope. Transcripts are
 -- enormous (whole-session JSONL — ~100x the size of all briefs/updates/memories
 -- combined) and searched only on demand, so they live in their own index:
@@ -227,6 +253,8 @@ CREATE INDEX IF NOT EXISTS idx_search_docs_scope ON search_docs(scope);
 CREATE INDEX IF NOT EXISTS idx_search_docs_entity ON search_docs(entity_type, entity_slug);
 CREATE INDEX IF NOT EXISTS idx_attention_feed_status ON attention_feed(status);
 CREATE INDEX IF NOT EXISTS idx_attention_feed_thread ON attention_feed(thread_key);
+CREATE INDEX IF NOT EXISTS idx_steering_trace_created ON steering_trace(created_at);
+CREATE INDEX IF NOT EXISTS idx_steering_trace_disposition ON steering_trace(disposition);
 `
 
 // indexesPostMigrate are indexes that depend on columns added by
