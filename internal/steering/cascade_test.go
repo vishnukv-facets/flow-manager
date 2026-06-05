@@ -475,13 +475,15 @@ func TestCascadeNoExistingTaskLeavesActionUnchanged(t *testing.T) {
 }
 
 // stubTaskSpawner swaps the steering taskSpawner var to count spawns instead of
-// shelling out to `flow spawn`.
+// shelling out to `flow spawn`. It also stubs taskTagger (which MakeTaskFromFeed
+// now calls after spawning) so the auto-act path never shells to real `flow`.
 func stubTaskSpawner(t *testing.T) *int {
 	t.Helper()
 	calls := 0
-	old := taskSpawner
+	oldSpawn, oldTag := taskSpawner, taskTagger
 	taskSpawner = func(_ context.Context, _, _, _, _ string) error { calls++; return nil }
-	t.Cleanup(func() { taskSpawner = old })
+	taskTagger = func(_ context.Context, _, _ string) error { return nil }
+	t.Cleanup(func() { taskSpawner, taskTagger = oldSpawn, oldTag })
 	return &calls
 }
 
@@ -575,6 +577,33 @@ func TestMatchExistingTaskByTag(t *testing.T) {
 	// No tracking task → (",false).
 	if slug, ok := matchExistingTask(db, monitor.InboundEvent{Kind: "message", ChannelType: "channel", Channel: "C_NONE", ThreadTS: "1.1"}); ok || slug != "" {
 		t.Errorf("matchExistingTask(untracked) = (%q,%v), want (\"\",false)", slug, ok)
+	}
+}
+
+// Regression: an ARCHIVED but still in-progress task must still match — archiving
+// declutters the active list, it doesn't stop tracking the thread. Before the
+// fix, archived tasks were invisible and the cascade suggested make_task for a PR
+// that already had a (archived) task.
+func TestMatchExistingTaskIncludesArchived(t *testing.T) {
+	_, db := cascadeFixture(t)
+	now := time.Now().UTC().Format(time.RFC3339)
+	if _, err := db.Exec(`INSERT INTO tasks (slug,name,status,kind,priority,work_dir,session_provider,session_id,archived_at,created_at,updated_at) VALUES ('gh-pr-880','PR 880','in-progress','regular','high','/tmp','claude','sess-880',?,?,?)`, now, now, now); err != nil {
+		t.Fatalf("seed archived task: %v", err)
+	}
+	if err := flowdb.AddTaskTag(db, "gh-pr-880", "gh-pr:o/r#880"); err != nil {
+		t.Fatalf("tag task: %v", err)
+	}
+	ev := monitor.InboundEvent{Kind: "pr_comment", ChannelType: "github", Channel: "o/r", ThreadTS: "gh-pr:o/r#880", UserID: "reviewer"}
+	if slug, ok := matchExistingTask(db, ev); !ok || slug != "gh-pr-880" {
+		t.Errorf("matchExistingTask(archived) = (%q,%v), want (gh-pr-880,true)", slug, ok)
+	}
+
+	// And applyExistingTaskMatch rewrites a would-be make_task into a forward.
+	c := &Cascade{DB: db}
+	v := Verdict{SuggestedAction: ActionMakeTask}
+	c.applyExistingTaskMatch(&v, ev)
+	if v.SuggestedAction != ActionForward || v.MatchedTask != "gh-pr-880" {
+		t.Errorf("after match: action=%v matched=%q, want forward / gh-pr-880", v.SuggestedAction, v.MatchedTask)
 	}
 }
 

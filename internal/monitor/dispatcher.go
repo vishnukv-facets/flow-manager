@@ -224,7 +224,10 @@ func (d *Dispatcher) findTaskByThreadKey(key string) (slug string, found bool, e
 		return "", false, nil
 	}
 	tag := flowdb.NormalizeTag(SlackThreadTagPrefix + key)
-	tasks, err := flowdb.ListTasks(d.DB, flowdb.TaskFilter{Tag: tag})
+	// IncludeArchived: an archived task still tracks its thread — route replies
+	// (incl. forwarded ones) to it rather than spawning a duplicate. Archive is
+	// an active-list declutter, not a stop-tracking signal.
+	tasks, err := flowdb.ListTasks(d.DB, flowdb.TaskFilter{Tag: tag, IncludeArchived: true})
 	if err != nil {
 		return "", false, err
 	}

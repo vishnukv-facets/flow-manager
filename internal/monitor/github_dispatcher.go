@@ -232,7 +232,10 @@ func (d *GitHubDispatcher) findTaskByGitHubTag(tag string) (string, bool, error)
 	if tag == "" {
 		return "", false, nil
 	}
-	tasks, err := flowdb.ListTasks(d.DB, flowdb.TaskFilter{Tag: tag})
+	// IncludeArchived: route new GitHub activity to the existing (possibly
+	// archived) task for this PR/issue rather than spawning a duplicate.
+	// Archiving declutters the active list; it doesn't stop tracking the thread.
+	tasks, err := flowdb.ListTasks(d.DB, flowdb.TaskFilter{Tag: tag, IncludeArchived: true})
 	if err != nil {
 		return "", false, err
 	}

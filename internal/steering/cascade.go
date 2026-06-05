@@ -275,7 +275,11 @@ var matchExistingTask = func(db *sql.DB, ev monitor.InboundEvent) (string, bool)
 	if tag == "" {
 		return "", false
 	}
-	tasks, err := flowdb.ListTasks(db, flowdb.TaskFilter{Tag: flowdb.NormalizeTag(tag)})
+	// IncludeArchived: an archived task is still the canonical tracker for its
+	// thread/PR — archiving only declutters the active list, it doesn't stop
+	// tracking. Without this, a new comment on an archived-but-open PR matches
+	// nothing and the cascade suggests make_task instead of forwarding.
+	tasks, err := flowdb.ListTasks(db, flowdb.TaskFilter{Tag: flowdb.NormalizeTag(tag), IncludeArchived: true})
 	if err != nil || len(tasks) == 0 {
 		return "", false
 	}

@@ -163,6 +163,39 @@ func TestGitHubDispatcher_ReviewCommentAppendsToTrackedPR(t *testing.T) {
 	}
 }
 
+// Regression: a new comment on an ARCHIVED but still-open PR must route to the
+// existing task (append to its inbox), NOT spawn a duplicate. Archiving only
+// declutters the active list; routing still tracks the thread.
+func TestGitHubDispatcher_ReviewCommentRoutesToArchivedPR(t *testing.T) {
+	db := dispatcherTestDB(t)
+	spawns, _, _, restore := stubDispatcherIO(t)
+	defer restore()
+	seedGitHubTask(t, "archived-pr", db, "gh-pr:Facets-cloud/flow-manager#77")
+	if _, err := db.Exec(`UPDATE tasks SET archived_at=?, updated_at=? WHERE slug='archived-pr'`, flowdb.NowISO(), flowdb.NowISO()); err != nil {
+		t.Fatalf("archive task: %v", err)
+	}
+
+	d := NewGitHubDispatcher(db, nil)
+	ev := GitHubEvent{
+		Kind: GitHubEventPRReviewComment, Owner: "Facets-cloud", Repo: "flow-manager", Number: 77,
+		CommentID: "PRRC_arch", Author: "reviewer", Body: "feedback addressed; re-review please",
+		URL: "https://github.com/Facets-cloud/flow-manager/pull/77#discussion_r9", EventKey: "review-comment:PRRC_arch",
+	}
+	if err := d.Dispatch(context.Background(), ev); err != nil {
+		t.Fatalf("Dispatch: %v", err)
+	}
+	if len(*spawns) != 0 {
+		t.Errorf("must NOT spawn a duplicate task for an archived PR, spawned %d", len(*spawns))
+	}
+	entries, err := ReadInboxEntries("archived-pr")
+	if err != nil {
+		t.Fatalf("read inbox: %v", err)
+	}
+	if len(entries) != 1 {
+		t.Fatalf("archived PR inbox entries = %d, want 1 (routed to existing task)", len(entries))
+	}
+}
+
 func TestGitHubDispatcher_ChangesRequestedReviewReopensTrackedPR(t *testing.T) {
 	db := dispatcherTestDB(t)
 	_, _, _, restore := stubDispatcherIO(t)

@@ -172,6 +172,26 @@ func ResolveOpenFeedItemsByThread(db *sql.DB, threadKey, actedAt string) (int, e
 	return int(n), nil
 }
 
+// SetFeedItemAction rewrites a still-'new' feed item's suggested action and
+// matched task in place. Used to reconcile open cards when a tracking task is
+// (re)discovered after the card was written — e.g. flipping make_task → forward
+// once we find the existing (possibly archived) task for the thread. No-op
+// unless the row is still 'new', so it never disturbs an already-acted card.
+func SetFeedItemAction(db *sql.DB, id, action, matchedTask string) error {
+	res, err := db.Exec(
+		`UPDATE attention_feed SET suggested_action = ?, matched_task = ? WHERE id = ? AND status = 'new'`,
+		action, NullIfEmpty(matchedTask), id,
+	)
+	if err != nil {
+		return fmt.Errorf("flowdb: set feed action: %w", err)
+	}
+	n, _ := res.RowsAffected()
+	if n == 0 {
+		return fmt.Errorf("flowdb: no open feed item with id %q", id)
+	}
+	return nil
+}
+
 // SetFeedItemStatus moves a feed item to a new lifecycle status and stamps
 // acted_at. Used when the operator (or an autonomous action) resolves a card.
 func SetFeedItemStatus(db *sql.DB, id, status, actedAt string) error {
