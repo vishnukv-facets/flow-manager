@@ -342,6 +342,60 @@ func TestHandleAttentionDecision(t *testing.T) {
 	}
 }
 
+func TestHandleAttentionTraceSourceFilter(t *testing.T) {
+	s, db := attentionTestServer(t)
+	// Two slack traces (seedTrace defaults to slack) + one github.
+	seedTrace(t, db, "sa1", "surfaced", "stage3", "2026-06-05T10:00:00Z")
+	seedTrace(t, db, "sa2", "dropped", "stage1", "2026-06-05T10:01:00Z")
+	if err := flowdb.InsertSteeringTrace(db, flowdb.SteeringTrace{
+		ID: "ga1", CreatedAt: "2026-06-05T10:02:00Z", Origin: "live", Source: "github",
+		Channel: "o/r", Author: "octocat", ThreadKey: "o/r:gh-pr:o/r#5",
+		TextPreview: "review", Disposition: "surfaced", StageReached: "stage3",
+		URL: "https://github.com/o/r/pull/5", LatencyMS: 7,
+	}); err != nil {
+		t.Fatalf("seed github trace: %v", err)
+	}
+
+	since := "2026-06-05T00:00:00Z"
+	req := httptest.NewRequest(http.MethodGet, "/api/attention/trace?since="+since+"&source=github", nil)
+	rec := httptest.NewRecorder()
+	s.handleAttentionTrace(rec, req)
+	if rec.Code != 200 {
+		t.Fatalf("status = %d, want 200; body: %s", rec.Code, rec.Body.String())
+	}
+	var resp AttentionTraceResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if len(resp.Items) != 1 || resp.Items[0].ID != "ga1" {
+		t.Errorf("source=github → %d items, want only ga1", len(resp.Items))
+	}
+	for _, it := range resp.Items {
+		if it.Source != "github" {
+			t.Errorf("source=github returned a %q row (id=%s)", it.Source, it.ID)
+		}
+	}
+	// The funnel is intentionally NOT source-filtered (overview over the window):
+	// it counts all 3 rows.
+	if resp.Funnel.Observed != 3 {
+		t.Errorf("Funnel.Observed = %d, want 3 (funnel spans the whole window, not the source filter)", resp.Funnel.Observed)
+	}
+
+	// source=all behaves like no filter.
+	rec2 := httptest.NewRecorder()
+	s.handleAttentionTrace(rec2, httptest.NewRequest(http.MethodGet, "/api/attention/trace?since="+since+"&source=all", nil))
+	if rec2.Code != 200 {
+		t.Fatalf("source=all status = %d, want 200", rec2.Code)
+	}
+	var resp2 AttentionTraceResponse
+	if err := json.Unmarshal(rec2.Body.Bytes(), &resp2); err != nil {
+		t.Fatalf("decode resp2: %v", err)
+	}
+	if len(resp2.Items) != 3 {
+		t.Errorf("source=all → %d items, want all 3", len(resp2.Items))
+	}
+}
+
 func TestConnectorPermalink(t *testing.T) {
 	// Slack: full team/channel/ts → deep link.
 	if got, want := connectorPermalink("slack", "T1", "C1", "123.45", ""), "slack://channel?team=T1&id=C1&message=123.45"; got != want {

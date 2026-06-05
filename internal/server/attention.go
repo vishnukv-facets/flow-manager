@@ -176,6 +176,10 @@ func (s *Server) handleAttentionTrace(w http.ResponseWriter, r *http.Request) {
 	if disposition == "all" {
 		disposition = ""
 	}
+	source := strings.TrimSpace(q.Get("source"))
+	if source == "all" {
+		source = ""
+	}
 	limit := 200
 	if n, err := strconv.Atoi(strings.TrimSpace(q.Get("limit"))); err == nil && n > 0 {
 		limit = n
@@ -185,7 +189,7 @@ func (s *Server) handleAttentionTrace(w http.ResponseWriter, r *http.Request) {
 		writeError(w, err, http.StatusInternalServerError)
 		return
 	}
-	traces, err := flowdb.ListSteeringTrace(s.cfg.DB, flowdb.TraceFilter{Disposition: disposition, Since: since, Limit: limit})
+	traces, err := flowdb.ListSteeringTrace(s.cfg.DB, flowdb.TraceFilter{Disposition: disposition, Source: source, Since: since, Limit: limit})
 	if err != nil {
 		writeError(w, err, http.StatusInternalServerError)
 		return

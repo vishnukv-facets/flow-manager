@@ -164,6 +164,71 @@ func TestGetSteeringTraceByFeedItem(t *testing.T) {
 	}
 }
 
+func TestListSteeringTraceSourceFilter(t *testing.T) {
+	db := openTempDB(t)
+
+	traces := []SteeringTrace{
+		{ID: "s1", CreatedAt: "2026-06-05T10:00:00Z", Origin: "live", Source: "slack",
+			Disposition: "surfaced", StageReached: "stage3"},
+		{ID: "s2", CreatedAt: "2026-06-05T09:00:00Z", Origin: "live", Source: "slack",
+			Disposition: "dropped", StageReached: "stage1"},
+		{ID: "g1", CreatedAt: "2026-06-05T08:00:00Z", Origin: "live", Source: "github",
+			Disposition: "surfaced", StageReached: "stage3"},
+	}
+	for _, tr := range traces {
+		if err := InsertSteeringTrace(db, tr); err != nil {
+			t.Fatalf("seed %s: %v", tr.ID, err)
+		}
+	}
+
+	gh, err := ListSteeringTrace(db, TraceFilter{Source: "github"})
+	if err != nil {
+		t.Fatalf("ListSteeringTrace github: %v", err)
+	}
+	if len(gh) != 1 || gh[0].ID != "g1" {
+		t.Errorf("source=github → %d rows %v, want only g1", len(gh), traceIDs(gh))
+	}
+
+	slack, err := ListSteeringTrace(db, TraceFilter{Source: "slack"})
+	if err != nil {
+		t.Fatalf("ListSteeringTrace slack: %v", err)
+	}
+	if len(slack) != 2 {
+		t.Errorf("source=slack → %d rows, want 2", len(slack))
+	}
+	for _, tr := range slack {
+		if tr.Source != "slack" {
+			t.Errorf("source=slack returned a %q row (id=%s)", tr.Source, tr.ID)
+		}
+	}
+
+	// Empty source → all rows (no filter).
+	all, err := ListSteeringTrace(db, TraceFilter{Source: ""})
+	if err != nil {
+		t.Fatalf("ListSteeringTrace all: %v", err)
+	}
+	if len(all) != 3 {
+		t.Errorf("source='' → %d rows, want all 3", len(all))
+	}
+
+	// Source combines with disposition.
+	ghSurfaced, err := ListSteeringTrace(db, TraceFilter{Source: "slack", Disposition: "dropped"})
+	if err != nil {
+		t.Fatalf("ListSteeringTrace combined: %v", err)
+	}
+	if len(ghSurfaced) != 1 || ghSurfaced[0].ID != "s2" {
+		t.Errorf("source=slack+dropped → %v, want only s2", traceIDs(ghSurfaced))
+	}
+}
+
+func traceIDs(ts []SteeringTrace) []string {
+	out := make([]string, 0, len(ts))
+	for _, t := range ts {
+		out = append(out, t.ID)
+	}
+	return out
+}
+
 func TestSteeringTraceStage1RelevantRoundTrip(t *testing.T) {
 	db := openTempDB(t)
 

@@ -153,6 +153,7 @@ func GetSteeringTraceByFeedItem(db *sql.DB, feedID string) (SteeringTrace, error
 // TraceFilter narrows ListSteeringTrace.
 type TraceFilter struct {
 	Disposition string // "" = all
+	Source      string // connector source (slack|github); "" = all
 	Since       string // RFC3339 lower bound on created_at; "" = no bound
 	Limit       int    // <=0 → 200
 }
@@ -173,6 +174,10 @@ func ListSteeringTrace(db *sql.DB, f TraceFilter) ([]SteeringTrace, error) {
 	if f.Disposition != "" {
 		conditions = append(conditions, "disposition = ?")
 		args = append(args, f.Disposition)
+	}
+	if f.Source != "" {
+		conditions = append(conditions, "source = ?")
+		args = append(args, f.Source)
 	}
 	if f.Since != "" {
 		conditions = append(conditions, "created_at >= ?")
