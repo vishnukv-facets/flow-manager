@@ -5,6 +5,7 @@ import { events } from './events'
 import { pushToast } from './toast'
 import type {
   ActionRequest,
+  AttentionItem,
   HealthView,
   InboxConversation,
   InboxFeed,
@@ -195,6 +196,13 @@ export function useWorkdirs() {
 }
 export function useInbox() {
   return useQuery({ queryKey: ['inbox'], queryFn: () => apiGet<InboxFeed>('/api/inbox') })
+}
+export function useAttention(status: string = 'new') {
+  const q = status ? `?status=${encodeURIComponent(status)}` : ''
+  return useQuery({
+    queryKey: ['attention', status],
+    queryFn: () => apiGet<AttentionItem[]>(`/api/attention${q}`),
+  })
 }
 // Keyed by hour bucket ("YYYY-MM-DD-HH"): a new quote is fetched only when the
 // hour flips. staleTime Infinity means it's never refetched within the hour no

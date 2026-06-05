@@ -558,4 +558,24 @@ export interface ActionRequest {
   provider?: string
   permission_mode?: string
   mkdir?: boolean
+  attention_action?: string
+}
+
+export interface AttentionItem {
+  id: string
+  source: string
+  thread_key: string
+  summary: string
+  suggested_action: string
+  matched_task?: string
+  suggested_project?: string
+  suggested_priority?: string
+  urgency?: string
+  is_vip: boolean
+  confidence: number
+  draft?: string
+  reason?: string
+  status: string
+  created_at: string
+  acted_at?: string
 }
