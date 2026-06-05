@@ -65,6 +65,54 @@ func DismissFeed(db *sql.DB, id string) error {
 	return flowdb.SetFeedItemStatus(db, id, "dismissed", nowRFC3339())
 }
 
+// InjectReplyToTask injects a "send this reply" instruction into an existing
+// task's inbox/session (the agent posts it via its MCP tools) and marks the
+// feed item acted + linked to that task. The agent sends — never the server.
+func InjectReplyToTask(ctx context.Context, db *sql.DB, item flowdb.FeedItem, text, targetSlug string) error {
+	if err := taskTeller(ctx, targetSlug, feedReplyInstruction(item, text)); err != nil {
+		return err
+	}
+	return flowdb.SetFeedItemActed(db, item.ID, targetSlug, nowRFC3339())
+}
+
+// MakeReplyTaskFromFeed spawns a fresh task whose job is to post the reply, then
+// marks the feed item acted + linked. Returns the new slug so the caller can
+// open the session (the agent posts from there). The agent sends — never the
+// server.
+func MakeReplyTaskFromFeed(ctx context.Context, db *sql.DB, item flowdb.FeedItem, text string) (string, error) {
+	slug := FeedTaskSlug(item)
+	if err := taskSpawner(ctx, feedTaskName(item), slug, feedReplyTaskBrief(item, text), item.SuggestedProject); err != nil {
+		return "", err
+	}
+	if err := flowdb.SetFeedItemActed(db, item.ID, slug, nowRFC3339()); err != nil {
+		return slug, err
+	}
+	return slug, nil
+}
+
+// feedReplyInstruction is the inbox message handed to an existing session.
+func feedReplyInstruction(item flowdb.FeedItem, text string) string {
+	return fmt.Sprintf(
+		"The attention router drafted this reply for you to SEND now. Post it to the source — %s thread %s — using your MCP tools (Slack/GitHub), threaded appropriately. Keep the intent; tighten wording only if needed. Do not ask for confirmation; the operator already approved sending.\n\nReply to send:\n%s",
+		item.Source, item.ThreadKey, strings.TrimSpace(text))
+}
+
+// feedReplyTaskBrief is the brief for a freshly-spawned reply task.
+func feedReplyTaskBrief(item flowdb.FeedItem, text string) string {
+	var b strings.Builder
+	fmt.Fprintf(&b, "# %s\n\n", feedTaskName(item))
+	b.WriteString("## What\nPost the reply below to the source thread, then mark this task done.\n")
+	b.WriteString("The operator has already approved sending this reply via the attention feed — send it (don't re-ask), tightening wording only if clearly needed.\n\n")
+	fmt.Fprintf(&b, "## Reply to send\n%s\n\n", strings.TrimSpace(text))
+	fmt.Fprintf(&b, "## Source\nthread: %s (%s)\n", item.ThreadKey, item.Source)
+	if strings.TrimSpace(item.Channel) != "" {
+		fmt.Fprintf(&b, "channel: %s\n", item.Channel)
+	}
+	b.WriteString("\n## How to send\nUse your MCP tools for this source (Slack MCP for slack, the `gh` CLI / GitHub MCP for github) to post the reply threaded to the source message. Confirm it posted, save a brief progress note, then `flow done` this task.\n")
+	b.WriteString("\n---\n*Created from the attention feed (send-reply). You send it from this session — the server does not post on your behalf.*\n")
+	return b.String()
+}
+
 func nowRFC3339() string { return time.Now().UTC().Format(time.RFC3339) }
 
 // feedTaskName is a short task title derived from the summary (or the thread

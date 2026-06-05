@@ -127,6 +127,80 @@ func TestAttentionActMakeTaskStartOpenBestEffort(t *testing.T) {
 	}
 }
 
+func seedReplyFeedItem(t *testing.T, db *sql.DB, id, matchedTask, draft string) {
+	t.Helper()
+	if _, err := flowdb.UpsertFeedItem(db, flowdb.FeedItem{
+		ID: id, Source: "slack", ThreadKey: "C1:" + id, Summary: "s-" + id,
+		SuggestedAction: "send_reply", MatchedTask: matchedTask, Draft: draft,
+		Confidence: 0.8, Status: "new", CreatedAt: "2026-06-05T10:00:00Z",
+	}); err != nil {
+		t.Fatalf("seed reply %s: %v", id, err)
+	}
+}
+
+// NOTE on hermeticity: send-reply routes through steering.InjectReplyToTask /
+// MakeReplyTaskFromFeed, which shell out to the real `flow tell` / `flow spawn`
+// via steering's UNEXPORTED taskTeller/taskSpawner seams — those aren't
+// reachable from this (server) package, so we can't stub them here. The full
+// behavioural assertions (the agent-mediated inject/spawn, feed row acted+
+// linked, reply text embedded) live in internal/steering/actions_test.go
+// (TestInjectReplyToTask, TestMakeReplyTaskFromFeed) where the seams ARE
+// accessible. These server tests therefore stay on the HTTP contract: the verb
+// is recognized and the draft/reply_text gate behaves correctly — without
+// depending on the real `flow` shell-out succeeding.
+
+func TestAttentionSendReplyEmpty(t *testing.T) {
+	s, db := attentionTestServer(t)
+	// No draft, no reply_text → 400 before any side effect (no shell-out).
+	seedReplyFeedItem(t, db, "sre1", "", "")
+
+	resp, status := s.runAction(actionRequest{Kind: "attention-act", Target: "sre1", AttentionAction: "send-reply"})
+	if status != http.StatusBadRequest || resp.OK {
+		t.Fatalf("empty draft → (%+v, %d), want not-OK 400", resp, status)
+	}
+	if item, _ := flowdb.GetFeedItem(db, "sre1"); item.Status != "new" {
+		t.Errorf("feed row should be untouched ('new'), got %q", item.Status)
+	}
+	// Underscore alias is also recognized as send-reply (still 400 on empty).
+	if _, status := s.runAction(actionRequest{Kind: "attention-act", Target: "sre1", AttentionAction: "send_reply"}); status != http.StatusBadRequest {
+		t.Errorf("send_reply alias empty → %d, want 400", status)
+	}
+}
+
+func TestAttentionSendReplyRecognized(t *testing.T) {
+	s, db := attentionTestServer(t)
+	// A draft is present, so the verb is recognized and routed PAST the
+	// empty-draft 400 gate (it does NOT fall through to the unknown-verb 400).
+	// The downstream inject shells out to the real `flow tell`, which has no
+	// task to talk to in this hermetic env → 500. We assert the contract: the
+	// verb is recognized (status != 400) and we get a definitive answer.
+	seedReplyFeedItem(t, db, "srr1", "t1", "stored draft")
+
+	resp, status := s.runAction(actionRequest{Kind: "attention-act", Target: "srr1", AttentionAction: "send-reply"})
+	if status == http.StatusBadRequest {
+		t.Fatalf("recognized verb with a draft must not 400; got (%+v, %d)", resp, status)
+	}
+	if status != http.StatusOK && status != http.StatusInternalServerError {
+		t.Fatalf("send-reply → %d, want 200 (agent will send) or 500 (shell-out failed in CI)", status)
+	}
+}
+
+func TestAttentionSendReplyEditedTextOverridesEmptyDraft(t *testing.T) {
+	s, db := attentionTestServer(t)
+	// No stored draft, but the operator supplies edited reply_text → the
+	// empty-draft 400 must NOT fire (reply_text is preferred over Draft). The
+	// downstream shell-out may then fail in CI; either way it's not a 400.
+	seedReplyFeedItem(t, db, "sed1", "t9", "")
+
+	resp, status := s.runAction(actionRequest{
+		Kind: "attention-act", Target: "sed1", AttentionAction: "send_reply",
+		ReplyText: "operator edited this",
+	})
+	if status == http.StatusBadRequest {
+		t.Fatalf("reply_text must override an empty draft (no 400); got (%+v, %d)", resp, status)
+	}
+}
+
 func TestAttentionActErrors(t *testing.T) {
 	s, db := attentionTestServer(t)
 	seedFeedItem(t, db, "e1", "new")

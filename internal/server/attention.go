@@ -155,6 +155,33 @@ func (s *Server) attentionAct(req actionRequest) (actionResponse, int) {
 			return actionResponse{OK: false, Message: err.Error()}, http.StatusInternalServerError
 		}
 		return actionResponse{OK: true, Message: "forwarded " + id}, http.StatusOK
+	case "send-reply", "send_reply":
+		// The AGENT sends the reply from its own session (via its MCP tools) —
+		// the server never posts to Slack/GitHub directly. Matched task →
+		// inject into that session; otherwise spawn a fresh reply task. Either
+		// way we open/resume the session so the agent acts now.
+		text := strings.TrimSpace(req.ReplyText)
+		if text == "" {
+			text = strings.TrimSpace(item.Draft)
+		}
+		if text == "" {
+			return actionResponse{OK: false, Message: "send-reply needs a draft or reply_text"}, http.StatusBadRequest
+		}
+		if target := strings.TrimSpace(item.MatchedTask); target != "" {
+			if err := steering.InjectReplyToTask(context.Background(), s.cfg.DB, item, text, target); err != nil {
+				return actionResponse{OK: false, Message: err.Error()}, http.StatusInternalServerError
+			}
+			_ = attentionStartSession(s, target) // open/resume so the agent sends now (best-effort)
+			return actionResponse{OK: true, Message: "reply handed to session " + target + " — the agent will post it"}, http.StatusOK
+		}
+		slug, err := steering.MakeReplyTaskFromFeed(context.Background(), s.cfg.DB, item, text)
+		if err != nil {
+			return actionResponse{OK: false, Message: err.Error()}, http.StatusInternalServerError
+		}
+		if err := attentionStartSession(s, slug); err != nil {
+			return actionResponse{OK: true, Message: "made reply task " + slug + " (open it to let the agent send)"}, http.StatusOK
+		}
+		return actionResponse{OK: true, Message: "reply task " + slug + " started — the agent will post it"}, http.StatusOK
 	default:
 		return actionResponse{OK: false, Message: "unknown attention action: " + req.AttentionAction}, http.StatusBadRequest
 	}

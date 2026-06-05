@@ -250,6 +250,87 @@ func TestApplyActionAutonomousAllowed(t *testing.T) {
 	}
 }
 
+func TestInjectReplyToTask(t *testing.T) {
+	db, err := flowdb.OpenDB(filepath.Join(t.TempDir(), "flow.db"))
+	if err != nil {
+		t.Fatalf("OpenDB: %v", err)
+	}
+	defer db.Close()
+	_, tells := stubActionIO(t)
+
+	item := flowdb.FeedItem{
+		ID: "r1", Source: "slack", ThreadKey: "C1:900.1", Summary: "wants ETA",
+		SuggestedAction: "send_reply", MatchedTask: "gh-task", Draft: "soon",
+		Status: "new", CreatedAt: "2026-06-05T10:00:00Z",
+	}
+	if _, err := flowdb.UpsertFeedItem(db, item); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+
+	if err := InjectReplyToTask(context.Background(), db, item, "hello there", "gh-task"); err != nil {
+		t.Fatalf("InjectReplyToTask: %v", err)
+	}
+	if len(*tells) != 1 || (*tells)[0].slug != "gh-task" {
+		t.Fatalf("taskTeller = %+v, want one call to gh-task", *tells)
+	}
+	if !strings.Contains((*tells)[0].msg, "hello there") {
+		t.Errorf("inject message should embed the reply text: %q", (*tells)[0].msg)
+	}
+	got, err := flowdb.GetFeedItem(db, "r1")
+	if err != nil {
+		t.Fatalf("GetFeedItem: %v", err)
+	}
+	if got.Status != "acted" || got.LinkedTask != "gh-task" {
+		t.Errorf("feed row = status %q linked %q, want acted/gh-task", got.Status, got.LinkedTask)
+	}
+}
+
+func TestMakeReplyTaskFromFeed(t *testing.T) {
+	db, err := flowdb.OpenDB(filepath.Join(t.TempDir(), "flow.db"))
+	if err != nil {
+		t.Fatalf("OpenDB: %v", err)
+	}
+	defer db.Close()
+	spawns, _ := stubActionIO(t)
+
+	item := flowdb.FeedItem{
+		ID: "r2", Source: "slack", ThreadKey: "C1:950.1", Summary: "needs reply",
+		SuggestedAction: "send_reply", SuggestedProject: "goniyo", Channel: "C1",
+		Status: "new", CreatedAt: "2026-06-05T10:00:00Z",
+	}
+	if _, err := flowdb.UpsertFeedItem(db, item); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+
+	slug, err := MakeReplyTaskFromFeed(context.Background(), db, item, "ship it Friday")
+	if err != nil {
+		t.Fatalf("MakeReplyTaskFromFeed: %v", err)
+	}
+	if slug != FeedTaskSlug(item) {
+		t.Errorf("returned slug = %q, want %q", slug, FeedTaskSlug(item))
+	}
+	if len(*spawns) != 1 {
+		t.Fatalf("taskSpawner calls = %d, want 1", len(*spawns))
+	}
+	got := (*spawns)[0]
+	if got.slug != FeedTaskSlug(item) {
+		t.Errorf("spawn slug = %q, want %q", got.slug, FeedTaskSlug(item))
+	}
+	if !strings.Contains(got.brief, "ship it Friday") {
+		t.Errorf("brief should embed the reply text:\n%s", got.brief)
+	}
+	if !strings.Contains(got.brief, "Post the reply") {
+		t.Errorf("brief should instruct to post the reply:\n%s", got.brief)
+	}
+	row, err := flowdb.GetFeedItem(db, "r2")
+	if err != nil {
+		t.Fatalf("GetFeedItem: %v", err)
+	}
+	if row.Status != "acted" || row.LinkedTask != FeedTaskSlug(item) {
+		t.Errorf("feed row = status %q linked %q, want acted/%s", row.Status, row.LinkedTask, FeedTaskSlug(item))
+	}
+}
+
 func TestApplyActionUnsupported(t *testing.T) {
 	db, err := flowdb.OpenDB(filepath.Join(t.TempDir(), "flow.db"))
 	if err != nil {

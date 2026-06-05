@@ -45,8 +45,12 @@ type actionRequest struct {
 	Mkdir          bool   `json:"mkdir"`
 
 	// AttentionAction is the verb for the attention-act action kind:
-	// make-task | forward | dismiss. Target carries the feed item id.
+	// make-task | forward | dismiss | send-reply. Target carries the feed item id.
 	AttentionAction string `json:"attention_action,omitempty"`
+
+	// ReplyText is the operator's edited draft for the send-reply attention
+	// action. Empty falls back to the feed item's stored Draft.
+	ReplyText string `json:"reply_text,omitempty"`
 
 	// Settings carries key→value pairs for the update-settings action.
 	Settings map[string]string `json:"settings,omitempty"`
