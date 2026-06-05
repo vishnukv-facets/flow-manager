@@ -55,7 +55,11 @@ function currentBrowserNotificationPermission(): BrowserNotificationPermission {
 // Pops a toast the moment a new notification arrives (a session starts waiting,
 // or an unread inbox message lands) — so you notice without watching the bell.
 // Seeds on first load so pre-existing items don't toast on page open.
-function useNotificationToasts(ui?: ReturnType<typeof useUiData>['data'], inbox?: ReturnType<typeof useInbox>['data']) {
+function useNotificationToasts(
+  ui?: ReturnType<typeof useUiData>['data'],
+  inbox?: ReturnType<typeof useInbox>['data'],
+  attention?: ReturnType<typeof useAttention>['data'],
+) {
   const seen = useRef<Set<string> | null>(null)
   const notifyDesktop = useCallback((it: NotificationItem) => {
     if (currentBrowserNotificationPermission() !== 'granted' || typeof document === 'undefined' || !document.hidden) return
@@ -78,6 +82,11 @@ function useNotificationToasts(ui?: ReturnType<typeof useUiData>['data'], inbox?
         items.push({ key: `u:${e.task_slug}:${e.timestamp}`, title: e.task_name, sub: e.body_snippet || 'New message' })
       }
     }
+    for (const a of attention ?? []) {
+      if (a.status === 'new' && a.urgency === 'urgent') {
+        items.push({ key: `a:${a.id}`, title: a.summary || 'Attention', sub: a.reason || a.suggested_action })
+      }
+    }
     if (seen.current === null) {
       // first observation — remember what's already there, don't toast it
       seen.current = new Set(items.map((i) => i.key))
@@ -90,7 +99,7 @@ function useNotificationToasts(ui?: ReturnType<typeof useUiData>['data'], inbox?
         notifyDesktop(it)
       }
     }
-  }, [ui, inbox, notifyDesktop])
+  }, [ui, inbox, attention, notifyDesktop])
 }
 
 export function Shell({ children }: { children: ReactNode }) {
@@ -103,7 +112,7 @@ export function Shell({ children }: { children: ReactNode }) {
   const { data: inbox } = useInbox()
   const { data: attentionItems } = useAttention('new')
   const attentionCount = attentionItems?.length ?? 0
-  useNotificationToasts(ui, inbox)
+  useNotificationToasts(ui, inbox, attentionItems)
 
   useEffect(() => rpc.onStatus(setConn), [])
 
