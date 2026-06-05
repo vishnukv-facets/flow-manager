@@ -4352,7 +4352,7 @@ summary.detail-branch.as-button:hover {
 }
 .trace-row {
   display: grid;
-  grid-template-columns: 62px 72px 96px 88px 48px minmax(110px, 1fr) minmax(160px, 2.4fr);
+  grid-template-columns: 128px 116px 96px 84px 44px minmax(110px, 1.1fr) minmax(90px, 0.9fr) minmax(150px, 2fr);
   align-items: center;
   gap: 10px;
   padding: 9px 14px;
@@ -4370,6 +4370,15 @@ summary.detail-branch.as-button:hover {
   padding-top: 8px;
   padding-bottom: 8px;
 }
+.trace-row.trace-clickable {
+  cursor: pointer;
+  transition: background var(--dur-1) var(--ease);
+}
+.trace-row.trace-clickable:hover,
+.trace-row.trace-clickable:focus-visible {
+  background: var(--bg-1);
+  outline: none;
+}
 .trace-row.trace-surfaced {
   border-left: 2px solid var(--accent-line);
 }
@@ -4379,6 +4388,9 @@ summary.detail-branch.as-button:hover {
 .trace-time {
   font-size: 11.5px;
 }
+.trace-src {
+  gap: 5px;
+}
 .trace-stage {
   font-size: 11.5px;
 }
@@ -4386,14 +4398,48 @@ summary.detail-branch.as-button:hover {
   text-align: right;
 }
 .trace-channel,
+.trace-from,
 .trace-detail {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+.trace-channel {
+  font-size: 12px;
+}
 .trace-detail {
   font-size: 12.5px;
   line-height: 1.35;
+}
+
+/* Trace detail modal */
+.trace-detail-view {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+.td-section {
+  display: flex;
+  flex-direction: column;
+}
+.td-message {
+  margin-top: 6px;
+  padding: 10px 12px;
+  background: var(--bg-1);
+  border: 1px solid var(--border);
+  border-radius: var(--r-sm);
+  max-height: 220px;
+  overflow-y: auto;
+}
+.td-thread {
+  font-size: 12px;
+  word-break: break-all;
+}
+.td-tech {
+  font-size: 10.5px;
+  padding-top: 12px;
+  border-top: 1px solid var(--border-faint);
+  word-break: break-all;
 }
 
 /* Watched-channels picker (Settings → Steering) */

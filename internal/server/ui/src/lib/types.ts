@@ -599,6 +599,14 @@ export interface SteeringTrace {
   author?: string
   thread_key?: string
   text_preview?: string
+  // Resolved, human-readable fields from the server (no raw IDs):
+  channel_name?: string // "#general" (slack) or "owner/repo" (github)
+  author_name?: string // display name (slack) or login (github)
+  text?: string // full message text, @mentions resolved to names
+  permalink?: string // slack:// deep link, or the GitHub URL
+  ts?: string
+  team_id?: string
+  url?: string
   disposition: string
   stage_reached: string
   drop_reason?: string

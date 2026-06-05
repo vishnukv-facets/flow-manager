@@ -1,8 +1,10 @@
-import { useState } from 'react'
-import { AlertTriangle, Check, Filter, Inbox, ListPlus, Share2 } from 'lucide-react'
+import { useState, type ReactNode } from 'react'
+import { AlertTriangle, Check, ExternalLink, Filter, Inbox, ListPlus, Share2 } from 'lucide-react'
 import { useAction, useAttention, useAttentionTrace } from '../lib/query'
 import { useDocumentTitle } from '../lib/useDocumentTitle'
 import { EmptyState, ErrorNote, Loading, SourceIcon } from '../components/ui'
+import { Modal } from '../components/Modal'
+import { dateTimeFull, dateTimeSec, titleCase } from '../lib/format'
 import type { AttentionItem, SteeringFunnel, SteeringTrace } from '../lib/types'
 
 const STATUSES = ['new', 'acted', 'dismissed', 'all'] as const
@@ -150,6 +152,7 @@ const WINDOWS = [
 
 function TraceView() {
   const [windowId, setWindowId] = useState<string>('24h')
+  const [selected, setSelected] = useState<SteeringTrace | null>(null)
   const win = WINDOWS.find((w) => w.id === windowId) ?? WINDOWS[1]
   const since = new Date(Date.now() - win.ms).toISOString()
   const { data, isLoading, error } = useAttentionTrace(since)
@@ -185,18 +188,21 @@ function TraceView() {
         <div className="trace-list">
           <div className="trace-row trace-head faint mono">
             <span>time</span>
-            <span>origin</span>
+            <span>source</span>
             <span>disposition</span>
             <span>stage</span>
             <span className="trace-conf">conf</span>
             <span>channel</span>
+            <span>from</span>
             <span>detail</span>
           </div>
           {items.map((it) => (
-            <TraceRow key={it.id} item={it} />
+            <TraceRow key={it.id} item={it} onOpen={() => setSelected(it)} />
           ))}
         </div>
       )}
+
+      <TraceDetail item={selected} onClose={() => setSelected(null)} />
     </>
   )
 }
@@ -251,23 +257,35 @@ const DISPOSITION_TONE: Record<string, string> = {
   error: 'badge warn',
 }
 
-function TraceRow({ item }: { item: SteeringTrace }) {
+function TraceRow({ item, onOpen }: { item: SteeringTrace; onOpen: () => void }) {
   const conf =
     item.final_confidence ?? item.stage2_confidence ?? item.stage3_confidence ?? undefined
   const detail =
     item.disposition === 'error'
       ? item.error
-      : item.drop_reason || item.text_preview || ''
+      : item.drop_reason || item.text || item.text_preview || ''
   const dispClass = DISPOSITION_TONE[item.disposition] ?? 'badge'
   const dimDetail = item.disposition === 'dropped' && !item.drop_reason
-  // channel holds a slack channel id (or empty for DMs); fall back to the
-  // channel_type ("dm"/"public") or source so the column is never blank.
-  const where = item.channel || item.channel_type || item.source
+  // Prefer the resolved channel name; never show a raw ID when a name exists.
+  const where = item.channel_name || item.channel || item.channel_type || '—'
+  const from = item.author_name || '(system/bot)'
   return (
-    <div className={`trace-row trace-${item.disposition}`}>
-      <span className="mono faint trace-time">{item.created_at.slice(11, 19)}</span>
-      <span>
+    <div
+      className={`trace-row trace-clickable trace-${item.disposition}`}
+      role="button"
+      tabIndex={0}
+      onClick={onOpen}
+      onKeyDown={(e) => {
+        if (e.key === 'Enter' || e.key === ' ') {
+          e.preventDefault()
+          onOpen()
+        }
+      }}
+    >
+      <span className="mono faint trace-time">{dateTimeSec(item.created_at)}</span>
+      <span className="row gap trace-src">
         <span className="badge">{item.origin}</span>
+        <span className="badge">{item.source}</span>
       </span>
       <span>
         <span className={dispClass}>{item.disposition}</span>
@@ -276,12 +294,119 @@ function TraceRow({ item }: { item: SteeringTrace }) {
       <span className="num faint trace-conf">
         {conf != null ? `${Math.round(conf * 100)}%` : ''}
       </span>
-      <span className="mono faint trace-channel" title={item.thread_key || where}>
+      <span className="trace-channel" title={item.channel_name || item.channel || ''}>
         {where}
+      </span>
+      <span className="dim trace-from" title={from}>
+        {from}
       </span>
       <span className={`trace-detail ${dimDetail ? 'faint' : 'dim'}`} title={detail}>
         {detail || <span className="faint">—</span>}
       </span>
     </div>
+  )
+}
+
+// ----- Trace detail modal -------------------------------------------------
+// One row of the cascade key/value list. Reuses the .meta-grid cell styling so
+// the modal matches the session/project detail look.
+function KV({ k, v }: { k: string; v: ReactNode }) {
+  return (
+    <div className="meta-cell">
+      <div className="meta-k">{k}</div>
+      <div className="meta-v">{v ?? '—'}</div>
+    </div>
+  )
+}
+
+function pctConf(c: number | null | undefined): string {
+  return c != null ? `${Math.round(c * 100)}%` : '—'
+}
+
+function relevantLabel(b: boolean | null | undefined): string {
+  if (b === true) return 'yes'
+  if (b === false) return 'no'
+  return '—'
+}
+
+function TraceDetail({ item, onClose }: { item: SteeringTrace | null; onClose: () => void }) {
+  // Keep the last item around so content doesn't blank during the close anim.
+  if (!item) return <Modal open={false} onClose={onClose} title="" children={null} />
+
+  const sourceLabel = item.source === 'github' ? 'GitHub' : titleCase(item.source || 'message')
+  const title = `${sourceLabel} · ${item.disposition}`
+  const channel = item.channel_name || item.channel || '—'
+  const from = item.author_name || '(system/bot — no user)'
+  const message = item.text || item.text_preview || '(no text)'
+  const linkLabel = item.source === 'github' ? 'Open in GitHub' : 'Open in Slack'
+
+  return (
+    <Modal open onClose={onClose} title={title} width={620}>
+      <div className="trace-detail-view">
+        <div className="meta-grid">
+          <KV k="when" v={dateTimeFull(item.created_at)} />
+          <KV
+            k="source"
+            v={
+              <span className="row gap">
+                <span className="badge">{item.origin}</span>
+                <span className="badge">{item.source || '—'}</span>
+              </span>
+            }
+          />
+          <KV k="channel" v={channel} />
+          <KV k="from" v={from} />
+        </div>
+
+        <div className="td-section">
+          <div className="eyebrow">message</div>
+          <div className="att-draft-body td-message">{message}</div>
+        </div>
+
+        <div className="td-section">
+          <div className="eyebrow">thread</div>
+          <div className="row gap" style={{ marginTop: 5 }}>
+            <span className="mono dim td-thread" title={item.thread_key || ''}>
+              {item.thread_key || '—'}
+            </span>
+            {item.permalink ? (
+              <a className="btn ghost sm" href={item.permalink} target="_blank" rel="noreferrer">
+                <ExternalLink size={13} /> {linkLabel}
+              </a>
+            ) : null}
+          </div>
+        </div>
+
+        <div className="td-section">
+          <div className="eyebrow">why · cascade decision</div>
+          <div className="meta-grid" style={{ marginTop: 6 }}>
+            <KV k="disposition" v={<span className={DISPOSITION_TONE[item.disposition] ?? 'badge'}>{item.disposition}</span>} />
+            <KV k="stage reached" v={item.stage_reached || '—'} />
+            <KV k="stage 1 relevant" v={relevantLabel(item.stage1_relevant)} />
+            <KV k="stage 2 action" v={item.stage2_action ? `${item.stage2_action} · ${pctConf(item.stage2_confidence)}` : '—'} />
+            <KV k="stage 3 action" v={item.stage3_action ? `${item.stage3_action} · ${pctConf(item.stage3_confidence)}` : '—'} />
+            <KV k="final action" v={item.final_action ? `${item.final_action} · ${pctConf(item.final_confidence)}` : '—'} />
+            <KV k="drop reason" v={item.drop_reason || '—'} />
+            <KV k="latency" v={item.latency_ms != null ? `${item.latency_ms} ms` : '—'} />
+            <KV k="model" v={item.model || '—'} />
+            {item.error ? <KV k="error" v={<span className="dim">{item.error}</span>} /> : null}
+          </div>
+        </div>
+
+        {item.feed_item_id ? (
+          <div className="td-section">
+            <div className="dim">
+              <Check size={13} /> Surfaced to the Attention feed.{' '}
+              <span className="faint">Find it under the Feed tab.</span>
+            </div>
+          </div>
+        ) : null}
+
+        <div className="td-tech faint mono">
+          channel={item.channel || '—'} · author={item.author || '—'} · thread={item.thread_key || '—'}
+          {item.ts ? ` · ts=${item.ts}` : ''}
+        </div>
+      </div>
+    </Modal>
   )
 }
