@@ -86,3 +86,50 @@ func TestStage0(t *testing.T) {
 		})
 	}
 }
+
+func githubCfg() WatchConfig {
+	cfg := baseCfg()
+	cfg.GitHubIdentity = []string{"octocat-self"}
+	return cfg
+}
+
+func ghEvent(channel, author, body string) monitor.InboundEvent {
+	return monitor.InboundEvent{
+		Kind: "pr_comment", ChannelType: "github", Channel: channel,
+		TS: "2026-06-05T10:00:00Z", ThreadTS: "gh-pr:" + channel + "#5",
+		UserID: author, Text: body,
+		URL: "https://github.com/" + channel + "/pull/5",
+	}
+}
+
+func TestStage0GitHubPasses(t *testing.T) {
+	got := Stage0(ghEvent("o/r", "reviewer", "please take a look"), githubCfg())
+	if !got.Pass {
+		t.Fatalf("Pass = false (reason %q), want true", got.DropReason)
+	}
+	if got.ThreadKey != "o/r:gh-pr:o/r#5" {
+		t.Errorf("ThreadKey = %q, want %q", got.ThreadKey, "o/r:gh-pr:o/r#5")
+	}
+}
+
+func TestStage0GitHubSelfAuthored(t *testing.T) {
+	got := Stage0(ghEvent("o/r", "octocat-self", "self note"), githubCfg())
+	if got.Pass {
+		t.Fatalf("Pass = true, want dropped self-authored")
+	}
+	if got.DropReason != "self-authored" {
+		t.Errorf("DropReason = %q, want %q", got.DropReason, "self-authored")
+	}
+}
+
+func TestStage0GitHubMutedRepo(t *testing.T) {
+	cfg := githubCfg()
+	cfg.MutedChannels = map[string]bool{"o/r": true}
+	got := Stage0(ghEvent("o/r", "reviewer", "hi"), cfg)
+	if got.Pass {
+		t.Fatalf("Pass = true, want dropped muted repo")
+	}
+	if got.DropReason != "muted repo" {
+		t.Errorf("DropReason = %q, want %q", got.DropReason, "muted repo")
+	}
+}

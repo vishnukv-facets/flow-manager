@@ -21,6 +21,10 @@ func WatchConfigFromEnv() WatchConfig {
 		MutedKeywords:   splitList(os.Getenv("FLOW_STEERING_MUTED_KEYWORDS")),
 		Identity:        OperatorIdentity{UserIDs: self},
 		MentionUserIDs:  self,
+		// Reuse the operator's GitHub login(s) from the existing self-echo
+		// standdown source (FLOW_GH_SELF_LOGINS) so the GitHub connector drops
+		// the operator's own events. Empty is fine (→ no self-drop).
+		GitHubIdentity: monitor.GitHubSelfLogins(),
 	}
 }
 

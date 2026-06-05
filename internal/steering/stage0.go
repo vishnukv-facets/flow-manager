@@ -9,12 +9,15 @@ import (
 // WatchConfig is the operator's Stage 0 configuration (spec §10). Channel sets
 // are maps for O(1) membership. Identity drives the self-drop; MentionUserIDs
 // drives "is this addressed to me" detection in otherwise-unwatched channels.
+// GitHubIdentity holds the operator's GitHub login(s) for the GitHub
+// connector's self-drop (see stage0GitHub).
 type WatchConfig struct {
 	WatchedChannels map[string]bool
 	MutedChannels   map[string]bool
 	MutedKeywords   []string
 	Identity        OperatorIdentity
 	MentionUserIDs  []string
+	GitHubIdentity  []string
 }
 
 // Stage0Result is the outcome of the free deterministic filter.
@@ -24,11 +27,51 @@ type Stage0Result struct {
 	ThreadKey  string // channel:thread_ts coalescing key, set when Pass == true
 }
 
-// Stage0 applies the no-LLM drop rules (spec §6, Stage 0). It only considers
-// human chat events ("message"/"app_mention"); reactions belong to the
-// existing reaction-trigger pipeline and are dropped here. Order: kind →
-// self → bot → mute → scope. The returned ThreadKey is the coalescing key.
+// Stage0 applies the no-LLM drop rules (spec §6, Stage 0), dispatching to a
+// per-connector policy keyed off connectorOf. Adding a connector means adding a
+// case here plus its stage0<Connector> function — the rest of the cascade is
+// connector-agnostic. Slack is the default.
 func Stage0(ev monitor.InboundEvent, cfg WatchConfig) Stage0Result {
+	switch connectorOf(ev) {
+	case "github":
+		return stage0GitHub(ev, cfg)
+	default:
+		return stage0Slack(ev, cfg)
+	}
+}
+
+// stage0GitHub is the Stage 0 policy for the GitHub connector. GitHub events
+// are pre-scoped by the poller (already operator-relevant: assigned, review-
+// requested, mentioned, involved), so the policy is light: drop self-authored,
+// authorless, muted-repo, and muted-keyword events; everything else passes with
+// the LinkTag-derived thread key. ev.Channel is owner/repo; ev.ThreadTS is the
+// gh-pr/gh-issue link tag.
+func stage0GitHub(ev monitor.InboundEvent, cfg WatchConfig) Stage0Result {
+	if containsFold(cfg.GitHubIdentity, ev.UserID) {
+		return Stage0Result{DropReason: "self-authored"}
+	}
+	if strings.TrimSpace(ev.UserID) == "" {
+		return Stage0Result{DropReason: "no author"}
+	}
+	if cfg.MutedChannels[ev.Channel] { // ev.Channel is owner/repo
+		return Stage0Result{DropReason: "muted repo"}
+	}
+	if hasMutedKeyword(ev.Text, cfg.MutedKeywords) {
+		return Stage0Result{DropReason: "muted keyword"}
+	}
+	key := monitor.ThreadKey(ev.Channel, ev.ThreadTS)
+	if key == "" {
+		return Stage0Result{DropReason: "no thread key"}
+	}
+	return Stage0Result{Pass: true, ThreadKey: key}
+}
+
+// stage0Slack applies the no-LLM drop rules (spec §6, Stage 0) for the Slack
+// connector. It only considers human chat events ("message"/"app_mention");
+// reactions belong to the existing reaction-trigger pipeline and are dropped
+// here. Order: kind → self → bot → mute → scope. The returned ThreadKey is the
+// coalescing key.
+func stage0Slack(ev monitor.InboundEvent, cfg WatchConfig) Stage0Result {
 	if ev.Kind != "message" && ev.Kind != "app_mention" {
 		return Stage0Result{DropReason: "not a chat event"}
 	}
