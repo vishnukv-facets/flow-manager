@@ -4288,3 +4288,47 @@ summary.detail-branch.as-button:hover {
   margin-top: 2px;
   font-size: 11.5px;
 }
+
+/* Watched-channels picker (Settings → Steering) */
+.wc-search {
+  margin-bottom: 10px;
+}
+.wc-search .input {
+  flex: 1;
+}
+.wc-list {
+  display: flex;
+  flex-direction: column;
+  max-height: 320px;
+  overflow-y: auto;
+  border: 1px solid var(--border);
+  border-radius: var(--r-sm);
+  background: var(--bg-1);
+}
+.wc-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 7px 10px;
+  font-size: 13px;
+  cursor: pointer;
+  border-bottom: 1px solid var(--border);
+}
+.wc-row:last-child {
+  border-bottom: none;
+}
+.wc-row:hover {
+  background: var(--bg-2);
+}
+.wc-row.on {
+  background: var(--accent-soft);
+}
+.wc-row input[type='checkbox'] {
+  accent-color: var(--accent);
+}
+.wc-name {
+  color: var(--text);
+}
+.wc-id {
+  font-size: 10.5px;
+}

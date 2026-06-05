@@ -579,3 +579,10 @@ export interface AttentionItem {
   created_at: string
   acted_at?: string
 }
+
+export interface SlackChannel {
+  id: string
+  name: string
+  is_private: boolean
+  is_member: boolean
+}

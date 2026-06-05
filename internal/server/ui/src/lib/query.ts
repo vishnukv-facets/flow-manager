@@ -16,6 +16,7 @@ import type {
   QuoteView,
   SearchResponse,
   SettingsResponse,
+  SlackChannel,
   SlackSetupStatus,
   TaskView,
   TranscriptResponse,
@@ -203,6 +204,9 @@ export function useAttention(status: string = 'new') {
     queryKey: ['attention', status],
     queryFn: () => apiGet<AttentionItem[]>(`/api/attention${q}`),
   })
+}
+export function useSlackChannels() {
+  return useQuery({ queryKey: ['slack-channels'], queryFn: () => apiGet<SlackChannel[]>('/api/slack/channels') })
 }
 // Keyed by hour bucket ("YYYY-MM-DD-HH"): a new quote is fetched only when the
 // hour flips. staleTime Infinity means it's never refetched within the hour no
