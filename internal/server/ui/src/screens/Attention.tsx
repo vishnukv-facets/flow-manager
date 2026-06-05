@@ -43,13 +43,49 @@ export function Attention() {
   )
 }
 
+// signature of the fields a re-triage can change — used to detect when a
+// re-triaged card has actually been refreshed (so we can stop its spinner).
+const cardSig = (it: AttentionItem) =>
+  `${it.suggested_action}|${it.matched_task ?? ''}|${it.confidence}|${it.reason ?? ''}|${it.summary ?? ''}`
+
 function FeedView() {
   const [status, setStatus] = useState<string>('new')
   const [detail, setDetail] = useState<AttentionItem | null>(null)
   const { data, isLoading, error } = useAttention(status)
   const action = useAction()
+  // Cards with an in-flight re-triage → id mapped to the card signature at click
+  // time. Deep triage is async (~a minute), so we hold a spinner until the card's
+  // content actually changes (SSE refetch) or a safety timeout fires.
+  const [retriaging, setRetriaging] = useState<Record<string, string>>({})
+
+  // Stop the spinner once a re-triaged card's content has changed.
+  useEffect(() => {
+    if (Object.keys(retriaging).length === 0) return
+    setRetriaging((prev) => {
+      let changed = false
+      const next = { ...prev }
+      for (const it of data ?? []) {
+        if (next[it.id] !== undefined && next[it.id] !== cardSig(it)) {
+          delete next[it.id]
+          changed = true
+        }
+      }
+      return changed ? next : prev
+    })
+  }, [data]) // eslint-disable-line react-hooks/exhaustive-deps
 
   const act = (item: AttentionItem, verb: string) => {
+    if (verb === 'retriage') {
+      if (retriaging[item.id]) return // already re-running for this card
+      setRetriaging((r) => ({ ...r, [item.id]: cardSig(item) }))
+      action.mutate({ kind: 'attention-act', target: item.id, attention_action: verb })
+      // Safety net: clear the spinner even if the verdict comes back identical.
+      window.setTimeout(
+        () => setRetriaging((r) => { const n = { ...r }; delete n[item.id]; return n }),
+        120000,
+      )
+      return
+    }
     if (action.isPending) return
     action.mutate({ kind: 'attention-act', target: item.id, attention_action: verb })
   }
@@ -85,6 +121,7 @@ function FeedView() {
               key={it.id}
               item={it}
               disabled={action.isPending}
+              retriaging={!!retriaging[it.id]}
               onAct={act}
               onOpen={() => setDetail(it)}
             />
@@ -113,11 +150,13 @@ function OriginIcon({ source, channelType }: { source?: string; channelType?: st
 function AttentionCard({
   item,
   disabled,
+  retriaging,
   onAct,
   onOpen,
 }: {
   item: AttentionItem
   disabled: boolean
+  retriaging?: boolean
   onAct: (item: AttentionItem, verb: string) => void
   onOpen: () => void
 }) {
@@ -204,13 +243,14 @@ function AttentionCard({
           <button
             type="button"
             className="btn icon ghost sm"
-            title="Re-run triage (re-read task context, refresh the decision)"
+            title={retriaging ? 'Re-running triage…' : 'Re-run triage (re-read task context, refresh the decision)'}
             aria-label="Re-run triage"
-            disabled={disabled}
+            disabled={disabled || retriaging}
             onClick={() => onAct(item, 'retriage')}
           >
-            <RefreshCw size={13} />
+            <RefreshCw size={13} className={retriaging ? 'spin' : undefined} />
           </button>
+          {retriaging ? <span className="dim mono" style={{ fontSize: 11.5 }}>re-triaging…</span> : null}
           <MuteMenu item={item} disabled={disabled} onAct={onAct} />
         </div>
       ) : (
