@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"os"
 	"os/exec"
 	"strings"
 
@@ -18,9 +19,9 @@ import (
 var sendReplyRunner = func(ctx context.Context, prompt string) (string, error) {
 	cmd := exec.CommandContext(ctx, "claude", "-p", prompt,
 		"--model", classifierModel(), "--dangerously-skip-permissions")
-	out, err := cmd.Output()
+	out, err := cmd.CombinedOutput() // capture stderr too — surfaces MCP/tool failures
 	if err != nil {
-		return "", fmt.Errorf("steering: send-reply claude -p: %w", err)
+		return strings.TrimSpace(string(out)), fmt.Errorf("steering: send-reply claude -p: %w (output: %s)", err, strings.TrimSpace(string(out)))
 	}
 	return string(out), nil
 }
@@ -37,14 +38,43 @@ func SendReplyViaAgent(ctx context.Context, db *sql.DB, item flowdb.FeedItem, te
 		return fmt.Errorf("steering: send-reply requires non-empty text")
 	}
 	out, err := sendReplyRunner(ctx, sendReplyPrompt(item, text, instructions))
+	trimmed := strings.TrimSpace(out)
+	// Always log what the agent actually said — the only way to see whether it
+	// posted, refused, or lacked the connector MCP in a headless run.
+	fmt.Fprintf(os.Stderr, "steering: send-reply agent for %s replied: %s\n", item.ID, truncate(trimmed, 600))
 	if err != nil {
 		return err
 	}
-	if strings.HasPrefix(strings.TrimSpace(out), "ERROR:") {
-		return fmt.Errorf("steering: send-reply agent did not post: %s", strings.TrimSpace(out))
+	// STRICT success: only mark acted when the agent explicitly confirms it posted.
+	// Anything else (a refusal, an explanation that it has no Slack/GitHub MCP
+	// tool, an empty reply) leaves the card 'new' so it's visibly unsent and can
+	// be retried — never a silent false "acted".
+	if !postConfirmed(trimmed) {
+		return fmt.Errorf("steering: send-reply not confirmed posted (agent said: %s)", truncate(trimmed, 200))
 	}
 	// No linked task — the hidden agent posted directly.
 	return flowdb.SetFeedItemActed(db, item.ID, "", nowRFC3339())
+}
+
+// postConfirmed reports whether the agent's reply is an explicit posting
+// confirmation. We require the convention token "POSTED" and reject anything
+// that also signals failure, so a chatty "I couldn't post…" never counts.
+func postConfirmed(out string) bool {
+	up := strings.ToUpper(out)
+	if up == "" || strings.HasPrefix(up, "FAILED") || strings.HasPrefix(up, "ERROR") {
+		return false
+	}
+	if strings.Contains(up, "CANNOT") || strings.Contains(up, "UNABLE") || strings.Contains(up, "DON'T HAVE") || strings.Contains(up, "NO SLACK") || strings.Contains(up, "NOT AVAILABLE") {
+		return false
+	}
+	return strings.Contains(up, "POSTED")
+}
+
+func truncate(s string, n int) string {
+	if len(s) <= n {
+		return s
+	}
+	return s[:n] + "…"
 }
 
 func sendReplyPrompt(item flowdb.FeedItem, text, instructions string) string {
@@ -68,7 +98,11 @@ Source: ` + item.Source + ` thread ` + item.ThreadKey + `
 Draft reply:
 ` + strings.TrimSpace(text) + `
 
-After posting, reply with a single line: "posted". If you cannot post (the
-connector MCP tool isn't available, or the post failed), reply with a single line
-starting "ERROR: " and the reason — do not retry endlessly.`
+Posting REQUIRES your connector MCP tool (Slack/GitHub). If that tool is not
+available to you, do NOT pretend — you cannot post.
+
+When you have actually posted, reply with a single line: POSTED
+If you could not post for ANY reason (no connector MCP tool, an API error, etc.),
+reply with a single line: FAILED: <short reason>
+Output nothing else.`
 }
