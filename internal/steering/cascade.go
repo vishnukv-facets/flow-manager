@@ -155,6 +155,7 @@ func (c *Cascade) finishItem(ctx context.Context, in ClassifyInput, tr *flowdb.S
 	if !c.budget.allow(c.now()) {
 		c.log("deep-triage budget exhausted; surfacing stage2 verdict for %s", in.ThreadKey)
 		c.cache.mark(in.ThreadKey, c.now())
+		c.applyExistingTaskMatch(&v2, ev)
 		id, werr := c.writeFeed(v2, ev)
 		tr.Disposition, tr.StageReached = "surfaced", "stage2"
 		tr.DropReason = "deep budget exhausted; surfaced stage2 verdict"
@@ -175,11 +176,53 @@ func (c *Cascade) finishItem(ctx context.Context, in ClassifyInput, tr *flowdb.S
 		tr.StageReached = "stage3"
 	}
 	c.cache.mark(in.ThreadKey, c.now())
+	c.applyExistingTaskMatch(&v3, ev)
 	id, werr := c.writeFeed(v3, ev)
 	tr.Disposition = "surfaced"
 	tr.FinalAction, tr.FinalConfidence, tr.FeedItemID = string(v3.SuggestedAction), v3.Confidence, id
 	c.emitTrace(tr, start)
 	return werr
+}
+
+// matchExistingTask returns the slug of a flow task already tracking this
+// event's thread — via the GitHub link tag (gh-pr:/gh-issue:owner/repo#N, which
+// gitHubEventToInboxEvent stashes in ThreadTS) for GitHub, or the
+// slack-thread:<channel>:<thread_ts> tag for Slack — preferring a non-done task.
+// Package var so tests can stub it.
+var matchExistingTask = func(db *sql.DB, ev monitor.InboundEvent) (string, bool) {
+	if db == nil {
+		return "", false
+	}
+	var tag string
+	if connectorOf(ev) == "github" {
+		tag = strings.TrimSpace(ev.ThreadTS) // the LinkTag, e.g. gh-pr:owner/repo#550
+	} else if key := monitor.ThreadKey(ev.Channel, ev.ThreadTS); key != "" {
+		tag = monitor.SlackThreadTagPrefix + key
+	}
+	if tag == "" {
+		return "", false
+	}
+	tasks, err := flowdb.ListTasks(db, flowdb.TaskFilter{Tag: flowdb.NormalizeTag(tag)})
+	if err != nil || len(tasks) == 0 {
+		return "", false
+	}
+	for _, t := range tasks {
+		if t != nil && t.Status != "done" {
+			return t.Slug, true
+		}
+	}
+	return tasks[0].Slug, true
+}
+
+// applyExistingTaskMatch sets MatchedTask when a task already tracks this
+// thread, and rewrites a would-be duplicate make_task into a forward.
+func (c *Cascade) applyExistingTaskMatch(v *Verdict, ev monitor.InboundEvent) {
+	if slug, ok := matchExistingTask(c.DB, ev); ok {
+		v.MatchedTask = slug
+		if v.SuggestedAction == ActionMakeTask {
+			v.SuggestedAction = ActionForward
+		}
+	}
 }
 
 // ObserveBatch triages a batch of events with a SINGLE batched Stage 1

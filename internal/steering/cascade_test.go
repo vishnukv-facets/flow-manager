@@ -387,6 +387,130 @@ func TestCascadeTextCleanNilIsIdentity(t *testing.T) {
 	}
 }
 
+func TestCascadeMatchExistingTaskRewritesMakeTask(t *testing.T) {
+	c, db := cascadeFixture(t)
+	// Stub the matcher so we don't depend on real task seeding here — the
+	// matcher's own tag/connector logic is exercised separately.
+	old := matchExistingTask
+	matchExistingTask = func(_ *sql.DB, _ monitor.InboundEvent) (string, bool) { return "gh-pr-task", true }
+	t.Cleanup(func() { matchExistingTask = old })
+
+	stubClassifier(t, func(prompt string) (string, error) {
+		if strings.Contains(prompt, "MODE: stage1-relevance") {
+			return `[{"thread_key":"C1:90.1","relevant":true}]`, nil
+		}
+		return `{"suggested_action":"make_task","confidence":0.8,"summary":"q"}`, nil // stage2
+	})
+	stubDeepTriage(t, func(prompt string) (string, error) {
+		return `{"suggested_action":"make_task","confidence":0.9,"summary":"deep"}`, nil
+	})
+	if err := c.Observe(context.Background(), msg("C1", "90.1", "U_OTHER", "please")); err != nil {
+		t.Fatalf("Observe: %v", err)
+	}
+	items, _ := flowdb.ListFeedItems(db, "new")
+	if len(items) != 1 {
+		t.Fatalf("feed len = %d, want 1", len(items))
+	}
+	if items[0].MatchedTask != "gh-pr-task" {
+		t.Errorf("MatchedTask = %q, want gh-pr-task", items[0].MatchedTask)
+	}
+	if items[0].SuggestedAction != "forward" {
+		t.Errorf("SuggestedAction = %q, want forward (make_task rewritten to forward)", items[0].SuggestedAction)
+	}
+}
+
+func TestCascadeMatchExistingTaskBudgetExhaustedPath(t *testing.T) {
+	c, db := cascadeFixture(t)
+	c.budget = newBudgetGuard(0) // force the budget-exhausted (stage2) write path
+	old := matchExistingTask
+	matchExistingTask = func(_ *sql.DB, _ monitor.InboundEvent) (string, bool) { return "gh-pr-task", true }
+	t.Cleanup(func() { matchExistingTask = old })
+
+	stubClassifier(t, func(prompt string) (string, error) {
+		if strings.Contains(prompt, "MODE: stage1-relevance") {
+			return `[{"thread_key":"C1:91.1","relevant":true}]`, nil
+		}
+		return `{"suggested_action":"make_task","confidence":0.7,"summary":"stage2"}`, nil
+	})
+	if err := c.Observe(context.Background(), msg("C1", "91.1", "U_OTHER", "please")); err != nil {
+		t.Fatalf("Observe: %v", err)
+	}
+	items, _ := flowdb.ListFeedItems(db, "new")
+	if len(items) != 1 {
+		t.Fatalf("feed len = %d, want 1", len(items))
+	}
+	if items[0].MatchedTask != "gh-pr-task" || items[0].SuggestedAction != "forward" {
+		t.Errorf("budget-exhausted path: item = %+v, want MatchedTask=gh-pr-task action=forward", items[0])
+	}
+}
+
+func TestCascadeNoExistingTaskLeavesActionUnchanged(t *testing.T) {
+	c, db := cascadeFixture(t)
+	old := matchExistingTask
+	matchExistingTask = func(_ *sql.DB, _ monitor.InboundEvent) (string, bool) { return "", false }
+	t.Cleanup(func() { matchExistingTask = old })
+
+	stubClassifier(t, func(prompt string) (string, error) {
+		if strings.Contains(prompt, "MODE: stage1-relevance") {
+			return `[{"thread_key":"C1:92.1","relevant":true}]`, nil
+		}
+		return `{"suggested_action":"make_task","confidence":0.8,"summary":"q"}`, nil
+	})
+	stubDeepTriage(t, func(prompt string) (string, error) {
+		return `{"suggested_action":"make_task","confidence":0.9,"summary":"deep"}`, nil
+	})
+	if err := c.Observe(context.Background(), msg("C1", "92.1", "U_OTHER", "please")); err != nil {
+		t.Fatalf("Observe: %v", err)
+	}
+	items, _ := flowdb.ListFeedItems(db, "new")
+	if len(items) != 1 {
+		t.Fatalf("feed len = %d, want 1", len(items))
+	}
+	if items[0].MatchedTask != "" {
+		t.Errorf("MatchedTask = %q, want empty (no match)", items[0].MatchedTask)
+	}
+	if items[0].SuggestedAction != "make_task" {
+		t.Errorf("SuggestedAction = %q, want make_task (unchanged)", items[0].SuggestedAction)
+	}
+}
+
+func TestMatchExistingTaskByTag(t *testing.T) {
+	_, db := cascadeFixture(t)
+	now := time.Now().UTC().Format(time.RFC3339)
+	// A live task tracking a GitHub PR via the gh-pr link tag.
+	if _, err := db.Exec(`INSERT INTO tasks (slug,name,status,kind,priority,work_dir,session_provider,created_at,updated_at) VALUES ('gh-pr-550','PR 550','backlog','regular','high','/tmp','claude',?,?)`, now, now); err != nil {
+		t.Fatalf("seed task: %v", err)
+	}
+	if err := flowdb.AddTaskTag(db, "gh-pr-550", "gh-pr:o/r#550"); err != nil {
+		t.Fatalf("tag task: %v", err)
+	}
+	// GitHub event: the LinkTag is stashed in ThreadTS.
+	ghEv := monitor.InboundEvent{
+		Kind: "pr_comment", ChannelType: "github", Channel: "o/r",
+		ThreadTS: "gh-pr:o/r#550", UserID: "reviewer",
+	}
+	if slug, ok := matchExistingTask(db, ghEv); !ok || slug != "gh-pr-550" {
+		t.Errorf("matchExistingTask(github) = (%q,%v), want (gh-pr-550,true)", slug, ok)
+	}
+
+	// A Slack thread task.
+	if _, err := db.Exec(`INSERT INTO tasks (slug,name,status,kind,priority,work_dir,session_provider,created_at,updated_at) VALUES ('slack-thread-task','Slack thread','backlog','regular','high','/tmp','claude',?,?)`, now, now); err != nil {
+		t.Fatalf("seed slack task: %v", err)
+	}
+	if err := flowdb.AddTaskTag(db, "slack-thread-task", monitor.SlackThreadTagPrefix+monitor.ThreadKey("C9", "9.1")); err != nil {
+		t.Fatalf("tag slack task: %v", err)
+	}
+	slackEv := monitor.InboundEvent{Kind: "message", ChannelType: "channel", Channel: "C9", ThreadTS: "9.1", UserID: "U_X"}
+	if slug, ok := matchExistingTask(db, slackEv); !ok || slug != "slack-thread-task" {
+		t.Errorf("matchExistingTask(slack) = (%q,%v), want (slack-thread-task,true)", slug, ok)
+	}
+
+	// No tracking task → (",false).
+	if slug, ok := matchExistingTask(db, monitor.InboundEvent{Kind: "message", ChannelType: "channel", Channel: "C_NONE", ThreadTS: "1.1"}); ok || slug != "" {
+		t.Errorf("matchExistingTask(untracked) = (%q,%v), want (\"\",false)", slug, ok)
+	}
+}
+
 func TestCascadeConfigFnOverridesStatic(t *testing.T) {
 	c, _ := cascadeFixture(t) // static Config watches C1 (see cascadeFixture)
 	// ConfigFn watches a DIFFERENT channel — proves Observe consults ConfigFn,
