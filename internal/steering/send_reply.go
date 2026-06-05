@@ -89,8 +89,7 @@ func sendReplyPrompt(item flowdb.FeedItem, text, instructions string) string {
 
 You are the send step of an operator's attention router. ` + draftClause + `
 
-1. Post the reply to the source thread using your MCP tools. ` + contextHintFor(item.Source) + `
-   Post it THREADED to the source message (Slack: reply in-thread on thread_ts; GitHub: a comment on the PR/issue).
+1. Post the reply to the source thread. ` + sendHintFor(item.Source) + `
 2. Refer to people and channels by name; never paste raw platform IDs.
 
 Source: ` + item.Source + ` thread ` + item.ThreadKey + `
@@ -98,11 +97,20 @@ Source: ` + item.Source + ` thread ` + item.ThreadKey + `
 Draft reply:
 ` + strings.TrimSpace(text) + `
 
-Posting REQUIRES your connector MCP tool (Slack/GitHub). If that tool is not
-available to you, do NOT pretend — you cannot post.
-
 When you have actually posted, reply with a single line: POSTED
-If you could not post for ANY reason (no connector MCP tool, an API error, etc.),
-reply with a single line: FAILED: <short reason>
-Output nothing else.`
+If you could not post for ANY reason (the required tool isn't available, an API
+error, etc.), reply with a single line: FAILED: <short reason>. Do NOT pretend
+you posted. Output nothing else.`
+}
+
+// sendHintFor gives the connector-specific POSTING instruction. Slack posts go
+// through the Slack MCP; GitHub posts go through the `gh` CLI (always available
+// via Bash under bypass — no GitHub MCP needed).
+func sendHintFor(source string) string {
+	switch source {
+	case "github":
+		return "Use the `gh` CLI (NOT a GitHub MCP). The thread_key encodes owner/repo plus gh-pr/gh-issue#<number>; post a comment with `gh pr comment <number> --repo <owner/repo> --body \"…\"` (or `gh issue comment` for an issue)."
+	default:
+		return "Use the Slack MCP tools (e.g. mcp__claude_ai_Slack__slack_send_message) to post threaded in-thread on the thread_ts. The thread_key is \"<channel>:<thread_ts>\"."
+	}
 }
