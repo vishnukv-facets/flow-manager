@@ -25,6 +25,11 @@ import (
 type Cascade struct {
 	DB     *sql.DB
 	Config WatchConfig
+	// ConfigFn, when set, is called per Observe to read the watch-config live
+	// (so Mission Control settings changes take effect without a restart). When
+	// nil, the static Config is used. NewCascade leaves it nil; serve wiring
+	// sets it to WatchConfigFromEnv.
+	ConfigFn func() WatchConfig
 
 	now    func() time.Time
 	newID  func() string
@@ -51,7 +56,11 @@ func NewCascade(db *sql.DB, cfg WatchConfig) *Cascade {
 // this event's processing but are returned for logging; a dropped event (by
 // any stage) returns nil.
 func (c *Cascade) Observe(ctx context.Context, ev monitor.InboundEvent) error {
-	s0 := Stage0(ev, c.Config)
+	cfg := c.Config
+	if c.ConfigFn != nil {
+		cfg = c.ConfigFn()
+	}
+	s0 := Stage0(ev, cfg)
 	if !s0.Pass {
 		return nil
 	}

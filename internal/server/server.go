@@ -62,7 +62,9 @@ func New(cfg Config) *Server {
 		// Attach the steering cascade so untracked messages get triaged into the
 		// Attention feed (surface-only in P1). Stage 0 inside the cascade is the
 		// real scope gate, so handing it every untracked message is cheap.
-		dispatcher.Steerer = steering.NewCascade(cfg.DB, steering.WatchConfigFromEnv())
+		cascade := steering.NewCascade(cfg.DB, steering.WatchConfigFromEnv())
+		cascade.ConfigFn = steering.WatchConfigFromEnv // live re-read on settings changes
+		dispatcher.Steerer = cascade
 		slackListener := monitor.NewSlackListener(dispatcher)
 		slackListener.SetChangeNotifier(func(kind string) {
 			s.publishUIChange(kind)

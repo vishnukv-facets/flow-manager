@@ -130,3 +130,33 @@ func TestCascadeBudgetExhaustionSurfacesStage2(t *testing.T) {
 		t.Errorf("budget exhaustion must still surface the stage2 verdict, got %+v", items)
 	}
 }
+
+func TestCascadeConfigFnOverridesStatic(t *testing.T) {
+	c, _ := cascadeFixture(t) // static Config watches C1 (see cascadeFixture)
+	// ConfigFn watches a DIFFERENT channel — proves Observe consults ConfigFn,
+	// not the static Config captured at construction.
+	c.ConfigFn = func() WatchConfig {
+		return WatchConfig{WatchedChannels: map[string]bool{"C_LIVE": true}}
+	}
+	called := false
+	stubClassifier(t, func(prompt string) (string, error) {
+		called = true
+		return `[{"thread_key":"C_LIVE:1.1","relevant":false}]`, nil // stage1 drops, cheap
+	})
+	// Message in C_LIVE (only in ConfigFn's set, NOT the static C1 set).
+	if err := c.Observe(context.Background(), msg("C_LIVE", "1.1", "U_OTHER", "hi")); err != nil {
+		t.Fatalf("Observe: %v", err)
+	}
+	if !called {
+		t.Error("Stage 0 should have passed using ConfigFn's watched channels (classifier never ran)")
+	}
+
+	// And a message in the STATIC-only channel C1 must now drop (ConfigFn wins).
+	called = false
+	if err := c.Observe(context.Background(), msg("C1", "2.1", "U_OTHER", "hi")); err != nil {
+		t.Fatalf("Observe C1: %v", err)
+	}
+	if called {
+		t.Error("C1 is not in ConfigFn's set, so Stage 0 should drop it (classifier must not run)")
+	}
+}

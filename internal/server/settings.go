@@ -65,6 +65,10 @@ var settingsRegistry = []settingSpec{
 	{Key: "FLOW_GH_REPOS", Label: "Repo allowlist", Group: "GitHub", Type: settingString, Help: "owner/repo,owner/repo2 — leave empty to watch all repos visible to gh."},
 	{Key: "FLOW_GH_POLL_INTERVAL", Label: "Poll interval", Group: "GitHub", Type: settingString, Help: "Go duration, e.g. 60s or 2m."},
 	{Key: "FLOW_GH_AUTOOPEN", Label: "Auto-open on event", Group: "GitHub", Type: settingBool, Default: "true", Help: "Open a session automatically when a new GitHub item is detected."},
+	// Steering (attention router)
+	{Key: "FLOW_STEERING_WATCH_CHANNELS", Label: "Watched channels", Group: "Steering", Type: settingString, Help: "Comma-separated Slack channel IDs the attention router watches (in addition to DMs + @mentions)."},
+	{Key: "FLOW_STEERING_MUTED_CHANNELS", Label: "Muted channels", Group: "Steering", Type: settingString, Help: "Comma-separated Slack channel IDs to never surface."},
+	{Key: "FLOW_STEERING_MUTED_KEYWORDS", Label: "Muted keywords", Group: "Steering", Type: settingString, Help: "Comma-separated keywords; messages containing them are dropped before triage."},
 	// General
 	{Key: "FLOW_STALE_DAYS", Label: "Stale threshold (days)", Group: "General", Type: settingInt, Default: "3", Help: "In-progress sessions quiet longer than this are flagged stale."},
 	{Key: "FLOW_MISSION_QUOTE", Label: "Mission Control quote", Group: "General", Type: settingBool, Default: "true", Help: "Show the rotating anime quote beside the greeting on Mission Control."},
