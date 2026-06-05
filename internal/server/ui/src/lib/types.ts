@@ -336,6 +336,13 @@ export interface ActivityDay {
 export interface TokenDay {
   date: string
   tokens: number
+  task_count?: number
+  tasks?: TokenTask[]
+}
+
+export interface TokenTask {
+  name: string
+  tokens: number
 }
 
 export interface QuoteView {
@@ -560,6 +567,7 @@ export interface ActionRequest {
   mkdir?: boolean
   attention_action?: string
   reply_text?: string
+  reply_instructions?: string
 }
 
 export interface AttentionItem {

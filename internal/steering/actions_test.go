@@ -376,7 +376,7 @@ func TestInjectReplyToTask(t *testing.T) {
 		t.Fatalf("seed: %v", err)
 	}
 
-	if err := InjectReplyToTask(context.Background(), db, item, "hello there", "gh-task"); err != nil {
+	if err := InjectReplyToTask(context.Background(), db, item, "hello there", "gh-task", "make it warmer"); err != nil {
 		t.Fatalf("InjectReplyToTask: %v", err)
 	}
 	if len(*tells) != 1 || (*tells)[0].slug != "gh-task" {
@@ -384,6 +384,9 @@ func TestInjectReplyToTask(t *testing.T) {
 	}
 	if !strings.Contains((*tells)[0].msg, "hello there") {
 		t.Errorf("inject message should embed the reply text: %q", (*tells)[0].msg)
+	}
+	if !strings.Contains((*tells)[0].msg, "make it warmer") {
+		t.Errorf("inject message should embed operator instructions: %q", (*tells)[0].msg)
 	}
 	got, err := flowdb.GetFeedItem(db, "r1")
 	if err != nil {

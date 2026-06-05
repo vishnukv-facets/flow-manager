@@ -291,9 +291,11 @@ function FeedDetail({ item, onClose }: { item: AttentionItem | null; onClose: ()
   // item changes (keyed by id), so reopening a different card doesn't keep the
   // previous edit. `item.draft ?? ''` covers items with no draft.
   const [replyText, setReplyText] = useState('')
+  const [replyInstructions, setReplyInstructions] = useState('')
   const itemId = item?.id ?? null
   useEffect(() => {
     setReplyText(item?.draft ?? '')
+    setReplyInstructions('')
   }, [itemId, item?.draft])
   // Keep the modal mounted (empty) while closed so content doesn't blank mid-anim.
   if (!item) return <Modal open={false} onClose={onClose} title="" children={null} />
@@ -301,7 +303,13 @@ function FeedDetail({ item, onClose }: { item: AttentionItem | null; onClose: ()
   const sendReply = () => {
     if (action.isPending || !replyText.trim()) return
     action.mutate(
-      { kind: 'attention-act', target: item.id, attention_action: 'send-reply', reply_text: replyText },
+      {
+        kind: 'attention-act',
+        target: item.id,
+        attention_action: 'send-reply',
+        reply_text: replyText,
+        reply_instructions: replyInstructions.trim() || undefined,
+      },
       { onSuccess: onClose },
     )
   }
@@ -348,14 +356,28 @@ function FeedDetail({ item, onClose }: { item: AttentionItem | null; onClose: ()
                 onChange={(e) => setReplyText(e.target.value)}
                 style={{ marginTop: 5 }}
               />
-              <div className="row gap" style={{ marginTop: 8 }}>
+              <div className="eyebrow" style={{ marginTop: 10 }}>instructions for the agent (optional)</div>
+              <textarea
+                className="input"
+                rows={2}
+                value={replyInstructions}
+                placeholder="e.g. make it shorter · keep it formal · also ask when the data was last refreshed"
+                onChange={(e) => setReplyInstructions(e.target.value)}
+                style={{ marginTop: 5 }}
+              />
+              <div className="row gap between" style={{ marginTop: 8 }}>
+                <span className="config-help" style={{ margin: 0 }}>
+                  {replyInstructions.trim()
+                    ? 'The agent will revise the draft per your instructions, then post.'
+                    : 'Sends the draft as-is. Add instructions above to have the agent revise first.'}
+                </span>
                 <button
                   type="button"
                   className="btn primary sm"
                   disabled={action.isPending || !replyText.trim()}
                   onClick={sendReply}
                 >
-                  <Send size={13} /> Send reply
+                  <Send size={13} /> {replyInstructions.trim() ? 'Revise & send' : 'Send reply'}
                 </button>
               </div>
             </div>

@@ -221,10 +221,13 @@ func (s *Server) attentionAct(req actionRequest) (actionResponse, int) {
 		if text == "" {
 			return actionResponse{OK: false, Message: "send-reply needs a draft or reply_text"}, http.StatusBadRequest
 		}
+		// Optional extra guidance: when present, the agent revises the draft per
+		// these instructions before posting; empty → post the draft as-is.
+		instructions := strings.TrimSpace(req.ReplyInstructions)
 		if target := strings.TrimSpace(item.MatchedTask); target != "" {
 			// A real flow task already owns this thread — hand it the reply (via
 			// its inbox) and resume its session so it posts. No new task.
-			if err := steering.InjectReplyToTask(context.Background(), s.cfg.DB, item, text, target); err != nil {
+			if err := steering.InjectReplyToTask(context.Background(), s.cfg.DB, item, text, target, instructions); err != nil {
 				return actionResponse{OK: false, Message: err.Error()}, http.StatusInternalServerError
 			}
 			s.startSessionAsync(target)
@@ -236,15 +239,15 @@ func (s *Server) attentionAct(req actionRequest) (actionResponse, int) {
 		// means no auto-mode permission gate to trip. Runs in the background since
 		// claude -p can outlast the UI's RPC timeout; the card flips to 'acted'
 		// once the agent confirms it posted.
-		go func(it flowdb.FeedItem, reply string) {
+		go func(it flowdb.FeedItem, reply, ins string) {
 			bctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 			defer cancel()
-			if err := steering.SendReplyViaAgent(bctx, s.cfg.DB, it, reply); err != nil {
+			if err := steering.SendReplyViaAgent(bctx, s.cfg.DB, it, reply, ins); err != nil {
 				fmt.Fprintf(os.Stderr, "attention: send-reply via hidden agent: %v\n", err)
 				return
 			}
 			s.publishUIChange("attention")
-		}(item, text)
+		}(item, text, instructions)
 		return actionResponse{OK: true, Message: "posting your reply via the triage agent — no task created"}, http.StatusOK
 	default:
 		return actionResponse{OK: false, Message: "unknown attention action: " + req.AttentionAction}, http.StatusBadRequest

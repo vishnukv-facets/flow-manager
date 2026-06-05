@@ -32,11 +32,11 @@ var sendReplyRunner = func(ctx context.Context, prompt string) (string, error) {
 // it, rather than creating a new task that then trips the auto-mode permission
 // gate. Returns an error (leaving the card unresolved so it can be retried) when
 // the agent reports it could not post.
-func SendReplyViaAgent(ctx context.Context, db *sql.DB, item flowdb.FeedItem, text string) error {
+func SendReplyViaAgent(ctx context.Context, db *sql.DB, item flowdb.FeedItem, text, instructions string) error {
 	if strings.TrimSpace(text) == "" {
 		return fmt.Errorf("steering: send-reply requires non-empty text")
 	}
-	out, err := sendReplyRunner(ctx, sendReplyPrompt(item, text))
+	out, err := sendReplyRunner(ctx, sendReplyPrompt(item, text, instructions))
 	if err != nil {
 		return err
 	}
@@ -47,12 +47,17 @@ func SendReplyViaAgent(ctx context.Context, db *sql.DB, item flowdb.FeedItem, te
 	return flowdb.SetFeedItemActed(db, item.ID, "", nowRFC3339())
 }
 
-func sendReplyPrompt(item flowdb.FeedItem, text string) string {
+func sendReplyPrompt(item flowdb.FeedItem, text, instructions string) string {
+	// With no extra instructions: post the approved draft as-is (minor wording
+	// only). With instructions: the draft is a starting point — revise it per the
+	// operator's instructions, then post.
+	draftClause := "The operator has ALREADY APPROVED the reply below and asked you to POST it NOW. Do not ask for confirmation and do not redraft beyond minor wording — just post it."
+	if ins := strings.TrimSpace(instructions); ins != "" {
+		draftClause = "The operator approved sending a reply on this thread and gave you specific instructions. Start from the draft below, APPLY the operator's instructions to revise it, then POST the result. Do not ask for confirmation.\n\nOperator instructions:\n" + ins
+	}
 	return `MODE: send-reply
 
-You are the send step of an operator's attention router. The operator has ALREADY
-APPROVED the reply below and asked you to POST it NOW. Do not ask for confirmation
-and do not redraft beyond minor wording — just post it.
+You are the send step of an operator's attention router. ` + draftClause + `
 
 1. Post the reply to the source thread using your MCP tools. ` + contextHintFor(item.Source) + `
    Post it THREADED to the source message (Slack: reply in-thread on thread_ts; GitHub: a comment on the PR/issue).
@@ -60,7 +65,7 @@ and do not redraft beyond minor wording — just post it.
 
 Source: ` + item.Source + ` thread ` + item.ThreadKey + `
 
-Reply to post:
+Draft reply:
 ` + strings.TrimSpace(text) + `
 
 After posting, reply with a single line: "posted". If you cannot post (the

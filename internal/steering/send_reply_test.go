@@ -32,11 +32,14 @@ func TestSendReplyViaAgent(t *testing.T) {
 		t.Fatalf("seed: %v", err)
 	}
 
-	if err := SendReplyViaAgent(context.Background(), db, item, "thanks, on it"); err != nil {
+	if err := SendReplyViaAgent(context.Background(), db, item, "thanks, on it", "keep it to one sentence"); err != nil {
 		t.Fatalf("SendReplyViaAgent: %v", err)
 	}
 	if !strings.Contains(gotPrompt, "thanks, on it") || !strings.Contains(gotPrompt, "C_eng:1700000000.000100") {
 		t.Errorf("prompt missing draft/thread:\n%s", gotPrompt)
+	}
+	if !strings.Contains(gotPrompt, "keep it to one sentence") {
+		t.Errorf("prompt should carry operator instructions:\n%s", gotPrompt)
 	}
 	// No task spawned; feed row acted with empty linked_task.
 	got, _ := flowdb.GetFeedItem(db, "sr1")
@@ -65,7 +68,7 @@ func TestSendReplyViaAgentErrorLeavesCard(t *testing.T) {
 	if _, err := flowdb.UpsertFeedItem(db, item); err != nil {
 		t.Fatalf("seed: %v", err)
 	}
-	if err := SendReplyViaAgent(context.Background(), db, item, "hi"); err == nil {
+	if err := SendReplyViaAgent(context.Background(), db, item, "hi", ""); err == nil {
 		t.Fatal("expected an error when the agent reports it could not post")
 	}
 	// Card must remain 'new' so the operator can retry.

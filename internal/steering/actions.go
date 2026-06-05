@@ -142,8 +142,8 @@ func DismissFeed(db *sql.DB, id string) error {
 // InjectReplyToTask injects a "send this reply" instruction into an existing
 // task's inbox/session (the agent posts it via its MCP tools) and marks the
 // feed item acted + linked to that task. The agent sends — never the server.
-func InjectReplyToTask(ctx context.Context, db *sql.DB, item flowdb.FeedItem, text, targetSlug string) error {
-	if err := taskTeller(ctx, targetSlug, feedReplyInstruction(item, text)); err != nil {
+func InjectReplyToTask(ctx context.Context, db *sql.DB, item flowdb.FeedItem, text, targetSlug, instructions string) error {
+	if err := taskTeller(ctx, targetSlug, feedReplyInstruction(item, text, instructions)); err != nil {
 		return err
 	}
 	return flowdb.SetFeedItemActed(db, item.ID, targetSlug, nowRFC3339())
@@ -160,7 +160,7 @@ func MakeReplyTaskFromFeed(ctx context.Context, db *sql.DB, item flowdb.FeedItem
 		// first) — inject the reply into it instead of spawning a duplicate, which
 		// would fail on the UNIQUE tasks.slug constraint. That agent already has
 		// the thread context and posts via its own MCP tools.
-		if err := taskTeller(ctx, slug, feedReplyInstruction(item, text)); err != nil {
+		if err := taskTeller(ctx, slug, feedReplyInstruction(item, text, "")); err != nil {
 			return "", err
 		}
 		if err := flowdb.SetFeedItemActed(db, item.ID, slug, nowRFC3339()); err != nil {
@@ -179,10 +179,18 @@ func MakeReplyTaskFromFeed(ctx context.Context, db *sql.DB, item flowdb.FeedItem
 }
 
 // feedReplyInstruction is the inbox message handed to an existing session.
-func feedReplyInstruction(item flowdb.FeedItem, text string) string {
-	return fmt.Sprintf(
-		"The attention router drafted this reply for you to SEND now. Post it to the source — %s thread %s — using your MCP tools (Slack/GitHub), threaded appropriately. Keep the intent; tighten wording only if needed. Do not ask for confirmation; the operator already approved sending.\n\nReply to send:\n%s",
+// instructions is optional extra operator guidance; when present the agent
+// revises the draft per it before posting (rather than posting verbatim).
+func feedReplyInstruction(item flowdb.FeedItem, text, instructions string) string {
+	base := fmt.Sprintf(
+		"The attention router drafted this reply for you to SEND now. Post it to the source — %s thread %s — using your MCP tools (Slack/GitHub), threaded appropriately. Do not ask for confirmation; the operator already approved sending.\n\nDraft reply:\n%s",
 		item.Source, item.ThreadKey, strings.TrimSpace(text))
+	if ins := strings.TrimSpace(instructions); ins != "" {
+		base += "\n\nThe operator also gave these instructions — apply them to the reply before posting:\n" + ins
+	} else {
+		base += "\n\nKeep the intent; tighten wording only if needed."
+	}
+	return base
 }
 
 // feedReplyTaskBrief is the brief for a freshly-spawned reply task.

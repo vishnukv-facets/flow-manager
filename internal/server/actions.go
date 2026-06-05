@@ -52,6 +52,12 @@ type actionRequest struct {
 	// action. Empty falls back to the feed item's stored Draft.
 	ReplyText string `json:"reply_text,omitempty"`
 
+	// ReplyInstructions is optional extra guidance for the sending agent on the
+	// send-reply action ("make it shorter", "also ask about the timeline"). When
+	// present, the agent revises the draft per these instructions before posting;
+	// empty means post the draft as-is.
+	ReplyInstructions string `json:"reply_instructions,omitempty"`
+
 	// Settings carries key→value pairs for the update-settings action.
 	Settings map[string]string `json:"settings,omitempty"`
 
