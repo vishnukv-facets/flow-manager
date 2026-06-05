@@ -190,6 +190,8 @@ func (s *Server) attentionAct(req actionRequest) (actionResponse, int) {
 			return actionResponse{OK: false, Message: err.Error()}, http.StatusInternalServerError
 		}
 		return actionResponse{OK: true, Message: "dismissed " + id}, http.StatusOK
+	case "mute-channel", "mute-sender", "mute-thread":
+		return s.attentionMute(req.AttentionAction, item)
 	case "make-task", "make_task":
 		if err := steering.ApplyAction(context.Background(), s.cfg.DB, item, steering.ActionMakeTask, steering.DefaultAutonomy(), true); err != nil {
 			return actionResponse{OK: false, Message: err.Error()}, http.StatusInternalServerError
@@ -242,6 +244,33 @@ func (s *Server) attentionAct(req actionRequest) (actionResponse, int) {
 	default:
 		return actionResponse{OK: false, Message: "unknown attention action: " + req.AttentionAction}, http.StatusBadRequest
 	}
+}
+
+// attentionMute records a permanent suppression from a feed card and sweeps any
+// open cards it matches. The scope is derived from the verb: mute-channel uses
+// the card's channel, mute-sender its author, mute-thread its thread key. The
+// cascade re-reads steering_mutes per event (ConfigFn), so future matching
+// events drop at Stage 0 with no restart.
+func (s *Server) attentionMute(verb string, item flowdb.FeedItem) (actionResponse, int) {
+	var scope, value, what string
+	switch strings.ToLower(strings.TrimSpace(verb)) {
+	case "mute-channel":
+		scope, value, what = flowdb.MuteScopeChannel, item.Channel, "channel"
+	case "mute-sender":
+		scope, value, what = flowdb.MuteScopeAuthor, item.Author, "sender"
+	case "mute-thread":
+		scope, value, what = flowdb.MuteScopeThread, item.ThreadKey, "thread"
+	default:
+		return actionResponse{OK: false, Message: "unknown mute verb: " + verb}, http.StatusBadRequest
+	}
+	if strings.TrimSpace(value) == "" {
+		return actionResponse{OK: false, Message: "this card has no " + what + " to mute"}, http.StatusBadRequest
+	}
+	swept, err := steering.MuteAndSweep(s.cfg.DB, scope, value)
+	if err != nil {
+		return actionResponse{OK: false, Message: err.Error()}, http.StatusInternalServerError
+	}
+	return actionResponse{OK: true, Message: fmt.Sprintf("muted %s — %d card(s) cleared; future ones won't surface", what, swept)}, http.StatusOK
 }
 
 // handleAttentionTrace serves GET /api/attention/trace?since=&disposition=&limit=

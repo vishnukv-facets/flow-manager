@@ -68,8 +68,10 @@ func New(cfg Config) *Server {
 		// Attention feed (surface-only in P1). Stage 0 inside the cascade is the
 		// real scope gate, so handing it every untracked message is cheap.
 		cascade := steering.NewCascade(cfg.DB, steering.WatchConfigFromEnv())
-		cascade.ConfigFn = steering.WatchConfigFromEnv // live re-read on settings changes
-		cascade.AutonomyFn = steering.AutonomyFromEnv  // live per-action auto-act policy
+		// Live re-read on settings changes, overlaying the operator's durable
+		// "perma drop" mutes (channel/sender/thread) from steering_mutes.
+		cascade.ConfigFn = steering.WatchConfigFnWithMutes(cfg.DB)
+		cascade.AutonomyFn = steering.AutonomyFromEnv // live per-action auto-act policy
 		// De-ID feed text at ingest: clean Slack <@U…> mention markup to names
 		// BEFORE it reaches the classifier/LLM and the trace, so summaries and
 		// drafts never parrot raw IDs. nil resolver → no cleaner (identity).

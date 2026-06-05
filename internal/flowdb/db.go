@@ -201,6 +201,17 @@ CREATE TABLE IF NOT EXISTS steering_trace (
     url               TEXT
 );
 
+-- Operator-set permanent suppressions for the attention router. scope is
+-- 'channel' (Slack channel id / owner/repo), 'author' (Slack user id / GitHub
+-- login), or 'thread' (a thread key). Stage 0 drops any event matching a row
+-- here, so "perma drop" from a feed card takes effect on the next event.
+CREATE TABLE IF NOT EXISTS steering_mutes (
+    scope      TEXT NOT NULL,
+    value      TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    PRIMARY KEY (scope, value)
+);
+
 CREATE TABLE IF NOT EXISTS steering_watermark (
     channel    TEXT PRIMARY KEY,
     last_ts    TEXT NOT NULL,

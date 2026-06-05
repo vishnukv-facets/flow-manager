@@ -133,3 +133,26 @@ func TestStage0GitHubMutedRepo(t *testing.T) {
 		t.Errorf("DropReason = %q, want %q", got.DropReason, "muted repo")
 	}
 }
+
+func TestStage0MutedSenderAndThread(t *testing.T) {
+	// Muted sender → dropped even in a watched channel / DM.
+	cfg := baseCfg()
+	cfg.MutedAuthors = map[string]bool{"U_BOT": true}
+	cfg.MutedThreads = map[string]bool{"D9:9.9": true}
+
+	sender := monitor.InboundEvent{Kind: "message", ChannelType: "im", Channel: "D2", TS: "5.1", ThreadTS: "5.1", UserID: "U_BOT", Text: "noise"}
+	if got := Stage0(sender, cfg); got.Pass || got.DropReason != "muted sender" {
+		t.Errorf("muted sender = %+v, want dropped 'muted sender'", got)
+	}
+
+	thread := monitor.InboundEvent{Kind: "message", ChannelType: "im", Channel: "D9", TS: "9.10", ThreadTS: "9.9", UserID: "U_OTHER", Text: "anything"}
+	if got := Stage0(thread, cfg); got.Pass || got.DropReason != "muted thread" {
+		t.Errorf("muted thread = %+v, want dropped 'muted thread'", got)
+	}
+
+	// A non-muted sender in a non-muted thread still passes.
+	ok := monitor.InboundEvent{Kind: "message", ChannelType: "im", Channel: "D3", TS: "7.1", ThreadTS: "7.1", UserID: "U_HUMAN", Text: "real question"}
+	if got := Stage0(ok, cfg); !got.Pass {
+		t.Errorf("unmuted event should pass, got %+v", got)
+	}
+}

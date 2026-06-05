@@ -1,6 +1,6 @@
 import { useEffect, useState, type ReactNode } from 'react'
 import { useLocation } from 'wouter'
-import { AlertTriangle, ArrowRight, AtSign, Check, ExternalLink, Filter, Github, Hash, Inbox, ListPlus, Lock, MessageSquare, Play, Send, Share2 } from 'lucide-react'
+import { AlertTriangle, ArrowRight, AtSign, BellOff, Check, ChevronDown, ExternalLink, Filter, Github, Hash, Inbox, ListPlus, Lock, MessageSquare, Play, Send, Share2 } from 'lucide-react'
 import { useAction, useAttention, useAttentionDecision, useAttentionTrace } from '../lib/query'
 import { useDocumentTitle } from '../lib/useDocumentTitle'
 import { EmptyState, ErrorNote, Loading, SourceIcon } from '../components/ui'
@@ -201,6 +201,7 @@ function AttentionCard({
           <button type="button" className="btn ghost sm" disabled={disabled} onClick={() => onAct(item, 'dismiss')}>
             <Check size={13} /> Dismiss
           </button>
+          <MuteMenu item={item} disabled={disabled} onAct={onAct} />
         </div>
       ) : (
         <div className="att-resolved row gap faint mono" onClick={stop}>
@@ -215,6 +216,64 @@ function AttentionCard({
           ) : null}
         </div>
       )}
+    </div>
+  )
+}
+
+// MuteMenu is the "perma drop" control: a small dropdown that permanently
+// suppresses future messages by channel, sender, or just this thread. The mute
+// is recorded server-side (steering_mutes) and Stage 0 drops matching events on
+// the next message — and any open cards matching it are cleared immediately.
+function MuteMenu({
+  item,
+  disabled,
+  onAct,
+  align = 'right',
+}: {
+  item: AttentionItem
+  disabled?: boolean
+  onAct: (item: AttentionItem, verb: string) => void
+  align?: 'left' | 'right'
+}) {
+  const [open, setOpen] = useState(false)
+  const choose = (verb: string) => {
+    setOpen(false)
+    onAct(item, verb)
+  }
+  const chanLabel = item.channel_name || 'this channel'
+  const senderLabel = item.author_name || 'this sender'
+  return (
+    <div className={`mute-menu ${align}`}>
+      <button
+        type="button"
+        className="btn ghost sm"
+        disabled={disabled}
+        aria-haspopup="menu"
+        aria-expanded={open}
+        onClick={() => setOpen((o) => !o)}
+      >
+        <BellOff size={13} /> Mute <ChevronDown size={11} />
+      </button>
+      {open ? (
+        <>
+          <div className="mute-backdrop" onClick={() => setOpen(false)} />
+          <div className="mute-pop" role="menu">
+            {item.channel ? (
+              <button type="button" role="menuitem" className="mute-item" onClick={() => choose('mute-channel')}>
+                <Hash size={12} className="faint" /> Mute channel <span className="clip">{chanLabel}</span>
+              </button>
+            ) : null}
+            {item.author ? (
+              <button type="button" role="menuitem" className="mute-item" onClick={() => choose('mute-sender')}>
+                <AtSign size={12} className="faint" /> Mute sender <span className="clip">{senderLabel}</span>
+              </button>
+            ) : null}
+            <button type="button" role="menuitem" className="mute-item" onClick={() => choose('mute-thread')}>
+              <BellOff size={12} className="faint" /> Never show this thread
+            </button>
+          </div>
+        </>
+      ) : null}
     </div>
   )
 }
@@ -243,6 +302,14 @@ function FeedDetail({ item, onClose }: { item: AttentionItem | null; onClose: ()
     if (action.isPending || !replyText.trim()) return
     action.mutate(
       { kind: 'attention-act', target: item.id, attention_action: 'send-reply', reply_text: replyText },
+      { onSuccess: onClose },
+    )
+  }
+
+  const muteAct = (_it: AttentionItem, verb: string) => {
+    if (action.isPending) return
+    action.mutate(
+      { kind: 'attention-act', target: item.id, attention_action: verb },
       { onSuccess: onClose },
     )
   }
@@ -311,6 +378,16 @@ function FeedDetail({ item, onClose }: { item: AttentionItem | null; onClose: ()
                 <ExternalLink size={13} /> {linkLabel}
               </a>
             ) : null}
+          </div>
+        </div>
+
+        <div className="td-section">
+          <div className="eyebrow">suppress</div>
+          <div className="row gap between" style={{ marginTop: 5 }}>
+            <span className="config-help" style={{ margin: 0 }}>
+              Permanently drop messages like this — by channel, sender, or just this thread.
+            </span>
+            <MuteMenu item={item} disabled={action.isPending} onAct={muteAct} align="right" />
           </div>
         </div>
 

@@ -1,9 +1,11 @@
 package steering
 
 import (
+	"database/sql"
 	"os"
 	"strings"
 
+	"flow/internal/flowdb"
 	"flow/internal/monitor"
 )
 
@@ -25,6 +27,35 @@ func WatchConfigFromEnv() WatchConfig {
 		// standdown source (FLOW_GH_SELF_LOGINS) so the GitHub connector drops
 		// the operator's own events. Empty is fine (→ no self-drop).
 		GitHubIdentity: monitor.GitHubSelfLogins(),
+	}
+}
+
+// WatchConfigFnWithMutes returns a ConfigFn that overlays the operator's durable
+// "perma drop" suppressions (steering_mutes) on top of the env-derived config,
+// re-read on every event so a mute set from a feed card takes effect on the next
+// message with no restart. DB-sourced muted channels merge with the env ones;
+// muted authors/threads come only from the table. A nil db falls back to env.
+func WatchConfigFnWithMutes(db *sql.DB) func() WatchConfig {
+	return func() WatchConfig {
+		cfg := WatchConfigFromEnv()
+		if db == nil {
+			return cfg
+		}
+		mutes, err := flowdb.ListSteeringMutes(db)
+		if err != nil {
+			return cfg // on error, fall back to env-only rather than failing the cascade
+		}
+		if len(mutes.Channels) > 0 {
+			if cfg.MutedChannels == nil {
+				cfg.MutedChannels = map[string]bool{}
+			}
+			for ch := range mutes.Channels {
+				cfg.MutedChannels[ch] = true
+			}
+		}
+		cfg.MutedAuthors = mutes.Authors
+		cfg.MutedThreads = mutes.Threads
+		return cfg
 	}
 }
 

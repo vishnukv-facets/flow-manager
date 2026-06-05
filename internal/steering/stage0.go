@@ -15,9 +15,14 @@ type WatchConfig struct {
 	WatchedChannels map[string]bool
 	MutedChannels   map[string]bool
 	MutedKeywords   []string
-	Identity        OperatorIdentity
-	MentionUserIDs  []string
-	GitHubIdentity  []string
+	// MutedAuthors / MutedThreads are operator "perma drop" suppressions set from
+	// a feed card (stored in steering_mutes). MutedAuthors keys are Slack user ids
+	// / GitHub logins; MutedThreads keys are thread keys.
+	MutedAuthors   map[string]bool
+	MutedThreads   map[string]bool
+	Identity       OperatorIdentity
+	MentionUserIDs []string
+	GitHubIdentity []string
 }
 
 // Stage0Result is the outcome of the free deterministic filter.
@@ -56,12 +61,18 @@ func stage0GitHub(ev monitor.InboundEvent, cfg WatchConfig) Stage0Result {
 	if cfg.MutedChannels[ev.Channel] { // ev.Channel is owner/repo
 		return Stage0Result{DropReason: "muted repo"}
 	}
+	if cfg.MutedAuthors[ev.UserID] {
+		return Stage0Result{DropReason: "muted sender"}
+	}
 	if hasMutedKeyword(ev.Text, cfg.MutedKeywords) {
 		return Stage0Result{DropReason: "muted keyword"}
 	}
 	key := monitor.ThreadKey(ev.Channel, ev.ThreadTS)
 	if key == "" {
 		return Stage0Result{DropReason: "no thread key"}
+	}
+	if cfg.MutedThreads[key] {
+		return Stage0Result{DropReason: "muted thread"}
 	}
 	return Stage0Result{Pass: true, ThreadKey: key}
 }
@@ -84,6 +95,9 @@ func stage0Slack(ev monitor.InboundEvent, cfg WatchConfig) Stage0Result {
 	if cfg.MutedChannels[ev.Channel] {
 		return Stage0Result{DropReason: "muted channel"}
 	}
+	if cfg.MutedAuthors[ev.UserID] {
+		return Stage0Result{DropReason: "muted sender"}
+	}
 	if hasMutedKeyword(ev.Text, cfg.MutedKeywords) {
 		return Stage0Result{DropReason: "muted keyword"}
 	}
@@ -93,6 +107,9 @@ func stage0Slack(ev monitor.InboundEvent, cfg WatchConfig) Stage0Result {
 	key := monitor.ThreadKey(ev.Channel, ev.ThreadTS)
 	if key == "" {
 		return Stage0Result{DropReason: "no thread key"}
+	}
+	if cfg.MutedThreads[key] {
+		return Stage0Result{DropReason: "muted thread"}
 	}
 	return Stage0Result{Pass: true, ThreadKey: key}
 }
