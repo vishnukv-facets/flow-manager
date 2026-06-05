@@ -423,6 +423,12 @@ type AttentionItemView struct {
 	LinkedTask        string  `json:"linked_task,omitempty"`
 	CreatedAt         string  `json:"created_at"`
 	ActedAt           string  `json:"acted_at,omitempty"`
+	Channel           string  `json:"channel,omitempty"`
+	ChannelType       string  `json:"channel_type,omitempty"`
+	ChannelName       string  `json:"channel_name,omitempty"`
+	Author            string  `json:"author,omitempty"`
+	AuthorName        string  `json:"author_name,omitempty"`
+	Permalink         string  `json:"permalink,omitempty"`
 }
 
 type WorkdirView struct {

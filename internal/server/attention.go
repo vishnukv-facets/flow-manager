@@ -64,7 +64,7 @@ func (s *Server) attentionItemView(ctx context.Context, it flowdb.FeedItem) Atte
 		reason = s.nameResolver.CleanText(ctx, reason)
 		draft = s.nameResolver.CleanText(ctx, draft)
 	}
-	return AttentionItemView{
+	v := AttentionItemView{
 		ID: it.ID, Source: it.Source, ThreadKey: it.ThreadKey, Summary: summary,
 		SuggestedAction: it.SuggestedAction, MatchedTask: it.MatchedTask,
 		SuggestedProject: it.SuggestedProject, SuggestedPriority: it.SuggestedPriority,
@@ -72,6 +72,24 @@ func (s *Server) attentionItemView(ctx context.Context, it flowdb.FeedItem) Atte
 		Draft: draft, Reason: reason, Status: it.Status, LinkedTask: it.LinkedTask,
 		CreatedAt: it.CreatedAt, ActedAt: it.ActedAt,
 	}
+	v.Channel, v.ChannelType, v.Author = it.Channel, it.ChannelType, it.Author
+	if it.Source == "github" {
+		v.ChannelName = it.Channel // owner/repo, already human
+		v.AuthorName = it.Author   // login
+	} else if s.nameResolver != nil {
+		v.ChannelName = s.nameResolver.ChannelName(ctx, it.Channel)
+		v.AuthorName = s.nameResolver.UserName(ctx, it.Author)
+	}
+	// DMs have no channel name — label by the person instead.
+	if v.ChannelName == "" && (it.ChannelType == "im" || it.ChannelType == "mpim") {
+		if v.AuthorName != "" {
+			v.ChannelName = "DM · " + v.AuthorName
+		} else {
+			v.ChannelName = "Direct message"
+		}
+	}
+	v.Permalink = connectorPermalink(it.Source, it.TeamID, it.Channel, it.TS, it.URL)
+	return v
 }
 
 // attentionAct handles the attention-act action: make-task | forward | dismiss
@@ -197,14 +215,22 @@ func (s *Server) steeringTraceView(ctx context.Context, t flowdb.SteeringTrace) 
 	return v
 }
 
-// steeringPermalink builds a best-effort slack:// deep link to the traced
-// message (team + channel + ts). Empty when team/channel/ts aren't all known.
+// steeringPermalink builds a best-effort deep link to the traced message,
+// delegating to the connector-blind connectorPermalink.
 func steeringPermalink(t flowdb.SteeringTrace) string {
-	team := strings.TrimSpace(t.TeamID)
-	channel := strings.TrimSpace(t.Channel)
-	ts := strings.TrimSpace(t.TS)
-	if t.Source == "slack" && team != "" && channel != "" && ts != "" {
-		return fmt.Sprintf("slack://channel?team=%s&id=%s&message=%s", team, channel, ts)
+	return connectorPermalink(t.Source, t.TeamID, t.Channel, t.TS, t.URL)
+}
+
+// connectorPermalink builds a best-effort deep link to a source message. For
+// GitHub the canonical permalink is the stored item URL; for Slack it is a
+// slack:// deep link built from team+channel+ts (empty when any is missing).
+func connectorPermalink(source, teamID, channel, ts, url string) string {
+	if source == "github" {
+		return strings.TrimSpace(url)
+	}
+	team, ch, t := strings.TrimSpace(teamID), strings.TrimSpace(channel), strings.TrimSpace(ts)
+	if source == "slack" && team != "" && ch != "" && t != "" {
+		return fmt.Sprintf("slack://channel?team=%s&id=%s&message=%s", team, ch, t)
 	}
 	return ""
 }

@@ -292,6 +292,72 @@ func TestHandleAttentionTrace(t *testing.T) {
 	}
 }
 
+func TestConnectorPermalink(t *testing.T) {
+	// Slack: full team/channel/ts → deep link.
+	if got, want := connectorPermalink("slack", "T1", "C1", "123.45", ""), "slack://channel?team=T1&id=C1&message=123.45"; got != want {
+		t.Errorf("slack permalink = %q, want %q", got, want)
+	}
+	// GitHub: the item URL is the canonical permalink (team/channel/ts ignored).
+	if got, want := connectorPermalink("github", "", "o/r", "", "https://github.com/o/r/pull/5"), "https://github.com/o/r/pull/5"; got != want {
+		t.Errorf("github permalink = %q, want %q", got, want)
+	}
+	// Slack missing bits → empty.
+	if got := connectorPermalink("slack", "", "C1", "123.45", ""); got != "" {
+		t.Errorf("slack missing team: permalink = %q, want empty", got)
+	}
+	if got := connectorPermalink("slack", "T1", "", "123.45", ""); got != "" {
+		t.Errorf("slack missing channel: permalink = %q, want empty", got)
+	}
+	// GitHub with no URL → empty.
+	if got := connectorPermalink("github", "T1", "C1", "123.45", ""); got != "" {
+		t.Errorf("github no url: permalink = %q, want empty", got)
+	}
+}
+
+func TestAttentionItemViewSourceContext(t *testing.T) {
+	s, _ := attentionTestServer(t) // nil nameResolver
+
+	// Slack channel message: nil resolver leaves names empty, but Channel/
+	// ChannelType/Author pass through and a slack permalink is built.
+	v := s.attentionItemView(context.Background(), flowdb.FeedItem{
+		ID: "x1", Source: "slack", ThreadKey: "C700:700.1", SuggestedAction: "reply",
+		Channel: "C700", ChannelType: "channel", Author: "U_BOB", TS: "700.1", TeamID: "T1",
+		Status: "new", CreatedAt: "2026-06-05T10:00:00Z",
+	})
+	if v.Channel != "C700" || v.ChannelType != "channel" || v.Author != "U_BOB" {
+		t.Errorf("source-context passthrough mismatch: %+v", v)
+	}
+	if v.Permalink != "slack://channel?team=T1&id=C700&message=700.1" {
+		t.Errorf("Permalink = %q, want slack deep link", v.Permalink)
+	}
+	if v.ChannelName != "" || v.AuthorName != "" {
+		t.Errorf("nil resolver should leave names empty for a channel msg, got name=%q author=%q", v.ChannelName, v.AuthorName)
+	}
+
+	// Slack DM (im) with no resolver → ChannelName falls back to "Direct message".
+	dm := s.attentionItemView(context.Background(), flowdb.FeedItem{
+		ID: "x2", Source: "slack", ThreadKey: "D30:30.1", SuggestedAction: "reply",
+		Channel: "D30", ChannelType: "im", Author: "U_BOB", TS: "30.1", TeamID: "T1",
+		Status: "new", CreatedAt: "2026-06-05T10:00:00Z",
+	})
+	if dm.ChannelName != "Direct message" {
+		t.Errorf("im with nil resolver: ChannelName = %q, want %q", dm.ChannelName, "Direct message")
+	}
+
+	// GitHub: channel/author are already human; URL is the permalink.
+	gh := s.attentionItemView(context.Background(), flowdb.FeedItem{
+		ID: "x3", Source: "github", ThreadKey: "o/r:gh-pr:o/r#5", SuggestedAction: "reply",
+		Channel: "o/r", Author: "octocat", URL: "https://github.com/o/r/pull/5",
+		Status: "new", CreatedAt: "2026-06-05T10:00:00Z",
+	})
+	if gh.ChannelName != "o/r" || gh.AuthorName != "octocat" {
+		t.Errorf("github human passthrough mismatch: ChannelName=%q AuthorName=%q", gh.ChannelName, gh.AuthorName)
+	}
+	if gh.Permalink != "https://github.com/o/r/pull/5" {
+		t.Errorf("github Permalink = %q, want the item url", gh.Permalink)
+	}
+}
+
 func TestSteeringPermalink(t *testing.T) {
 	got := steeringPermalink(flowdb.SteeringTrace{Source: "slack", TeamID: "T1", Channel: "C1", TS: "123.45"})
 	want := "slack://channel?team=T1&id=C1&message=123.45"
