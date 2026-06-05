@@ -4314,6 +4314,18 @@ summary.detail-branch.as-button:hover {
 }
 
 /* Attention · Trace (steering decision log) */
+/* Filter row: window buttons + disposition/source segmented controls. Wraps on
+   narrow widths; each labeled group stays together. */
+.trace-controls {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px 18px;
+  margin-bottom: 16px;
+}
+.trace-filter-label {
+  margin-right: 2px;
+}
 .funnel-strip {
   flex-wrap: wrap;
   margin-bottom: 22px;

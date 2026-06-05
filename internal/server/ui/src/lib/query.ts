@@ -209,15 +209,16 @@ export function useAttention(status: string = 'new') {
     placeholderData: keepPreviousData,
   })
 }
-export function useAttentionTrace(since: string, disposition: string = 'all') {
+export function useAttentionTrace(since: string, disposition: string = 'all', source: string = 'all') {
   const params = new URLSearchParams({ since })
   if (disposition && disposition !== 'all') params.set('disposition', disposition)
+  if (source && source !== 'all') params.set('source', source)
   return useQuery({
-    queryKey: ['attention-trace', since, disposition],
+    queryKey: ['attention-trace', since, disposition, source],
     queryFn: () => apiGet<AttentionTraceResponse>(`/api/attention/trace?${params.toString()}`),
     refetchInterval: 15000, // keep the live window fresh while watching
-    // Each 1h/24h/7d (or disposition) switch is a new query key; show the prior
-    // window's rows immediately rather than dropping to a spinner.
+    // Each 1h/24h/7d (or disposition/source) switch is a new query key; show the
+    // prior window's rows immediately rather than dropping to a spinner.
     placeholderData: keepPreviousData,
   })
 }

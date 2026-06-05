@@ -193,29 +193,70 @@ const WINDOWS = [
   { id: '7d', label: '7d', ms: 7 * 24 * 60 * 60 * 1000 },
 ] as const
 
+const DISPOSITIONS = ['all', 'surfaced', 'dropped', 'error'] as const
+const SOURCES = ['all', 'slack', 'github'] as const
+
+// A labeled segmented control reusing the same .btn sm primary/ghost pattern as
+// the window buttons. Used for the disposition + source row filters.
+function SegFilter({
+  label,
+  options,
+  value,
+  onChange,
+}: {
+  label: string
+  options: readonly string[]
+  value: string
+  onChange: (v: string) => void
+}) {
+  return (
+    <div className="row gap trace-filter">
+      <span className="eyebrow trace-filter-label">{label}</span>
+      {options.map((o) => (
+        <button
+          key={o}
+          type="button"
+          className={`btn sm ${value === o ? 'primary' : 'ghost'}`}
+          onClick={() => onChange(o)}
+        >
+          {o}
+        </button>
+      ))}
+    </div>
+  )
+}
+
 function TraceView() {
   const [windowId, setWindowId] = useState<string>('24h')
+  const [disposition, setDisposition] = useState<string>('all')
+  const [source, setSource] = useState<string>('all')
   const [selected, setSelected] = useState<SteeringTrace | null>(null)
   const win = WINDOWS.find((w) => w.id === windowId) ?? WINDOWS[1]
   const since = new Date(Date.now() - win.ms).toISOString()
-  const { data, isLoading, error } = useAttentionTrace(since)
+  const { data, isLoading, error } = useAttentionTrace(since, disposition, source)
   const items = data?.items ?? []
 
   return (
     <>
-      <div className="row gap" style={{ marginBottom: 16 }}>
-        {WINDOWS.map((w) => (
-          <button
-            key={w.id}
-            type="button"
-            className={`btn sm ${windowId === w.id ? 'primary' : 'ghost'}`}
-            onClick={() => setWindowId(w.id)}
-          >
-            {w.label}
-          </button>
-        ))}
+      <div className="trace-controls">
+        <div className="row gap">
+          {WINDOWS.map((w) => (
+            <button
+              key={w.id}
+              type="button"
+              className={`btn sm ${windowId === w.id ? 'primary' : 'ghost'}`}
+              onClick={() => setWindowId(w.id)}
+            >
+              {w.label}
+            </button>
+          ))}
+        </div>
+        <SegFilter label="disposition" options={DISPOSITIONS} value={disposition} onChange={setDisposition} />
+        <SegFilter label="source" options={SOURCES} value={source} onChange={setSource} />
       </div>
 
+      {/* Funnel stays full-window: the backend leaves it unfiltered so the row
+          filters above only narrow the list, not the totals. */}
       {data ? <FunnelStrip funnel={data.funnel} /> : null}
 
       {isLoading ? (
