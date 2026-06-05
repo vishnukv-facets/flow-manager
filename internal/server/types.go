@@ -420,6 +420,7 @@ type AttentionItemView struct {
 	Draft             string  `json:"draft,omitempty"`
 	Reason            string  `json:"reason,omitempty"`
 	Status            string  `json:"status"`
+	LinkedTask        string  `json:"linked_task,omitempty"`
 	CreatedAt         string  `json:"created_at"`
 	ActedAt           string  `json:"acted_at,omitempty"`
 }

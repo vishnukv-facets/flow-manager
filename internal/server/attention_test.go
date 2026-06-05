@@ -12,6 +12,7 @@ import (
 
 	"flow/internal/flowdb"
 	"flow/internal/monitor"
+	"flow/internal/steering"
 )
 
 func attentionTestServer(t *testing.T) (*Server, *sql.DB) {
@@ -68,6 +69,61 @@ func TestAttentionActDismiss(t *testing.T) {
 	}
 	if items, _ := flowdb.ListFeedItems(db, "dismissed"); len(items) != 1 {
 		t.Errorf("item should be dismissed, got %d dismissed", len(items))
+	}
+}
+
+func TestAttentionActMakeTaskStart(t *testing.T) {
+	s, db := attentionTestServer(t)
+	seedFeedItem(t, db, "ms1", "new")
+
+	// Stub the spawn + session-open seams so the test stays hermetic (no real
+	// `flow spawn`, no PTY). The make-task seam marks the row acted+linked.
+	oldMake, oldStart := attentionMakeTask, attentionStartSession
+	var startedSlug string
+	attentionMakeTask = func(srv *Server, item flowdb.FeedItem) error {
+		return flowdb.SetFeedItemActed(srv.cfg.DB, item.ID, steering.FeedTaskSlug(item), "2026-06-05T11:00:00Z")
+	}
+	attentionStartSession = func(_ *Server, slug string) error { startedSlug = slug; return nil }
+	t.Cleanup(func() { attentionMakeTask, attentionStartSession = oldMake, oldStart })
+
+	resp, status := s.runAction(actionRequest{Kind: "attention-act", Target: "ms1", AttentionAction: "make-task-start"})
+	if status != 200 || !resp.OK {
+		t.Fatalf("runAction = (%+v, %d), want OK 200", resp, status)
+	}
+	item, _ := flowdb.GetFeedItem(db, "ms1")
+	wantSlug := steering.FeedTaskSlug(item)
+	if startedSlug != wantSlug {
+		t.Errorf("started session for %q, want %q", startedSlug, wantSlug)
+	}
+	if item.Status != "acted" || item.LinkedTask != wantSlug {
+		t.Errorf("feed row = status %q linked %q, want acted/%s", item.Status, item.LinkedTask, wantSlug)
+	}
+	// Underscore alias is also recognized.
+	seedFeedItem(t, db, "ms2", "new")
+	if _, status := s.runAction(actionRequest{Kind: "attention-act", Target: "ms2", AttentionAction: "make_task_start"}); status != 200 {
+		t.Errorf("make_task_start alias → %d, want 200", status)
+	}
+}
+
+func TestAttentionActMakeTaskStartOpenBestEffort(t *testing.T) {
+	s, db := attentionTestServer(t)
+	seedFeedItem(t, db, "be1", "new")
+
+	oldMake, oldStart := attentionMakeTask, attentionStartSession
+	attentionMakeTask = func(srv *Server, item flowdb.FeedItem) error {
+		return flowdb.SetFeedItemActed(srv.cfg.DB, item.ID, steering.FeedTaskSlug(item), "2026-06-05T11:00:00Z")
+	}
+	attentionStartSession = func(_ *Server, _ string) error { return errors.New("pty down") }
+	t.Cleanup(func() { attentionMakeTask, attentionStartSession = oldMake, oldStart })
+
+	// Task creation succeeded; the open is best-effort, so the action still
+	// reports OK (200) even though the session couldn't be auto-opened.
+	resp, status := s.runAction(actionRequest{Kind: "attention-act", Target: "be1", AttentionAction: "make-task-start"})
+	if status != 200 || !resp.OK {
+		t.Fatalf("best-effort open: runAction = (%+v, %d), want OK 200", resp, status)
+	}
+	if item, _ := flowdb.GetFeedItem(db, "be1"); item.Status != "acted" {
+		t.Errorf("feed row should still be acted, got %q", item.Status)
 	}
 }
 

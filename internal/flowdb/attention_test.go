@@ -90,6 +90,58 @@ func TestAttentionFeedSetStatus(t *testing.T) {
 	}
 }
 
+func TestFeedItemLinkedTaskRoundTrip(t *testing.T) {
+	db := openTempDB(t)
+	defer db.Close()
+
+	if _, err := UpsertFeedItem(db, FeedItem{
+		ID: "lt1", Source: "slack", ThreadKey: "C1:500.1", SuggestedAction: "make_task",
+		LinkedTask: "att-c1-500-1", Status: "acted", CreatedAt: "2026-06-05T10:00:00Z",
+	}); err != nil {
+		t.Fatalf("upsert: %v", err)
+	}
+	got, err := GetFeedItem(db, "lt1")
+	if err != nil {
+		t.Fatalf("GetFeedItem: %v", err)
+	}
+	if got.LinkedTask != "att-c1-500-1" {
+		t.Errorf("LinkedTask = %q, want att-c1-500-1", got.LinkedTask)
+	}
+	list, _ := ListFeedItems(db, "acted")
+	if len(list) != 1 || list[0].LinkedTask != "att-c1-500-1" {
+		t.Errorf("ListFeedItems LinkedTask round-trip mismatch: %+v", list)
+	}
+}
+
+func TestSetFeedItemActed(t *testing.T) {
+	db := openTempDB(t)
+	defer db.Close()
+
+	if _, err := UpsertFeedItem(db, FeedItem{ID: "act1", Source: "slack", ThreadKey: "C1:600.1", SuggestedAction: "make_task", Status: "new", CreatedAt: "2026-06-05T10:00:00Z"}); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+	if err := SetFeedItemActed(db, "act1", "att-c1-600-1", "2026-06-05T11:00:00Z"); err != nil {
+		t.Fatalf("SetFeedItemActed: %v", err)
+	}
+	got, err := GetFeedItem(db, "act1")
+	if err != nil {
+		t.Fatalf("GetFeedItem: %v", err)
+	}
+	if got.Status != "acted" {
+		t.Errorf("Status = %q, want acted", got.Status)
+	}
+	if got.ActedAt != "2026-06-05T11:00:00Z" {
+		t.Errorf("ActedAt = %q, want stamped", got.ActedAt)
+	}
+	if got.LinkedTask != "att-c1-600-1" {
+		t.Errorf("LinkedTask = %q, want att-c1-600-1", got.LinkedTask)
+	}
+	// Missing id → error.
+	if err := SetFeedItemActed(db, "nope", "x", "2026-06-05T11:00:00Z"); err == nil {
+		t.Error("SetFeedItemActed on a missing id must error")
+	}
+}
+
 func TestGetFeedItem(t *testing.T) {
 	db := openTempDB(t)
 	defer db.Close()

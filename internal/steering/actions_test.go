@@ -69,6 +69,60 @@ func TestMakeTaskFromFeed(t *testing.T) {
 	}
 }
 
+func TestMakeTaskFromFeedLinksTask(t *testing.T) {
+	db, err := flowdb.OpenDB(filepath.Join(t.TempDir(), "flow.db"))
+	if err != nil {
+		t.Fatalf("OpenDB: %v", err)
+	}
+	defer db.Close()
+	stubActionIO(t)
+
+	item := flowdb.FeedItem{
+		ID: "lk1", Source: "slack", ThreadKey: "C1:700.1", Summary: "do a thing",
+		SuggestedAction: "make_task", Status: "new", CreatedAt: "2026-06-05T10:00:00Z",
+	}
+	if _, err := flowdb.UpsertFeedItem(db, item); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+	if err := MakeTaskFromFeed(context.Background(), db, item); err != nil {
+		t.Fatalf("MakeTaskFromFeed: %v", err)
+	}
+	got, err := flowdb.GetFeedItem(db, "lk1")
+	if err != nil {
+		t.Fatalf("GetFeedItem: %v", err)
+	}
+	if got.Status != "acted" {
+		t.Errorf("Status = %q, want acted", got.Status)
+	}
+	if got.LinkedTask != FeedTaskSlug(item) {
+		t.Errorf("LinkedTask = %q, want %q", got.LinkedTask, FeedTaskSlug(item))
+	}
+}
+
+func TestForwardFeedLinksMatchedTask(t *testing.T) {
+	db, err := flowdb.OpenDB(filepath.Join(t.TempDir(), "flow.db"))
+	if err != nil {
+		t.Fatalf("OpenDB: %v", err)
+	}
+	defer db.Close()
+	stubActionIO(t)
+
+	item := flowdb.FeedItem{ID: "fl1", Source: "slack", ThreadKey: "C1:800.1", MatchedTask: "kong-split", SuggestedAction: "forward", Status: "new", CreatedAt: "2026-06-05T10:00:00Z"}
+	if _, err := flowdb.UpsertFeedItem(db, item); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+	if err := ForwardFeed(context.Background(), db, item); err != nil {
+		t.Fatalf("ForwardFeed: %v", err)
+	}
+	got, err := flowdb.GetFeedItem(db, "fl1")
+	if err != nil {
+		t.Fatalf("GetFeedItem: %v", err)
+	}
+	if got.Status != "acted" || got.LinkedTask != "kong-split" {
+		t.Errorf("forwarded item = status %q linked %q, want acted/kong-split", got.Status, got.LinkedTask)
+	}
+}
+
 func TestForwardFeed(t *testing.T) {
 	db, err := flowdb.OpenDB(filepath.Join(t.TempDir(), "flow.db"))
 	if err != nil {

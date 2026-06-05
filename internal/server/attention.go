@@ -13,6 +13,20 @@ import (
 	"flow/internal/steering"
 )
 
+// attentionMakeTask spawns a flow task from a feed item (operator-initiated →
+// manual=true bypasses the autonomy gate) and marks the row acted+linked. It is
+// a package var so tests can stub the shell-out spawn.
+var attentionMakeTask = func(s *Server, item flowdb.FeedItem) error {
+	return steering.ApplyAction(context.Background(), s.cfg.DB, item, steering.ActionMakeTask, steering.DefaultAutonomy(), true)
+}
+
+// attentionStartSession attaches the just-made task to a server-managed PTY so
+// its agent session streams into the UI ("start the session"). Package var so
+// tests can stub the PTY attach.
+var attentionStartSession = func(s *Server, slug string) error {
+	return (&slackTaskOpener{server: s}).OpenInUI(slug)
+}
+
 // handleAttention serves GET /api/attention[?status=new|acted|dismissed|all]
 // (default: new). 'all' returns every row.
 func (s *Server) handleAttention(w http.ResponseWriter, r *http.Request) {
@@ -55,7 +69,7 @@ func (s *Server) attentionItemView(ctx context.Context, it flowdb.FeedItem) Atte
 		SuggestedAction: it.SuggestedAction, MatchedTask: it.MatchedTask,
 		SuggestedProject: it.SuggestedProject, SuggestedPriority: it.SuggestedPriority,
 		Urgency: it.Urgency, IsVIP: it.IsVIP, Confidence: it.Confidence,
-		Draft: draft, Reason: reason, Status: it.Status,
+		Draft: draft, Reason: reason, Status: it.Status, LinkedTask: it.LinkedTask,
 		CreatedAt: it.CreatedAt, ActedAt: it.ActedAt,
 	}
 }
@@ -83,6 +97,16 @@ func (s *Server) attentionAct(req actionRequest) (actionResponse, int) {
 			return actionResponse{OK: false, Message: err.Error()}, http.StatusInternalServerError
 		}
 		return actionResponse{OK: true, Message: "made task from " + id}, http.StatusOK
+	case "make-task-start", "make_task_start":
+		if err := attentionMakeTask(s, item); err != nil {
+			return actionResponse{OK: false, Message: err.Error()}, http.StatusInternalServerError
+		}
+		slug := steering.FeedTaskSlug(item)
+		if err := attentionStartSession(s, slug); err != nil {
+			// The task was created; opening the live session is best-effort.
+			return actionResponse{OK: true, Message: "made task " + slug + " (couldn't auto-open session: " + err.Error() + ")"}, http.StatusOK
+		}
+		return actionResponse{OK: true, Message: "made task " + slug + " and started session"}, http.StatusOK
 	case "forward":
 		if err := steering.ApplyAction(context.Background(), s.cfg.DB, item, steering.ActionForward, steering.DefaultAutonomy(), true); err != nil {
 			return actionResponse{OK: false, Message: err.Error()}, http.StatusInternalServerError

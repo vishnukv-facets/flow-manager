@@ -161,6 +161,7 @@ CREATE TABLE IF NOT EXISTS attention_feed (
     context_json       TEXT,
     status             TEXT NOT NULL DEFAULT 'new' CHECK (status IN ('new','acted','dismissed','snoozed','deferred')),
     snooze_until       TEXT,
+    linked_task        TEXT,
     created_at         TEXT NOT NULL,
     acted_at           TEXT
 );
@@ -939,6 +940,16 @@ func runMigrations(db *sql.DB) error {
 	if !has {
 		if _, err := db.Exec(`ALTER TABLE steering_trace ADD COLUMN url TEXT`); err != nil {
 			return fmt.Errorf("add steering_trace.url: %w", err)
+		}
+	}
+
+	has, err = columnExists(db, "attention_feed", "linked_task")
+	if err != nil {
+		return err
+	}
+	if !has {
+		if _, err := db.Exec(`ALTER TABLE attention_feed ADD COLUMN linked_task TEXT`); err != nil {
+			return fmt.Errorf("add attention_feed.linked_task: %w", err)
 		}
 	}
 

@@ -41,10 +41,10 @@ var taskTeller = func(ctx context.Context, slug, message string) error {
 // MakeTaskFromFeed spawns a flow task from a feed item's pre-assembled context
 // pack and marks the feed row 'acted'.
 func MakeTaskFromFeed(ctx context.Context, db *sql.DB, item flowdb.FeedItem) error {
-	if err := taskSpawner(ctx, feedTaskName(item), feedTaskSlug(item), feedTaskBrief(item), item.SuggestedProject); err != nil {
+	if err := taskSpawner(ctx, feedTaskName(item), FeedTaskSlug(item), feedTaskBrief(item), item.SuggestedProject); err != nil {
 		return err
 	}
-	return markActed(db, item.ID)
+	return flowdb.SetFeedItemActed(db, item.ID, FeedTaskSlug(item), nowRFC3339())
 }
 
 // ForwardFeed hands a summarized context block to the matched task's inbox via
@@ -57,16 +57,12 @@ func ForwardFeed(ctx context.Context, db *sql.DB, item flowdb.FeedItem) error {
 	if err := taskTeller(ctx, target, feedForwardMessage(item)); err != nil {
 		return err
 	}
-	return markActed(db, item.ID)
+	return flowdb.SetFeedItemActed(db, item.ID, target, nowRFC3339())
 }
 
 // DismissFeed marks a feed row 'dismissed' (no external effect).
 func DismissFeed(db *sql.DB, id string) error {
 	return flowdb.SetFeedItemStatus(db, id, "dismissed", nowRFC3339())
-}
-
-func markActed(db *sql.DB, id string) error {
-	return flowdb.SetFeedItemStatus(db, id, "acted", nowRFC3339())
 }
 
 func nowRFC3339() string { return time.Now().UTC().Format(time.RFC3339) }
@@ -83,8 +79,10 @@ func feedTaskName(item flowdb.FeedItem) string {
 	return "Attention: " + item.ThreadKey
 }
 
-// feedTaskSlug derives a stable, filesystem-safe slug from the thread key.
-func feedTaskSlug(item flowdb.FeedItem) string {
+// FeedTaskSlug derives a stable, filesystem-safe slug from the thread key. It
+// is deterministic ("att-<thread>") so callers can recover the slug a feed item
+// would spawn without consulting the DB.
+func FeedTaskSlug(item flowdb.FeedItem) string {
 	var b strings.Builder
 	prevDash := false
 	for _, r := range strings.ToLower(item.ThreadKey) {
