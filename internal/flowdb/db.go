@@ -265,6 +265,8 @@ CREATE INDEX IF NOT EXISTS idx_agent_runtime_states_task ON agent_runtime_states
 CREATE INDEX IF NOT EXISTS idx_agent_runtime_states_updated ON agent_runtime_states(updated_at);
 CREATE INDEX IF NOT EXISTS idx_task_dependencies_parent ON task_dependencies(parent_slug);
 CREATE INDEX IF NOT EXISTS idx_task_dependencies_child ON task_dependencies(child_slug);
+CREATE INDEX IF NOT EXISTS idx_steering_trace_feed ON steering_trace(feed_item_id);
+CREATE INDEX IF NOT EXISTS idx_steering_trace_created ON steering_trace(created_at);
 CREATE INDEX IF NOT EXISTS idx_search_docs_scope ON search_docs(scope);
 CREATE INDEX IF NOT EXISTS idx_search_docs_entity ON search_docs(entity_type, entity_slug);
 CREATE INDEX IF NOT EXISTS idx_attention_feed_status ON attention_feed(status);

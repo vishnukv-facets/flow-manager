@@ -71,6 +71,11 @@ func (s *Server) handleAttention(w http.ResponseWriter, r *http.Request) {
 			continue
 		}
 		users = append(users, it.Author)
+		// attentionItemView CleanText's the summary/reason/draft — warm every
+		// mention in them too so those resolve from cache, not serial network.
+		users = append(users, monitor.MentionedUserIDs(it.Summary)...)
+		users = append(users, monitor.MentionedUserIDs(it.Reason)...)
+		users = append(users, monitor.MentionedUserIDs(it.Draft)...)
 		chans = append(chans, it.Channel)
 	}
 	s.warmSlackNames(r.Context(), users, chans)
@@ -283,6 +288,7 @@ func (s *Server) handleAttentionTrace(w http.ResponseWriter, r *http.Request) {
 			continue
 		}
 		users = append(users, t.Author)
+		users = append(users, monitor.MentionedUserIDs(t.TextPreview)...) // CleanText resolves these per row
 		chans = append(chans, t.Channel)
 	}
 	s.warmSlackNames(r.Context(), users, chans)
@@ -310,7 +316,12 @@ func (s *Server) handleAttentionDecision(w http.ResponseWriter, r *http.Request)
 		writeError(w, err, http.StatusNotFound)
 		return
 	}
-	s.warmSlackNames(r.Context(), []string{t.Author}, []string{t.Channel})
+	// Warm author + channel AND every @mention in the text in ONE concurrent
+	// batch. Without the mentions, steeringTraceView → CleanText resolves each
+	// mention with a serial UserInfo network call, which is what stalled this
+	// modal. After the batch warm, the view resolves entirely from cache.
+	users := append([]string{t.Author}, monitor.MentionedUserIDs(t.TextPreview)...)
+	s.warmSlackNames(r.Context(), users, []string{t.Channel})
 	writeJSON(w, s.steeringTraceView(r.Context(), t))
 }
 

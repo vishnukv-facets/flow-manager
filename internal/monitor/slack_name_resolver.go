@@ -117,6 +117,31 @@ func (r *SlackNameResolver) ChannelName(ctx context.Context, channelID string) s
 // it is meant for full message bodies, not titles. Non-Slack text (e.g.
 // GitHub comment bodies) passes through unchanged since the markup patterns
 // simply don't match.
+// MentionedUserIDs returns the distinct Slack user IDs referenced as <@U…>
+// mentions in text (label form <@U…|name> included). Callers use it to prewarm
+// the name cache concurrently before CleanText runs — otherwise CleanText
+// resolves each mention with a SERIAL UserInfo network call, which is what made
+// the decision-trace modal slow to load. Returns nil when there are no mentions.
+func MentionedUserIDs(text string) []string {
+	if strings.TrimSpace(text) == "" {
+		return nil
+	}
+	var out []string
+	seen := map[string]bool{}
+	for _, m := range slackMentionRe.FindAllStringSubmatch(text, -1) {
+		if len(m) < 2 {
+			continue
+		}
+		id := strings.TrimSpace(m[1])
+		if id == "" || seen[id] {
+			continue
+		}
+		seen[id] = true
+		out = append(out, id)
+	}
+	return out
+}
+
 func (r *SlackNameResolver) CleanText(ctx context.Context, text string) string {
 	text = strings.TrimSpace(text)
 	if text == "" {

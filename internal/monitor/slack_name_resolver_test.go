@@ -205,3 +205,19 @@ func TestSlackNameResolverTTLExpiry(t *testing.T) {
 		t.Fatalf("UserInfo called %d times, want 2 (cache should expire past TTL)", client.userCalls["U1"])
 	}
 }
+
+func TestMentionedUserIDs(t *testing.T) {
+	got := MentionedUserIDs("hi <@U123> and <@U456|alice>, ping <@U123> again")
+	want := []string{"U123", "U456"} // distinct, order-preserving
+	if len(got) != len(want) {
+		t.Fatalf("got %v, want %v", got, want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Errorf("got[%d]=%q, want %q", i, got[i], want[i])
+		}
+	}
+	if MentionedUserIDs("no mentions here") != nil {
+		t.Error("text with no mentions should return nil")
+	}
+}
