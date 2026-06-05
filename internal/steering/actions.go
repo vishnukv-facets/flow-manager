@@ -81,14 +81,30 @@ func feedTrackingTag(item flowdb.FeedItem) string {
 
 // MakeTaskFromFeed spawns a flow task from a feed item's pre-assembled context
 // pack, tags it with its source thread so future replies route back, and marks
-// the feed row 'acted'.
+// the feed row 'acted'. Idempotent: if the deterministic task slug already exists
+// (e.g. a retried action), it reuses that task instead of spawning a duplicate
+// (which would hit the UNIQUE constraint on tasks.slug).
 func MakeTaskFromFeed(ctx context.Context, db *sql.DB, item flowdb.FeedItem) error {
 	slug := FeedTaskSlug(item)
-	if err := taskSpawner(ctx, feedTaskName(item), slug, feedTaskBrief(item), item.SuggestedProject); err != nil {
-		return err
+	if !taskSlugExists(db, slug) {
+		if err := taskSpawner(ctx, feedTaskName(item), slug, feedTaskBrief(item), item.SuggestedProject); err != nil {
+			return err
+		}
 	}
 	tagSourceThread(ctx, slug, item)
 	return flowdb.SetFeedItemActed(db, item.ID, slug, nowRFC3339())
+}
+
+// taskSlugExists reports whether a task row already holds this slug — in ANY
+// state (active, archived, or soft-deleted), since the UNIQUE constraint covers
+// the column regardless. GetTask has no archived/deleted filter, so a nil error
+// means the slug is taken. A nil db is treated as "doesn't exist".
+func taskSlugExists(db *sql.DB, slug string) bool {
+	if db == nil {
+		return false
+	}
+	_, err := flowdb.GetTask(db, slug)
+	return err == nil
 }
 
 // tagSourceThread best-effort tags a freshly spawned task with its source-thread
@@ -139,6 +155,19 @@ func InjectReplyToTask(ctx context.Context, db *sql.DB, item flowdb.FeedItem, te
 // server.
 func MakeReplyTaskFromFeed(ctx context.Context, db *sql.DB, item flowdb.FeedItem, text string) (string, error) {
 	slug := FeedTaskSlug(item)
+	if taskSlugExists(db, slug) {
+		// The task already exists (e.g. a retried Send reply, or a make_task ran
+		// first) — inject the reply into it instead of spawning a duplicate, which
+		// would fail on the UNIQUE tasks.slug constraint. That agent already has
+		// the thread context and posts via its own MCP tools.
+		if err := taskTeller(ctx, slug, feedReplyInstruction(item, text)); err != nil {
+			return "", err
+		}
+		if err := flowdb.SetFeedItemActed(db, item.ID, slug, nowRFC3339()); err != nil {
+			return slug, err
+		}
+		return slug, nil
+	}
 	if err := taskSpawner(ctx, feedTaskName(item), slug, feedReplyTaskBrief(item, text), item.SuggestedProject); err != nil {
 		return "", err
 	}

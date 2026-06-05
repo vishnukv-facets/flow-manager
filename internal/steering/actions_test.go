@@ -132,6 +132,52 @@ func TestMakeTaskFromFeedTagsSourceThread(t *testing.T) {
 	}
 }
 
+// Regression: retrying Send reply when the task already exists must NOT spawn a
+// duplicate (which fails on UNIQUE tasks.slug) — it injects into the existing task.
+func TestMakeReplyTaskFromFeedIdempotent(t *testing.T) {
+	db, err := flowdb.OpenDB(filepath.Join(t.TempDir(), "flow.db"))
+	if err != nil {
+		t.Fatalf("OpenDB: %v", err)
+	}
+	defer db.Close()
+	spawns, tells := stubActionIO(t)
+
+	item := flowdb.FeedItem{
+		ID: "idem1", Source: "slack", ThreadKey: "C_eng:1700000000.000100", Summary: "reply please",
+		SuggestedAction: "send_reply", Status: "new", CreatedAt: "2026-06-05T10:00:00Z",
+	}
+	if _, err := flowdb.UpsertFeedItem(db, item); err != nil {
+		t.Fatalf("seed feed: %v", err)
+	}
+	// Pre-create the task that FeedTaskSlug would target (simulates a prior action).
+	slug := FeedTaskSlug(item)
+	now := flowdb.NowISO()
+	if _, err := db.Exec(
+		`INSERT INTO tasks (slug, name, status, priority, work_dir, permission_mode, session_provider, status_changed_at, created_at, updated_at)
+		 VALUES (?, 'existing', 'backlog', 'high', ?, 'default', 'claude', ?, ?, ?)`,
+		slug, t.TempDir(), now, now, now,
+	); err != nil {
+		t.Fatalf("seed existing task: %v", err)
+	}
+
+	got, err := MakeReplyTaskFromFeed(context.Background(), db, item, "thanks!")
+	if err != nil {
+		t.Fatalf("MakeReplyTaskFromFeed: %v", err)
+	}
+	if got != slug {
+		t.Errorf("returned slug = %q, want existing %q", got, slug)
+	}
+	if len(*spawns) != 0 {
+		t.Errorf("must NOT spawn when task exists, spawned %d", len(*spawns))
+	}
+	if len(*tells) != 1 || (*tells)[0].slug != slug {
+		t.Errorf("must inject the reply via tell into %q, got %+v", slug, *tells)
+	}
+	if fi, _ := flowdb.GetFeedItem(db, "idem1"); fi.Status != "acted" || fi.LinkedTask != slug {
+		t.Errorf("feed row = status %q linked %q, want acted/%s", fi.Status, fi.LinkedTask, slug)
+	}
+}
+
 func TestMakeTaskFromFeedLinksTask(t *testing.T) {
 	db, err := flowdb.OpenDB(filepath.Join(t.TempDir(), "flow.db"))
 	if err != nil {
