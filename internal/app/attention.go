@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"strings"
+	"time"
 
 	"flow/internal/flowdb"
 	"flow/internal/steering"
@@ -24,8 +25,10 @@ func cmdAttention(args []string) int {
 		return cmdAttentionList(rest)
 	case "act":
 		return cmdAttentionAct(rest)
+	case "trace":
+		return cmdAttentionTrace(rest)
 	default:
-		fmt.Fprintf(os.Stderr, "error: unknown attention subcommand %q (want list|act)\n", sub)
+		fmt.Fprintf(os.Stderr, "error: unknown attention subcommand %q (want list|act|trace)\n", sub)
 		printAttentionUsage()
 		return 2
 	}
@@ -35,7 +38,8 @@ func printAttentionUsage() {
 	fmt.Println(`flow attention — review and act on the attention feed
 
   flow attention list [--status new|acted|dismissed|snoozed|all]   (default: new)
-  flow attention act <id> <make-task|forward|dismiss>`)
+  flow attention act <id> <make-task|forward|dismiss>
+  flow attention trace [--since 24h] [--disposition dropped|surfaced|error|all] [--limit 50]`)
 }
 
 func cmdAttentionList(args []string) int {
@@ -161,6 +165,88 @@ func shortID(id string) string {
 func orDash(s string) string {
 	if strings.TrimSpace(s) == "" {
 		return "-"
+	}
+	return s
+}
+
+func cmdAttentionTrace(args []string) int {
+	fs := flagSet("attention trace")
+	since := fs.String("since", "24h", "how far back (Go duration, e.g. 1h, 24h)")
+	disposition := fs.String("disposition", "all", "filter: dropped|surfaced|error|all")
+	limit := fs.Int("limit", 50, "max rows")
+	if handled, rc := parseFlagSet(fs, args); handled {
+		return rc
+	}
+	sinceTS, err := sinceToRFC3339(*since)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "error: bad --since %q: %v\n", *since, err)
+		return 2
+	}
+	db, rc := openAttentionDB()
+	if rc != 0 {
+		return rc
+	}
+	defer db.Close()
+
+	disp := strings.TrimSpace(*disposition)
+	if disp == "all" {
+		disp = ""
+	}
+	funnel, err := flowdb.SteeringFunnelSince(db, sinceTS)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "error: %v\n", err)
+		return 1
+	}
+	items, err := flowdb.ListSteeringTrace(db, flowdb.TraceFilter{Disposition: disp, Since: sinceTS, Limit: *limit})
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "error: %v\n", err)
+		return 1
+	}
+	fmt.Print(renderTrace(funnel, items))
+	return 0
+}
+
+// sinceToRFC3339 converts a Go duration string (e.g. "24h") into an RFC3339
+// lower bound that many units before now. Empty → 24h.
+func sinceToRFC3339(s string) (string, error) {
+	s = strings.TrimSpace(s)
+	if s == "" {
+		s = "24h"
+	}
+	d, err := time.ParseDuration(s)
+	if err != nil {
+		return "", err
+	}
+	return time.Now().Add(-d).UTC().Format(time.RFC3339), nil
+}
+
+// renderTrace renders the funnel summary line + a compact decision table. Pure
+// (no I/O) so it's unit-testable.
+func renderTrace(f flowdb.SteeringFunnel, items []flowdb.SteeringTrace) string {
+	var b strings.Builder
+	fmt.Fprintf(&b, "observed %d · stage0 %d · cache %d · stage1 %d · stage2 %d · surfaced %d · errors %d\n\n",
+		f.Observed, f.DroppedStage0, f.DroppedCache, f.DroppedStage1, f.DroppedStage2, f.Surfaced, f.Errors)
+	if len(items) == 0 {
+		b.WriteString("No trace rows in window.\n")
+		return b.String()
+	}
+	fmt.Fprintf(&b, "%-20s  %-8s  %-9s  %-7s  %-5s  %-12s  %s\n",
+		"WHEN", "ORIGIN", "DISPOSE", "STAGE", "CONF", "CHANNEL", "REASON / PREVIEW")
+	for _, it := range items {
+		reason := it.DropReason
+		if strings.TrimSpace(reason) == "" {
+			reason = it.TextPreview
+		}
+		fmt.Fprintf(&b, "%-20s  %-8s  %-9s  %-7s  %-5.2f  %-12s  %s\n",
+			clipStr(it.CreatedAt, 20), orDash(it.Origin), orDash(it.Disposition),
+			orDash(it.StageReached), it.FinalConfidence, orDash(it.Channel), clipStr(reason, 60))
+	}
+	return b.String()
+}
+
+func clipStr(s string, n int) string {
+	if len(s) > n {
+		return s[:n]
 	}
 	return s
 }

@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"flow/internal/flowdb"
 )
@@ -72,5 +73,80 @@ func TestCmdAttentionListRuns(t *testing.T) {
 	attentionTestDB(t)
 	if rc := cmdAttentionList(nil); rc != 0 {
 		t.Errorf("list on empty feed should rc=0, got %d", rc)
+	}
+}
+
+func TestRenderTrace(t *testing.T) {
+	funnel := flowdb.SteeringFunnel{
+		Observed:      5,
+		DroppedStage0: 2,
+		DroppedStage1: 1,
+		Surfaced:      1,
+		Errors:        1,
+	}
+	items := []flowdb.SteeringTrace{
+		{
+			CreatedAt:   "2026-06-05T10:00:00Z",
+			Origin:      "slack",
+			Disposition: "dropped",
+			StageReached: "stage0",
+			FinalConfidence: 0.0,
+			Channel:     "C123",
+			DropReason:  "self-authored",
+			TextPreview: "some text",
+		},
+		{
+			CreatedAt:   "2026-06-05T09:00:00Z",
+			Origin:      "github",
+			Disposition: "surfaced",
+			StageReached: "stage3",
+			FinalConfidence: 0.9,
+			Channel:     "C456",
+			DropReason:  "",
+			TextPreview: "PR review requested",
+		},
+	}
+
+	out := renderTrace(funnel, items)
+	for _, want := range []string{"observed 5", "surfaced 1", "errors 1", "WHEN", "self-authored"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("renderTrace output missing %q:\n%s", want, out)
+		}
+	}
+
+	// Empty items renders friendly message.
+	emptyOut := renderTrace(funnel, nil)
+	if !strings.Contains(emptyOut, "No trace rows in window.") {
+		t.Errorf("empty items should render 'No trace rows in window.', got:\n%s", emptyOut)
+	}
+}
+
+func TestSinceToRFC3339(t *testing.T) {
+	// Valid duration parses and returns a past timestamp.
+	ts, err := sinceToRFC3339("1h")
+	if err != nil {
+		t.Fatalf("sinceToRFC3339(1h) unexpected error: %v", err)
+	}
+	parsed, err := time.Parse(time.RFC3339, ts)
+	if err != nil {
+		t.Fatalf("sinceToRFC3339(1h) returned invalid RFC3339 %q: %v", ts, err)
+	}
+	if !parsed.Before(time.Now()) {
+		t.Errorf("sinceToRFC3339(1h) should return a past time, got %v", parsed)
+	}
+
+	// Invalid duration returns error.
+	_, err = sinceToRFC3339("garbage")
+	if err == nil {
+		t.Error("sinceToRFC3339(garbage) should return error, got nil")
+	}
+
+	// Empty string defaults to 24h (no error).
+	ts2, err := sinceToRFC3339("")
+	if err != nil {
+		t.Fatalf("sinceToRFC3339('') unexpected error: %v", err)
+	}
+	if _, err := time.Parse(time.RFC3339, ts2); err != nil {
+		t.Errorf("sinceToRFC3339('') returned invalid RFC3339 %q: %v", ts2, err)
 	}
 }
