@@ -101,20 +101,54 @@ func (s *Server) attentionItemView(ctx context.Context, it flowdb.FeedItem) Atte
 	if it.Source == "github" {
 		v.ChannelName = it.Channel // owner/repo, already human
 		v.AuthorName = it.Author   // login
-	} else if s.nameResolver != nil {
-		v.ChannelName = s.nameResolver.ChannelName(ctx, it.Channel)
-		v.AuthorName = s.nameResolver.UserName(ctx, it.Author)
-	}
-	// DMs have no channel name — label by the person instead.
-	if v.ChannelName == "" && (it.ChannelType == "im" || it.ChannelType == "mpim") {
-		if v.AuthorName != "" {
-			v.ChannelName = "DM · " + v.AuthorName
-		} else {
-			v.ChannelName = "Direct message"
+		v.Permalink = it.URL
+	} else {
+		// Channel/ts may be empty on items captured before those columns
+		// existed — every item still carries thread_key "<channel>:<ts>", so
+		// derive from it. This makes the channel name + permalink work for ALL
+		// Slack items, old and new.
+		ch, ts := it.Channel, it.TS
+		if ch == "" || ts == "" {
+			tkChan, tkTS := splitThreadKey(it.ThreadKey)
+			if ch == "" {
+				ch = tkChan
+			}
+			if ts == "" {
+				ts = tkTS
+			}
+		}
+		if v.Channel == "" {
+			v.Channel = ch // so the UI's channel_name || channel fallback shows something
+		}
+		if s.nameResolver != nil {
+			v.ChannelName = s.nameResolver.ChannelName(ctx, ch)
+			v.AuthorName = s.nameResolver.UserName(ctx, it.Author)
+		}
+		// DMs have no channel name — label by the person instead.
+		if v.ChannelName == "" && (it.ChannelType == "im" || it.ChannelType == "mpim") {
+			if v.AuthorName != "" {
+				v.ChannelName = "DM · " + v.AuthorName
+			} else {
+				v.ChannelName = "Direct message"
+			}
+		}
+		// Prefer a real https permalink (resolved from channel+ts, no team_id
+		// needed); fall back to the slack:// deep link.
+		v.Permalink = s.slackPermalinker.Permalink(ctx, ch, ts)
+		if v.Permalink == "" {
+			v.Permalink = connectorPermalink(it.Source, it.TeamID, ch, ts, it.URL)
 		}
 	}
-	v.Permalink = connectorPermalink(it.Source, it.TeamID, it.Channel, it.TS, it.URL)
 	return v
+}
+
+// splitThreadKey parses a Slack thread_key "<channel>:<thread_ts>". Slack
+// channel IDs contain no ':' and the ts is the remainder, so SplitN(2) is safe.
+func splitThreadKey(threadKey string) (channel, ts string) {
+	if i := strings.Index(threadKey, ":"); i > 0 {
+		return threadKey[:i], threadKey[i+1:]
+	}
+	return "", ""
 }
 
 // attentionAct handles the attention-act action: make-task | forward | dismiss
@@ -291,10 +325,34 @@ func (s *Server) steeringTraceView(ctx context.Context, t flowdb.SteeringTrace) 
 		v.AuthorName = t.Author
 		v.Text = t.TextPreview
 		v.Permalink = t.URL
-	} else if s.nameResolver != nil {
-		v.ChannelName = s.nameResolver.ChannelName(ctx, t.Channel)
-		v.AuthorName = s.nameResolver.UserName(ctx, t.Author)
-		v.Text = s.nameResolver.CleanText(ctx, t.TextPreview)
+	} else {
+		// Channel/ts may be empty on traces recorded before those columns
+		// existed — derive from thread_key "<channel>:<ts>" so the channel name
+		// + permalink work for ALL Slack traces, old and new.
+		ch, ts := t.Channel, t.TS
+		if ch == "" || ts == "" {
+			tkChan, tkTS := splitThreadKey(t.ThreadKey)
+			if ch == "" {
+				ch = tkChan
+			}
+			if ts == "" {
+				ts = tkTS
+			}
+		}
+		if v.Channel == "" {
+			v.Channel = ch
+		}
+		if s.nameResolver != nil {
+			v.ChannelName = s.nameResolver.ChannelName(ctx, ch)
+			v.AuthorName = s.nameResolver.UserName(ctx, t.Author)
+			v.Text = s.nameResolver.CleanText(ctx, t.TextPreview)
+		}
+		// Prefer a real https permalink (resolved from channel+ts); fall back to
+		// the slack:// deep link.
+		v.Permalink = s.slackPermalinker.Permalink(ctx, ch, ts)
+		if v.Permalink == "" {
+			v.Permalink = connectorPermalink(t.Source, t.TeamID, ch, ts, t.URL)
+		}
 	}
 	if v.Text == "" {
 		v.Text = t.TextPreview

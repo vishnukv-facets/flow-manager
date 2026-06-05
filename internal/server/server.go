@@ -51,6 +51,11 @@ func New(cfg Config) *Server {
 	// Resolves Slack user/channel IDs to display names for the Inbox UI.
 	// Nil when no Slack token is configured; all uses are nil-safe.
 	s.nameResolver = monitor.NewSlackNameResolver()
+	// Resolves a real Slack permalink (chat.getPermalink) from channel+ts so the
+	// "Open in Slack" link works for every item — including those captured before
+	// the channel/ts/team_id columns existed (channel+ts are recoverable from
+	// thread_key). Nil when no token; all uses are nil-safe.
+	s.slackPermalinker = monitor.NewSlackPermalinker()
 	// Slack Socket Mode listener: only constructed when a DB is available
 	// (the dispatcher needs one). Start()/Stop() are no-ops when the env
 	// isn't configured for Socket Mode, so wiring is safe to leave in

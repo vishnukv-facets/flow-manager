@@ -536,6 +536,75 @@ func TestAttentionItemViewSourceContext(t *testing.T) {
 	}
 }
 
+func TestSplitThreadKey(t *testing.T) {
+	cases := []struct{ in, wantCh, wantTS string }{
+		{"D075KEWD1H9:1780653157.014339", "D075KEWD1H9", "1780653157.014339"},
+		{"C1:123.45", "C1", "123.45"},
+		{"", "", ""},
+		{"no-colon", "", ""},
+		{":123.45", "", ""}, // leading colon → no channel
+	}
+	for _, c := range cases {
+		ch, ts := splitThreadKey(c.in)
+		if ch != c.wantCh || ts != c.wantTS {
+			t.Errorf("splitThreadKey(%q) = (%q, %q), want (%q, %q)", c.in, ch, ts, c.wantCh, c.wantTS)
+		}
+	}
+}
+
+func TestAttentionItemViewDerivesFromThreadKey(t *testing.T) {
+	s, _ := attentionTestServer(t) // nil nameResolver AND nil slackPermalinker
+	if s.slackPermalinker != nil {
+		t.Fatal("expected nil slackPermalinker on the test server")
+	}
+
+	// Channel/TS are empty (pre-capture item) but thread_key carries them. The
+	// derivation should populate v.Channel from thread_key and, with the
+	// permalinker nil, fall back to the slack:// deep link built from TeamID +
+	// the derived channel/ts — proving thread_key feeds the permalink.
+	v := s.attentionItemView(context.Background(), flowdb.FeedItem{
+		ID: "tk1", Source: "slack", ThreadKey: "C1:1.2", SuggestedAction: "reply",
+		TeamID: "T1", Status: "new", CreatedAt: "2026-06-05T10:00:00Z",
+		// Channel, TS deliberately empty.
+	})
+	if v.Channel != "C1" {
+		t.Errorf("v.Channel = %q, want %q (derived from thread_key)", v.Channel, "C1")
+	}
+	if v.Permalink != "slack://channel?team=T1&id=C1&message=1.2" {
+		t.Errorf("v.Permalink = %q, want slack deep link from derived channel/ts", v.Permalink)
+	}
+
+	// Stored Channel/TS take precedence over thread_key when present.
+	v2 := s.attentionItemView(context.Background(), flowdb.FeedItem{
+		ID: "tk2", Source: "slack", ThreadKey: "C1:1.2", SuggestedAction: "reply",
+		Channel: "C999", TS: "9.9", TeamID: "T1", Status: "new", CreatedAt: "2026-06-05T10:00:00Z",
+	})
+	if v2.Channel != "C999" {
+		t.Errorf("v2.Channel = %q, want stored %q", v2.Channel, "C999")
+	}
+	if v2.Permalink != "slack://channel?team=T1&id=C999&message=9.9" {
+		t.Errorf("v2.Permalink = %q, want deep link from stored channel/ts", v2.Permalink)
+	}
+}
+
+func TestSteeringTraceViewDerivesFromThreadKey(t *testing.T) {
+	s, _ := attentionTestServer(t) // nil nameResolver AND nil slackPermalinker
+
+	// Pre-capture trace: Channel/TS empty, thread_key carries them. The trace
+	// view should derive channel/ts and, with the permalinker nil, fall back to
+	// the slack:// deep link built from TeamID + derived channel/ts.
+	v := s.steeringTraceView(context.Background(), flowdb.SteeringTrace{
+		ID: "trk1", Source: "slack", ThreadKey: "C1:1.2", TeamID: "T1",
+		TextPreview: "hi", CreatedAt: "2026-06-05T10:00:00Z",
+	})
+	if v.Channel != "C1" {
+		t.Errorf("v.Channel = %q, want %q (derived from thread_key)", v.Channel, "C1")
+	}
+	if v.Permalink != "slack://channel?team=T1&id=C1&message=1.2" {
+		t.Errorf("v.Permalink = %q, want slack deep link from derived channel/ts", v.Permalink)
+	}
+}
+
 func TestSteeringPermalink(t *testing.T) {
 	got := steeringPermalink(flowdb.SteeringTrace{Source: "slack", TeamID: "T1", Channel: "C1", TS: "123.45"})
 	want := "slack://channel?team=T1&id=C1&message=123.45"

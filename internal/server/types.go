@@ -42,6 +42,11 @@ type Server struct {
 	// Inbox UI, caching lookups across requests. Nil when no Slack token is
 	// configured; all of its methods are nil-safe.
 	nameResolver *monitor.SlackNameResolver
+	// slackPermalinker resolves (channel, message-ts) → canonical https Slack
+	// permalink via chat.getPermalink (needs only channel+ts, no team_id), so a
+	// real "Open in Slack" link works even for items captured before the
+	// channel/ts/team_id columns existed. Nil when no token; methods nil-safe.
+	slackPermalinker *monitor.SlackPermalinker
 	// monitorReconcile keeps persistent background monitors converged with the
 	// set of tasks that need one (origin/branch-linked + active), restoring
 	// them on boot and recreating any that die.
