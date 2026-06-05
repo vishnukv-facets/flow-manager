@@ -137,6 +137,17 @@ func (d *Dispatcher) dispatchMessage(ctx context.Context, ev InboundEvent) error
 			return nil
 		}
 	}
+	// Cross-conversation correlation: the message arrived somewhere untracked,
+	// but it forwards/shares (or unfurls) a message from a thread a task DOES
+	// track. The classic case — a teammate answers a #channel-thread question by
+	// forwarding it into a DM. The shared-message attachment points back at the
+	// original thread, so route this reply as activity on the tracked thread:
+	// wake the session and clear its waiting_on, exactly like an in-thread reply.
+	if ref, ok := ev.SharedRef(); ok {
+		if d.routeViaSharedRef(ev, ref) {
+			return nil
+		}
+	}
 	// DMs are monitored as threads too: when the agent opens or replies in a DM,
 	// the tool-use hook registers slack-thread:<dm-channel>:<thread_ts> on the
 	// task, so a DM message routes through the thread match above — scoped to the
@@ -149,6 +160,35 @@ func (d *Dispatcher) dispatchMessage(ctx context.Context, ev InboundEvent) error
 		return d.Steerer.Observe(ctx, ev)
 	}
 	return nil
+}
+
+// routeViaSharedRef tries to deliver a forwarded/shared message to the task that
+// tracks the *original* thread. It probes the ref's candidate thread keys (parent
+// first, then the exact shared message) and, on the first task hit, appends the
+// carrier event to that task's inbox (waking it with the new context) and clears
+// any waiting_on the external reply resolves. Returns whether it routed. Pure
+// tag lookups — a miss is a safe no-op (the caller falls through to the steerer).
+func (d *Dispatcher) routeViaSharedRef(ev InboundEvent, ref SharedRef) bool {
+	for _, key := range ref.ThreadKeys() {
+		slug, found, err := d.findTaskByThreadKey(key)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "monitor: shared-ref lookup %s: %v\n", key, err)
+			continue
+		}
+		if !found {
+			continue
+		}
+		if err := AppendInboxEvent(slug, ev); err != nil {
+			fmt.Fprintf(os.Stderr, "monitor: shared-ref inbox append %s: %v\n", slug, err)
+			return false
+		}
+		fmt.Fprintf(os.Stderr, "monitor: routed forwarded message to %s via shared-ref thread %s (from %s)\n", slug, key, ev.Channel)
+		if autoResolveWaitingOn(d.DB, slug, ev.UserID, SelfUserIDs()) {
+			fmt.Fprintf(os.Stderr, "monitor: auto-resolved waiting_on for %s (forwarded reply from %s)\n", slug, ev.UserID)
+		}
+		return true
+	}
+	return false
 }
 
 // autoResolveWaitingOn clears a tracked task's waiting_on when an external reply
