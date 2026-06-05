@@ -6,6 +6,7 @@ import { getTheme, onThemeChange, toggleTheme, type Theme } from '../lib/theme'
 import { ErrorNote, Loading, ProviderIcon, SourceIcon } from '../components/ui'
 import { SlackConnect } from '../components/SlackConnect'
 import { WatchedChannels } from '../components/WatchedChannels'
+import { AutonomyPanel } from '../components/AutonomyPanel'
 import type { SettingField, ToolCapability } from '../lib/types'
 import { useMascotPrefs, setMascotPrefs, NAP_OPTIONS } from '../lib/mascot'
 
@@ -135,6 +136,7 @@ export function Settings() {
 
       <SettingsSection title="Steering" hint="What the attention router watches beyond DMs and mentions.">
         <WatchedChannels />
+        <AutonomyPanel />
       </SettingsSection>
 
       <SettingsSection title="Configuration" hint="Applied live — secrets stay on this machine.">
