@@ -1,7 +1,7 @@
 import { useState, type ReactNode } from 'react'
 import { useLocation } from 'wouter'
 import { AlertTriangle, ArrowRight, AtSign, Check, ExternalLink, Filter, Github, Hash, Inbox, ListPlus, Lock, MessageSquare, Play, Share2 } from 'lucide-react'
-import { useAction, useAttention, useAttentionTrace } from '../lib/query'
+import { useAction, useAttention, useAttentionDecision, useAttentionTrace } from '../lib/query'
 import { useDocumentTitle } from '../lib/useDocumentTitle'
 import { EmptyState, ErrorNote, Loading, SourceIcon } from '../components/ui'
 import { Modal } from '../components/Modal'
@@ -45,6 +45,7 @@ export function Attention() {
 
 function FeedView() {
   const [status, setStatus] = useState<string>('new')
+  const [detail, setDetail] = useState<AttentionItem | null>(null)
   const { data, isLoading, error } = useAttention(status)
   const action = useAction()
 
@@ -80,10 +81,18 @@ function FeedView() {
       ) : (
         <div className="att-list">
           {(data ?? []).map((it) => (
-            <AttentionCard key={it.id} item={it} disabled={action.isPending} onAct={act} />
+            <AttentionCard
+              key={it.id}
+              item={it}
+              disabled={action.isPending}
+              onAct={act}
+              onOpen={() => setDetail(it)}
+            />
           ))}
         </div>
       )}
+
+      <FeedDetail item={detail} onClose={() => setDetail(null)} />
     </>
   )
 }
@@ -105,18 +114,34 @@ function AttentionCard({
   item,
   disabled,
   onAct,
+  onOpen,
 }: {
   item: AttentionItem
   disabled: boolean
   onAct: (item: AttentionItem, verb: string) => void
+  onOpen: () => void
 }) {
   const urgent = item.urgency === 'urgent'
   const [, navigate] = useLocation()
   const channelLabel = item.channel_name || item.channel || ''
   const linkLabel =
     item.source === 'slack' ? 'View in Slack' : item.source === 'github' ? 'View on GitHub' : 'Open source'
+  // Clicking the card body opens the decision detail; the origin link and the
+  // action rows stop propagation so their own onClicks don't also open it.
+  const stop = (e: { stopPropagation: () => void }) => e.stopPropagation()
   return (
-    <div className={`card att-card${urgent ? ' att-urgent' : ''}`}>
+    <div
+      className={`card att-card clickable${urgent ? ' att-urgent' : ''}`}
+      role="button"
+      tabIndex={0}
+      onClick={onOpen}
+      onKeyDown={(e) => {
+        if (e.key === 'Enter' || e.key === ' ') {
+          e.preventDefault()
+          onOpen()
+        }
+      }}
+    >
       <div className="att-head row gap">
         <SourceIcon source={item.source} />
         <span className="badge accent">{item.suggested_action.replace(/_/g, ' ')}</span>
@@ -127,7 +152,7 @@ function AttentionCard({
       </div>
 
       {channelLabel || item.permalink || item.author_name ? (
-        <div className="att-origin row gap">
+        <div className="att-origin row gap" onClick={stop}>
           <span className="att-origin-where faint" title={channelLabel || undefined}>
             <OriginIcon source={item.source} channelType={item.channel_type} />
             <span>{channelLabel || '—'}</span>
@@ -153,7 +178,7 @@ function AttentionCard({
       ) : null}
 
       {item.status === 'new' ? (
-        <div className="att-actions row gap">
+        <div className="att-actions row gap" onClick={stop}>
           <button type="button" className="btn primary sm" disabled={disabled} onClick={() => onAct(item, 'make-task')}>
             <ListPlus size={13} /> Make task
           </button>
@@ -170,7 +195,7 @@ function AttentionCard({
           </button>
         </div>
       ) : (
-        <div className="att-resolved row gap faint mono">
+        <div className="att-resolved row gap faint mono" onClick={stop}>
           <span>
             {item.status}
             {item.acted_at ? ` · ${item.acted_at.slice(0, 10)}` : ''}
@@ -183,6 +208,92 @@ function AttentionCard({
         </div>
       )}
     </div>
+  )
+}
+
+// ----- Feed detail modal --------------------------------------------------
+// Clicking a feed card opens this: the message context taken straight from the
+// item, plus the SAME cascade-decision grid the Trace view shows — fetched by
+// feed id — so the operator can audit "why was this surfaced / chosen". Reuses
+// the TraceDetail layout (.meta-grid + KV, .td-section, .att-draft).
+function FeedDetail({ item, onClose }: { item: AttentionItem | null; onClose: () => void }) {
+  // Hooks must run unconditionally; pass null while closed so the query stays idle.
+  const { data: trace, isLoading, isError } = useAttentionDecision(item?.id ?? null)
+  // Keep the modal mounted (empty) while closed so content doesn't blank mid-anim.
+  if (!item) return <Modal open={false} onClose={onClose} title="" children={null} />
+
+  const sourceLabel = item.source === 'github' ? 'GitHub' : titleCase(item.source || 'message')
+  const title = `${sourceLabel} · ${titleCase(item.suggested_action || '—')}`
+  const channel = item.channel_name || item.channel || '—'
+  const from = item.author_name || '—'
+  const linkLabel = item.source === 'github' ? 'Open on GitHub' : 'Open in Slack'
+
+  return (
+    <Modal open onClose={onClose} title={title} width={620}>
+      <div className="trace-detail-view">
+        <div className="meta-grid">
+          <KV k="when" v={dateTimeFull(item.created_at)} />
+          <KV k="channel" v={channel} />
+          <KV k="from" v={from} />
+          <KV k="confidence" v={`${Math.round(item.confidence * 100)}%`} />
+        </div>
+
+        <div className="td-section">
+          <div className="eyebrow">summary</div>
+          <div className="att-draft-body td-message">{item.summary || '(no summary)'}</div>
+        </div>
+
+        {item.draft ? (
+          <div className="td-section">
+            <div className="eyebrow">drafted reply</div>
+            <div className="att-draft-body td-message">{item.draft}</div>
+          </div>
+        ) : null}
+
+        <div className="td-section">
+          <div className="eyebrow">thread</div>
+          <div className="row gap" style={{ marginTop: 5 }}>
+            <span className="mono dim td-thread" title={item.thread_key || ''}>
+              {item.thread_key || '—'}
+            </span>
+            {item.permalink ? (
+              <a className="btn ghost sm" href={item.permalink} target="_blank" rel="noreferrer">
+                <ExternalLink size={13} /> {linkLabel}
+              </a>
+            ) : null}
+          </div>
+        </div>
+
+        <div className="td-section">
+          <div className="eyebrow">why · cascade decision</div>
+          {isLoading ? (
+            <div style={{ marginTop: 6 }}>
+              <Loading label="loading decision trace" />
+            </div>
+          ) : isError || !trace ? (
+            <>
+              <div className="faint" style={{ marginTop: 6 }}>
+                No cascade trace recorded for this item (it predates decision logging).
+              </div>
+              {item.reason ? <div className="att-reason dim" style={{ marginTop: 6 }}>{item.reason}</div> : null}
+            </>
+          ) : (
+            <div className="meta-grid" style={{ marginTop: 6 }}>
+              <KV k="disposition" v={<span className={DISPOSITION_TONE[trace.disposition] ?? 'badge'}>{trace.disposition}</span>} />
+              <KV k="stage reached" v={trace.stage_reached || '—'} />
+              <KV k="stage 1 relevant" v={relevantLabel(trace.stage1_relevant)} />
+              <KV k="stage 2 action" v={trace.stage2_action ? `${trace.stage2_action} · ${pctConf(trace.stage2_confidence)}` : '—'} />
+              <KV k="stage 3 action" v={trace.stage3_action ? `${trace.stage3_action} · ${pctConf(trace.stage3_confidence)}` : '—'} />
+              <KV k="final action" v={trace.final_action ? `${trace.final_action} · ${pctConf(trace.final_confidence)}` : '—'} />
+              <KV k="drop reason" v={trace.drop_reason || '—'} />
+              <KV k="latency" v={trace.latency_ms != null ? `${trace.latency_ms} ms` : '—'} />
+              <KV k="model" v={trace.model || '—'} />
+              {trace.error ? <KV k="error" v={<span className="dim">{trace.error}</span>} /> : null}
+            </div>
+          )}
+        </div>
+      </div>
+    </Modal>
   )
 }
 

@@ -4255,6 +4255,17 @@ summary.detail-branch.as-button:hover {
 .att-card.att-urgent {
   border-left: 2px solid var(--warn);
 }
+/* A feed card opens its decision-detail modal on click — mirror the trace-row
+   hover so the affordance reads the same across the two views. */
+.att-card.clickable {
+  cursor: pointer;
+  transition: background var(--dur-1) var(--ease), border-color var(--dur-1) var(--ease);
+}
+.att-card.clickable:hover,
+.att-card.clickable:focus-visible {
+  background: var(--bg-1);
+  outline: none;
+}
 /* Origin line: where the message came from (channel/DM/repo) + a source link. */
 .att-origin {
   margin-top: -2px;

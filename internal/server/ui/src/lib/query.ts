@@ -19,6 +19,7 @@ import type {
   SettingsResponse,
   SlackChannel,
   SlackSetupStatus,
+  SteeringTrace,
   TaskView,
   TranscriptResponse,
   UiAgent,
@@ -220,6 +221,17 @@ export function useAttentionTrace(since: string, disposition: string = 'all', so
     // Each 1h/24h/7d (or disposition/source) switch is a new query key; show the
     // prior window's rows immediately rather than dropping to a spinner.
     placeholderData: keepPreviousData,
+  })
+}
+// Fetches the cascade-decision trace behind a surfaced feed item, so the Feed
+// detail modal can show the same "why was this chosen" reasoning the Trace view
+// does. 404 = an older item logged before decision tracing; don't retry.
+export function useAttentionDecision(feedId: string | null) {
+  return useQuery({
+    queryKey: ['attention-decision', feedId],
+    enabled: !!feedId,
+    retry: false, // 404 = older item with no trace; don't hammer
+    queryFn: () => apiGet<SteeringTrace>(`/api/attention/decision?feed_id=${encodeURIComponent(feedId!)}`),
   })
 }
 export function useSlackChannels() {
