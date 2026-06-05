@@ -4491,7 +4491,7 @@ summary.detail-branch.as-button:hover {
 
 /* Watched-channels picker (Settings → Steering) */
 .wc-search {
-  margin-bottom: 10px;
+  margin-bottom: 8px;
 }
 .wc-search .input {
   flex: 1;
@@ -4499,7 +4499,7 @@ summary.detail-branch.as-button:hover {
 .wc-list {
   display: flex;
   flex-direction: column;
-  max-height: 320px;
+  max-height: 196px;
   overflow-y: auto;
   border: 1px solid var(--border);
   border-radius: var(--r-sm);
@@ -4509,8 +4509,8 @@ summary.detail-branch.as-button:hover {
   display: flex;
   align-items: center;
   gap: 8px;
-  padding: 7px 10px;
-  font-size: 13px;
+  padding: 4px 9px;
+  font-size: 12.5px;
   cursor: pointer;
   border-bottom: 1px solid var(--border);
 }
@@ -4531,4 +4531,56 @@ summary.detail-branch.as-button:hover {
 }
 .wc-id {
   font-size: 10.5px;
+}
+
+/* Autonomy — one compact row per action: toggle + label, inline slider, pct. */
+.autonomy-rows {
+  display: flex;
+  flex-direction: column;
+  border: 1px solid var(--border);
+  border-radius: var(--r-sm);
+  background: var(--bg-1);
+  margin-bottom: 10px;
+}
+.autonomy-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 8px 11px;
+  border-bottom: 1px solid var(--border);
+}
+.autonomy-row:last-child {
+  border-bottom: none;
+}
+.autonomy-row.on {
+  background: var(--accent-soft);
+}
+.autonomy-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 168px;
+  font-size: 13px;
+  color: var(--text);
+  cursor: pointer;
+  user-select: none;
+}
+.autonomy-toggle input[type='checkbox'] {
+  accent-color: var(--accent);
+}
+.autonomy-slider {
+  flex: 1;
+  accent-color: var(--accent);
+}
+.autonomy-slider:disabled {
+  opacity: 0.5;
+}
+.autonomy-pct {
+  min-width: 34px;
+  text-align: right;
+  font-size: 12px;
+  color: var(--text);
+}
+.autonomy-pct.faint {
+  color: var(--text-3);
 }

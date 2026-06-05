@@ -86,8 +86,7 @@ export function WatchedChannels() {
       </div>
       <div className="settings-card-body">
         <p className="config-help">
-          DMs and @mentions are triaged automatically. Tick channels here to also watch their messages
-          for things that need your attention.
+          DMs and @mentions are always triaged. Tick channels to also watch them.
         </p>
 
         {isLoading ? (
@@ -125,7 +124,7 @@ export function WatchedChannels() {
             <div className="config-actions">
               <button
                 type="button"
-                className="btn primary"
+                className="btn primary sm"
                 disabled={!dirty || action.isPending}
                 onClick={save}
               >

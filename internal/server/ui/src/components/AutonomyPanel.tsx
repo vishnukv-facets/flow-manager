@@ -132,65 +132,54 @@ export function AutonomyPanel() {
       </div>
       <div className="settings-card-body">
         <p className="config-help">
-          When ON, the steerer performs this action automatically for verdicts at or above the
-          confidence threshold — without surfacing it for you to click first. Off = surface-only
-          (you decide). Outward replies always stay manual.
+          When ON, the steerer acts automatically at or above the threshold — no click needed.
+          Off = surface-only. Outward replies always stay manual.
         </p>
 
-        <div className="config-form">
+        <div className="autonomy-rows">
           {ACTIONS.map(({ key, label, defaultThreshold }) => {
             const pol = policyFor(current, key, defaultThreshold)
             const pct = Math.round(pol.threshold * 100)
             return (
-              <div key={key} className="config-field">
-                <div className="config-field-head">
-                  <label className="setting-label" htmlFor={`autonomy-${key}`}>
-                    {label}
-                  </label>
-                  <label className="config-toggle">
-                    <input
-                      id={`autonomy-${key}`}
-                      type="checkbox"
-                      checked={pol.enabled}
-                      onChange={() => toggle(key, defaultThreshold)}
-                    />
-                    <span>{pol.enabled ? 'Auto' : 'Surface only'}</span>
-                  </label>
-                </div>
-                <div className="row gap">
+              <div key={key} className={`autonomy-row${pol.enabled ? ' on' : ''}`}>
+                <label className="autonomy-toggle" htmlFor={`autonomy-${key}`}>
                   <input
-                    className="input"
-                    type="range"
-                    min={0}
-                    max={1}
-                    step={0.05}
-                    value={pol.threshold}
-                    disabled={!pol.enabled}
-                    onChange={(e) => setThreshold(key, defaultThreshold, Number(e.target.value))}
-                    aria-label={`${label} confidence threshold`}
+                    id={`autonomy-${key}`}
+                    type="checkbox"
+                    checked={pol.enabled}
+                    onChange={() => toggle(key, defaultThreshold)}
                   />
-                  <span className={`mono${pol.enabled ? '' : ' faint'}`}>{pct}%</span>
-                </div>
-                <div className="config-help">
-                  {pol.enabled
-                    ? `Acts on its own at ${pct}% confidence or higher.`
-                    : 'Surfaced for you to confirm — never acts on its own.'}
-                </div>
+                  <span className="autonomy-name">{label}</span>
+                </label>
+                <input
+                  className="autonomy-slider"
+                  type="range"
+                  min={0}
+                  max={1}
+                  step={0.05}
+                  value={pol.threshold}
+                  disabled={!pol.enabled}
+                  onChange={(e) => setThreshold(key, defaultThreshold, Number(e.target.value))}
+                  aria-label={`${label} confidence threshold`}
+                />
+                <span className={`autonomy-pct mono${pol.enabled ? '' : ' faint'}`}>
+                  {pol.enabled ? `${pct}%` : 'off'}
+                </span>
               </div>
             )
           })}
+        </div>
 
-          <div className="config-actions">
-            <button
-              type="button"
-              className="btn primary"
-              disabled={!dirty || action.isPending}
-              onClick={save}
-            >
-              {action.isPending ? <Loader2 size={14} className="spin" /> : <Save size={14} />}
-              Save autonomy
-            </button>
-          </div>
+        <div className="config-actions">
+          <button
+            type="button"
+            className="btn primary sm"
+            disabled={!dirty || action.isPending}
+            onClick={save}
+          >
+            {action.isPending ? <Loader2 size={14} className="spin" /> : <Save size={14} />}
+            Save autonomy
+          </button>
         </div>
       </div>
     </section>
