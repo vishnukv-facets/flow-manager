@@ -182,6 +182,8 @@ func stage1Prime() string {
 
 You are a fast relevance gate for an operator's incoming messages. For EACH event below, decide whether it is plausibly something the operator personally needs to see (a question for them, a request, a decision, an escalation, a blocker) versus noise (chit-chat, FYIs, resolved threads, bot output).
 
+Always refer to people and channels by name; never output raw platform IDs (e.g. Slack user IDs like U0123, channel IDs like C0123).
+
 Respond with ONLY a minified JSON array, no prose and no code fences. One object per event:
 [{"thread_key":"<copy of input thread_key>","relevant":true|false,"category":"<short label>","urgency_hint":"urgent|normal|low"}]`
 }
@@ -211,6 +213,8 @@ Allowed suggested_action values: make_task, forward, reply, afk_reply, digest_on
 - reply: it needs a reply from the operator.
 - digest_only: noteworthy but not actionable now.
 - drop: not worth surfacing.
+
+Always refer to people and channels by name; never output raw platform IDs (e.g. Slack user IDs like U0123, channel IDs like C0123).
 
 Respond with ONLY a minified JSON object, no prose, no code fences:
 {"suggested_action":"...","matched_task":"<slug or empty>","suggested_project":"<slug or empty>","suggested_priority":"high|medium|low","urgency":"urgent|normal|low","confidence":0.0,"summary":"<= 140 chars","reason":"<why>"}

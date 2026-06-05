@@ -33,18 +33,29 @@ func (s *Server) handleAttention(w http.ResponseWriter, r *http.Request) {
 	}
 	views := make([]AttentionItemView, 0, len(items))
 	for _, it := range items {
-		views = append(views, attentionItemView(it))
+		views = append(views, s.attentionItemView(r.Context(), it))
 	}
 	writeJSON(w, views)
 }
 
-func attentionItemView(it flowdb.FeedItem) AttentionItemView {
+// attentionItemView maps a feed row to its UI shape. As a display safety-net it
+// runs the operator-facing text fields (summary, reason, draft) through the
+// Slack name resolver so any residual <@U…> markup renders as a name; the
+// ingest-time cleaning (Cascade.TextClean) is the primary fix for new items.
+// The resolver is nil-safe — a nil resolver leaves the text unchanged.
+func (s *Server) attentionItemView(ctx context.Context, it flowdb.FeedItem) AttentionItemView {
+	summary, reason, draft := it.Summary, it.Reason, it.Draft
+	if s.nameResolver != nil {
+		summary = s.nameResolver.CleanText(ctx, summary)
+		reason = s.nameResolver.CleanText(ctx, reason)
+		draft = s.nameResolver.CleanText(ctx, draft)
+	}
 	return AttentionItemView{
-		ID: it.ID, Source: it.Source, ThreadKey: it.ThreadKey, Summary: it.Summary,
+		ID: it.ID, Source: it.Source, ThreadKey: it.ThreadKey, Summary: summary,
 		SuggestedAction: it.SuggestedAction, MatchedTask: it.MatchedTask,
 		SuggestedProject: it.SuggestedProject, SuggestedPriority: it.SuggestedPriority,
 		Urgency: it.Urgency, IsVIP: it.IsVIP, Confidence: it.Confidence,
-		Draft: it.Draft, Reason: it.Reason, Status: it.Status,
+		Draft: draft, Reason: reason, Status: it.Status,
 		CreatedAt: it.CreatedAt, ActedAt: it.ActedAt,
 	}
 }

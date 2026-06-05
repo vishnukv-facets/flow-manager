@@ -87,9 +87,14 @@ func TestAttentionActErrors(t *testing.T) {
 }
 
 func TestAttentionItemView(t *testing.T) {
-	v := attentionItemView(flowdb.FeedItem{ID: "x", Source: "slack", ThreadKey: "C1:1.1", Summary: "hi", SuggestedAction: "reply", Confidence: 0.5, Status: "new", CreatedAt: "2026-06-05T10:00:00Z"})
+	s, _ := attentionTestServer(t) // nil nameResolver
+	v := s.attentionItemView(context.Background(), flowdb.FeedItem{ID: "x", Source: "slack", ThreadKey: "C1:1.1", Summary: "hi <@U1>", SuggestedAction: "reply", Confidence: 0.5, Status: "new", CreatedAt: "2026-06-05T10:00:00Z"})
 	if v.ID != "x" || v.Source != "slack" || v.SuggestedAction != "reply" || v.Confidence != 0.5 {
 		t.Errorf("view = %+v", v)
+	}
+	// With a nil resolver the text passes through unchanged (nil-safe).
+	if v.Summary != "hi <@U1>" {
+		t.Errorf("Summary with nil resolver = %q, want unchanged", v.Summary)
 	}
 }
 

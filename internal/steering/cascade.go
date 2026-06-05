@@ -31,6 +31,12 @@ type Cascade struct {
 	// sets it to WatchConfigFromEnv.
 	ConfigFn func() WatchConfig
 
+	// TextClean, when set, rewrites connector markup (e.g. Slack <@U…> mentions)
+	// to human names BEFORE the text reaches the classifier/LLM and the trace,
+	// so summaries/replies never surface raw IDs. nil = identity. Connector-blind:
+	// a Slack-aware cleaner is a no-op on GitHub text.
+	TextClean func(ctx context.Context, text string) string
+
 	now    func() time.Time
 	newID  func() string
 	cache  *verdictCache
@@ -76,7 +82,8 @@ func (c *Cascade) ObserveBackfill(ctx context.Context, ev monitor.InboundEvent) 
 // trace at every exit.
 func (c *Cascade) observe(ctx context.Context, ev monitor.InboundEvent, origin string) error {
 	start := c.now()
-	tr := c.newTrace(ev, origin)
+	cleaned := c.cleanText(ctx, ev.Text)
+	tr := c.newTrace(ev, origin, cleaned)
 	cfg := c.Config
 	if c.ConfigFn != nil {
 		cfg = c.ConfigFn()
@@ -95,7 +102,7 @@ func (c *Cascade) observe(ctx context.Context, ev monitor.InboundEvent, origin s
 		return nil
 	}
 
-	in := ClassifyInput{ThreadKey: s0.ThreadKey, Source: connectorOf(ev), Author: ev.UserID, Text: ev.Text}
+	in := ClassifyInput{ThreadKey: s0.ThreadKey, Source: connectorOf(ev), Author: ev.UserID, Text: cleaned}
 
 	rel, err := Stage1Relevance(ctx, []ClassifyInput{in})
 	if err != nil {
@@ -192,7 +199,8 @@ func (c *Cascade) ObserveBatch(ctx context.Context, evs []monitor.InboundEvent) 
 	var inputs []ClassifyInput
 	for _, ev := range evs {
 		start := c.now()
-		tr := c.newTrace(ev, "backfill")
+		cleaned := c.cleanText(ctx, ev.Text)
+		tr := c.newTrace(ev, "backfill", cleaned)
 		s0 := Stage0(ev, cfg)
 		if !s0.Pass {
 			tr.Disposition, tr.StageReached, tr.DropReason = "dropped", "stage0", s0.DropReason
@@ -205,7 +213,7 @@ func (c *Cascade) ObserveBatch(ctx context.Context, evs []monitor.InboundEvent) 
 			c.emitTrace(tr, start)
 			continue
 		}
-		in := ClassifyInput{ThreadKey: s0.ThreadKey, Source: connectorOf(ev), Author: ev.UserID, Text: ev.Text}
+		in := ClassifyInput{ThreadKey: s0.ThreadKey, Source: connectorOf(ev), Author: ev.UserID, Text: cleaned}
 		survivors = append(survivors, pending{in, tr, start})
 		inputs = append(inputs, in)
 	}
@@ -243,9 +251,20 @@ func (c *Cascade) ObserveBatch(ctx context.Context, evs []monitor.InboundEvent) 
 	return firstErr
 }
 
+// cleanText rewrites connector markup (Slack <@U…> mentions, etc.) to human
+// names before the text reaches the classifier/LLM and the trace. nil = the
+// text passes through unchanged.
+func (c *Cascade) cleanText(ctx context.Context, text string) string {
+	if c.TextClean != nil {
+		return c.TextClean(ctx, text)
+	}
+	return text
+}
+
 // newTrace seeds a decision-trace row from the inbound event with the fields
-// known before any stage runs.
-func (c *Cascade) newTrace(ev monitor.InboundEvent, origin string) *flowdb.SteeringTrace {
+// known before any stage runs. cleaned is the de-ID'd message text (see
+// cleanText) used for the stored preview so the trace never surfaces raw IDs.
+func (c *Cascade) newTrace(ev monitor.InboundEvent, origin, cleaned string) *flowdb.SteeringTrace {
 	return &flowdb.SteeringTrace{
 		ID:          c.newID(),
 		CreatedAt:   c.now().UTC().Format(time.RFC3339),
@@ -254,7 +273,7 @@ func (c *Cascade) newTrace(ev monitor.InboundEvent, origin string) *flowdb.Steer
 		Channel:     ev.Channel,
 		ChannelType: ev.ChannelType,
 		Author:      ev.UserID,
-		TextPreview: preview(ev.Text),
+		TextPreview: preview(cleaned),
 		Model:       classifierModel(),
 		TS:          ev.TS,
 		TeamID:      ev.TeamID,

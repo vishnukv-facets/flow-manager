@@ -39,6 +39,19 @@ func TestDeepTriagePromptUsesSourceHint(t *testing.T) {
 	}
 }
 
+func TestPromptsInstructUseNamesNotIDs(t *testing.T) {
+	const want = "never output raw platform IDs"
+	if !strings.Contains(stage1Prime(), want) {
+		t.Errorf("stage1Prime must instruct the model to use names not IDs")
+	}
+	if !strings.Contains(stage2Prime("Tasks:\n(none)"), want) {
+		t.Errorf("stage2Prime must instruct the model to use names not IDs")
+	}
+	if !strings.Contains(deepTriagePrompt(ClassifyInput{Source: "slack"}, "Tasks:\n(none)"), want) {
+		t.Errorf("deepTriagePrompt must instruct the model to use names not IDs")
+	}
+}
+
 func TestDeepTriage(t *testing.T) {
 	stubDeepTriage(t, func(prompt string) (string, error) {
 		if !strings.Contains(prompt, "MODE: stage3-deep") {

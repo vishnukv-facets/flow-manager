@@ -298,6 +298,62 @@ func TestObserveBatchSingleStage1Call(t *testing.T) {
 	}
 }
 
+func TestCascadeTextCleanDeIDsBeforeLLMAndTrace(t *testing.T) {
+	c, _ := cascadeFixture(t)
+	traces := captureTraces(c)
+	// A fake cleaner that rewrites the raw Slack mention markup to a name,
+	// mimicking SlackNameResolver.CleanText without a Slack token.
+	c.TextClean = func(_ context.Context, text string) string {
+		return strings.ReplaceAll(text, "<@U1>", "@alice")
+	}
+	var stage1Prompt string
+	stubClassifier(t, func(prompt string) (string, error) {
+		if strings.Contains(prompt, "MODE: stage1-relevance") {
+			stage1Prompt = prompt
+			return `[{"thread_key":"C1:1.1","relevant":false}]`, nil // drop cheaply after stage1
+		}
+		return `{"suggested_action":"reply","confidence":0.8}`, nil
+	})
+	if err := c.Observe(context.Background(), msg("C1", "1.1", "U_OTHER", "hi <@U1>")); err != nil {
+		t.Fatalf("Observe: %v", err)
+	}
+	// The classifier must have received the CLEANED text (no raw <@U…>).
+	if !strings.Contains(stage1Prompt, "@alice") {
+		t.Errorf("stage1 prompt should carry the cleaned mention, got:\n%s", stage1Prompt)
+	}
+	if strings.Contains(stage1Prompt, "<@U1>") {
+		t.Errorf("stage1 prompt must NOT carry the raw mention markup, got:\n%s", stage1Prompt)
+	}
+	// And the trace preview must store the cleaned text too.
+	if len(*traces) != 1 {
+		t.Fatalf("trace count = %d, want 1", len(*traces))
+	}
+	tr := (*traces)[0]
+	if !strings.Contains(tr.TextPreview, "@alice") {
+		t.Errorf("trace TextPreview should carry cleaned text, got %q", tr.TextPreview)
+	}
+	if strings.Contains(tr.TextPreview, "<@U1>") {
+		t.Errorf("trace TextPreview must NOT carry raw mention markup, got %q", tr.TextPreview)
+	}
+}
+
+func TestCascadeTextCleanNilIsIdentity(t *testing.T) {
+	c, _ := cascadeFixture(t) // TextClean unset
+	traces := captureTraces(c)
+	stubClassifier(t, func(prompt string) (string, error) {
+		return `[{"thread_key":"C1:2.1","relevant":false}]`, nil
+	})
+	if err := c.Observe(context.Background(), msg("C1", "2.1", "U_OTHER", "raw <@U1> stays")); err != nil {
+		t.Fatalf("Observe: %v", err)
+	}
+	if len(*traces) != 1 {
+		t.Fatalf("trace count = %d, want 1", len(*traces))
+	}
+	if (*traces)[0].TextPreview != "raw <@U1> stays" {
+		t.Errorf("nil TextClean must pass text through unchanged, got %q", (*traces)[0].TextPreview)
+	}
+}
+
 func TestCascadeConfigFnOverridesStatic(t *testing.T) {
 	c, _ := cascadeFixture(t) // static Config watches C1 (see cascadeFixture)
 	// ConfigFn watches a DIFFERENT channel — proves Observe consults ConfigFn,
