@@ -253,6 +253,23 @@ func (s *Server) ListenAndServe(addr string) int {
 			go sbf.Run(sbfCtx)
 		}
 	}
+	// One-shot tag backfill: re-link steerer-created tasks (make_task / send_reply)
+	// to their source thread. Tasks spawned before source-thread tagging carry no
+	// slack-thread:/gh- linkage, so replies on those threads — in-thread or
+	// forwarded into a DM — can't route home. This derives the linkage purely from
+	// stored feed rows (no network), so existing data starts routing too.
+	if s.cfg.DB != nil {
+		go func() {
+			n, err := steering.BackfillFeedTaskThreadTags(s.cfg.DB, func(format string, args ...any) {
+				fmt.Fprintf(os.Stderr, "[thread-tag backfill] "+format+"\n", args...)
+			})
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "[thread-tag backfill] %v\n", err)
+			} else if n > 0 {
+				fmt.Fprintf(os.Stderr, "[thread-tag backfill] linked %d existing task(s) to their source thread\n", n)
+			}
+		}()
+	}
 	// Start the GitHub polling listener when explicitly enabled. Like
 	// Slack, Start() is a no-op when env config is incomplete.
 	if s.githubListener != nil {
