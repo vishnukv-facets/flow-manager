@@ -1,6 +1,6 @@
-import { useState, type ReactNode } from 'react'
+import { useEffect, useState, type ReactNode } from 'react'
 import { useLocation } from 'wouter'
-import { AlertTriangle, ArrowRight, AtSign, Check, ExternalLink, Filter, Github, Hash, Inbox, ListPlus, Lock, MessageSquare, Play, Share2 } from 'lucide-react'
+import { AlertTriangle, ArrowRight, AtSign, Check, ExternalLink, Filter, Github, Hash, Inbox, ListPlus, Lock, MessageSquare, Play, Send, Share2 } from 'lucide-react'
 import { useAction, useAttention, useAttentionDecision, useAttentionTrace } from '../lib/query'
 import { useDocumentTitle } from '../lib/useDocumentTitle'
 import { EmptyState, ErrorNote, Loading, SourceIcon } from '../components/ui'
@@ -190,6 +190,14 @@ function AttentionCard({
               <Share2 size={13} /> Forward
             </button>
           ) : null}
+          {item.draft ? (
+            // Opens the detail modal (review/edit before sending) rather than
+            // blind-sending — the action row already stopPropagation's the
+            // card-body open, so call onOpen explicitly here.
+            <button type="button" className="btn sm" disabled={disabled} onClick={onOpen}>
+              <Send size={13} /> Send reply
+            </button>
+          ) : null}
           <button type="button" className="btn ghost sm" disabled={disabled} onClick={() => onAct(item, 'dismiss')}>
             <Check size={13} /> Dismiss
           </button>
@@ -219,8 +227,25 @@ function AttentionCard({
 function FeedDetail({ item, onClose }: { item: AttentionItem | null; onClose: () => void }) {
   // Hooks must run unconditionally; pass null while closed so the query stays idle.
   const { data: trace, isLoading, isError } = useAttentionDecision(item?.id ?? null)
+  const action = useAction()
+  // Editable draft, controlled. Reset to the item's draft whenever the open
+  // item changes (keyed by id), so reopening a different card doesn't keep the
+  // previous edit. `item.draft ?? ''` covers items with no draft.
+  const [replyText, setReplyText] = useState('')
+  const itemId = item?.id ?? null
+  useEffect(() => {
+    setReplyText(item?.draft ?? '')
+  }, [itemId, item?.draft])
   // Keep the modal mounted (empty) while closed so content doesn't blank mid-anim.
   if (!item) return <Modal open={false} onClose={onClose} title="" children={null} />
+
+  const sendReply = () => {
+    if (action.isPending || !replyText.trim()) return
+    action.mutate(
+      { kind: 'attention-act', target: item.id, attention_action: 'send-reply', reply_text: replyText },
+      { onSuccess: onClose },
+    )
+  }
 
   const sourceLabel = item.source === 'github' ? 'GitHub' : titleCase(item.source || 'message')
   const title = `${sourceLabel} · ${titleCase(item.suggested_action || '—')}`
@@ -244,10 +269,35 @@ function FeedDetail({ item, onClose }: { item: AttentionItem | null; onClose: ()
         </div>
 
         {item.draft ? (
-          <div className="td-section">
-            <div className="eyebrow">drafted reply</div>
-            <div className="att-draft-body td-message">{item.draft}</div>
-          </div>
+          item.status === 'new' ? (
+            // Editable before sending — the agent posts the (possibly edited)
+            // text from its own session (Slack/GitHub).
+            <div className="td-section">
+              <div className="eyebrow">drafted reply</div>
+              <textarea
+                className="input"
+                rows={4}
+                value={replyText}
+                onChange={(e) => setReplyText(e.target.value)}
+                style={{ marginTop: 5 }}
+              />
+              <div className="row gap" style={{ marginTop: 8 }}>
+                <button
+                  type="button"
+                  className="btn primary sm"
+                  disabled={action.isPending || !replyText.trim()}
+                  onClick={sendReply}
+                >
+                  <Send size={13} /> Send reply
+                </button>
+              </div>
+            </div>
+          ) : (
+            <div className="td-section">
+              <div className="eyebrow">drafted reply</div>
+              <div className="att-draft-body td-message">{item.draft}</div>
+            </div>
+          )
         ) : null}
 
         <div className="td-section">

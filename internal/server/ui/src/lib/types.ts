@@ -559,6 +559,7 @@ export interface ActionRequest {
   permission_mode?: string
   mkdir?: boolean
   attention_action?: string
+  reply_text?: string
 }
 
 export interface AttentionItem {
