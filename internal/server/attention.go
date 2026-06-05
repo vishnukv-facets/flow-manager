@@ -347,12 +347,13 @@ func (s *Server) steeringTraceView(ctx context.Context, t flowdb.SteeringTrace) 
 			v.AuthorName = s.nameResolver.UserName(ctx, t.Author)
 			v.Text = s.nameResolver.CleanText(ctx, t.TextPreview)
 		}
-		// Prefer a real https permalink (resolved from channel+ts); fall back to
-		// the slack:// deep link.
-		v.Permalink = s.slackPermalinker.Permalink(ctx, ch, ts)
-		if v.Permalink == "" {
-			v.Permalink = connectorPermalink(t.Source, t.TeamID, ch, ts, t.URL)
-		}
+		// The trace LIST can be hundreds of rows and does NOT display a
+		// permalink (only the detail modal does), so resolve the cheap slack://
+		// deep link here — never the network getPermalink per row, which would
+		// re-introduce the serial-per-row load stall. New traces carry team_id;
+		// older ones fall back to no link in the trace view (the FEED resolves a
+		// real https permalink, since cards show it and the feed is small).
+		v.Permalink = connectorPermalink(t.Source, t.TeamID, ch, ts, t.URL)
 	}
 	if v.Text == "" {
 		v.Text = t.TextPreview
