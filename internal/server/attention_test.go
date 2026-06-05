@@ -1,14 +1,17 @@
 package server
 
 import (
+	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
 	"testing"
 
 	"flow/internal/flowdb"
+	"flow/internal/monitor"
 )
 
 func attentionTestServer(t *testing.T) (*Server, *sql.DB) {
@@ -87,5 +90,44 @@ func TestAttentionItemView(t *testing.T) {
 	v := attentionItemView(flowdb.FeedItem{ID: "x", Source: "slack", ThreadKey: "C1:1.1", Summary: "hi", SuggestedAction: "reply", Confidence: 0.5, Status: "new", CreatedAt: "2026-06-05T10:00:00Z"})
 	if v.ID != "x" || v.Source != "slack" || v.SuggestedAction != "reply" || v.Confidence != 0.5 {
 		t.Errorf("view = %+v", v)
+	}
+}
+
+func TestHandleSlackChannels(t *testing.T) {
+	s, _ := attentionTestServer(t)
+	old := listSlackChannelsFn
+	listSlackChannelsFn = func(_ context.Context) ([]monitor.SlackChannelInfo, error) {
+		return []monitor.SlackChannelInfo{{ID: "C1", Name: "general", IsMember: true}}, nil
+	}
+	t.Cleanup(func() { listSlackChannelsFn = old })
+
+	req := httptest.NewRequest(http.MethodGet, "/api/slack/channels", nil)
+	rec := httptest.NewRecorder()
+	s.handleSlackChannels(rec, req)
+	if rec.Code != 200 {
+		t.Fatalf("status = %d, want 200", rec.Code)
+	}
+	var chans []monitor.SlackChannelInfo
+	if err := json.Unmarshal(rec.Body.Bytes(), &chans); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if len(chans) != 1 || chans[0].ID != "C1" {
+		t.Errorf("chans = %+v", chans)
+	}
+}
+
+func TestHandleSlackChannelsError(t *testing.T) {
+	s, _ := attentionTestServer(t)
+	old := listSlackChannelsFn
+	listSlackChannelsFn = func(_ context.Context) ([]monitor.SlackChannelInfo, error) {
+		return nil, errors.New("slack down")
+	}
+	t.Cleanup(func() { listSlackChannelsFn = old })
+
+	req := httptest.NewRequest(http.MethodGet, "/api/slack/channels", nil)
+	rec := httptest.NewRecorder()
+	s.handleSlackChannels(rec, req)
+	if rec.Code != http.StatusBadGateway {
+		t.Errorf("status = %d, want 502", rec.Code)
 	}
 }

@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"flow/internal/flowdb"
+	"flow/internal/monitor"
 	"flow/internal/steering"
 )
 
@@ -76,4 +77,24 @@ func (s *Server) attentionAct(req actionRequest) (actionResponse, int) {
 	default:
 		return actionResponse{OK: false, Message: "unknown attention action: " + req.AttentionAction}, http.StatusBadRequest
 	}
+}
+
+// listSlackChannelsFn is the mockable seam for the channel-list endpoint.
+var listSlackChannelsFn = monitor.ListSlackChannels
+
+// handleSlackChannels serves GET /api/slack/channels — the channel list for
+// the steering watch-channel picker.
+func (s *Server) handleSlackChannels(w http.ResponseWriter, r *http.Request) {
+	if !getOnly(w, r) {
+		return
+	}
+	channels, err := listSlackChannelsFn(r.Context())
+	if err != nil {
+		writeError(w, err, http.StatusBadGateway)
+		return
+	}
+	if channels == nil {
+		channels = []monitor.SlackChannelInfo{}
+	}
+	writeJSON(w, channels)
 }
