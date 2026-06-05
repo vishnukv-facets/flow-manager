@@ -4,6 +4,7 @@ package steering
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -12,6 +13,14 @@ import (
 	"flow/internal/flowdb"
 	"flow/internal/monitor"
 )
+
+// captureTraces wires c.trace to append into a slice and returns a pointer to
+// it, so a test can assert on the decision-trace rows the cascade emits.
+func captureTraces(c *Cascade) *[]flowdb.SteeringTrace {
+	var traces []flowdb.SteeringTrace
+	c.trace = func(t flowdb.SteeringTrace) { traces = append(traces, t) }
+	return &traces
+}
 
 func cascadeFixture(t *testing.T) (*Cascade, *sql.DB) {
 	t.Helper()
@@ -128,6 +137,130 @@ func TestCascadeBudgetExhaustionSurfacesStage2(t *testing.T) {
 	items, _ := flowdb.ListFeedItems(db, "new")
 	if len(items) != 1 || items[0].Summary != "stage2 only" {
 		t.Errorf("budget exhaustion must still surface the stage2 verdict, got %+v", items)
+	}
+}
+
+func TestObserveTraceStage0Drop(t *testing.T) {
+	c, _ := cascadeFixture(t)
+	traces := captureTraces(c)
+	// self-authored (U_ME is in cfg.Identity.UserIDs) → Stage0 drop, no model call
+	if err := c.Observe(context.Background(), msg("C1", "10.1", "U_ME", "note")); err != nil {
+		t.Fatalf("Observe: %v", err)
+	}
+	if len(*traces) != 1 {
+		t.Fatalf("trace count = %d, want exactly 1", len(*traces))
+	}
+	tr := (*traces)[0]
+	if tr.Disposition != "dropped" || tr.StageReached != "stage0" || tr.DropReason != "self-authored" {
+		t.Errorf("trace = %+v; want dropped/stage0/self-authored", tr)
+	}
+}
+
+func TestObserveTraceSurfaced(t *testing.T) {
+	c, _ := cascadeFixture(t)
+	traces := captureTraces(c)
+	stubClassifier(t, func(prompt string) (string, error) {
+		if strings.Contains(prompt, "MODE: stage1-relevance") {
+			return `[{"thread_key":"C1:11.1","relevant":true}]`, nil
+		}
+		return `{"suggested_action":"make_task","confidence":0.72,"summary":"do it"}`, nil // stage2
+	})
+	stubDeepTriage(t, func(prompt string) (string, error) {
+		return `{"suggested_action":"make_task","confidence":0.9,"summary":"deep","draft":""}`, nil
+	})
+	if err := c.Observe(context.Background(), msg("C1", "11.1", "U_OTHER", "please do this")); err != nil {
+		t.Fatalf("Observe: %v", err)
+	}
+	if len(*traces) != 1 {
+		t.Fatalf("trace count = %d, want exactly 1", len(*traces))
+	}
+	tr := (*traces)[0]
+	if tr.Disposition != "surfaced" || tr.StageReached != "stage3" {
+		t.Errorf("trace disposition/stage = %s/%s; want surfaced/stage3", tr.Disposition, tr.StageReached)
+	}
+	if tr.FeedItemID == "" {
+		t.Error("surfaced trace must record a FeedItemID")
+	}
+	if tr.FinalAction != "make_task" {
+		t.Errorf("FinalAction = %q, want make_task", tr.FinalAction)
+	}
+	if tr.Stage1Relevant == nil || !*tr.Stage1Relevant {
+		t.Errorf("Stage1Relevant = %v, want non-nil true", tr.Stage1Relevant)
+	}
+}
+
+func TestObserveTraceCacheDuplicate(t *testing.T) {
+	c, _ := cascadeFixture(t)
+	traces := captureTraces(c)
+	stubClassifier(t, func(prompt string) (string, error) {
+		if strings.Contains(prompt, "MODE: stage1-relevance") {
+			return `[{"thread_key":"C1:12.1","relevant":true}]`, nil
+		}
+		return `{"suggested_action":"reply","confidence":0.8}`, nil
+	})
+	stubDeepTriage(t, func(prompt string) (string, error) {
+		return `{"suggested_action":"reply","confidence":0.9,"summary":"q"}`, nil
+	})
+	ev := msg("C1", "12.1", "U_OTHER", "help")
+	if err := c.Observe(context.Background(), ev); err != nil {
+		t.Fatalf("first Observe: %v", err)
+	}
+	if err := c.Observe(context.Background(), ev); err != nil { // same thread within TTL
+		t.Fatalf("second Observe: %v", err)
+	}
+	if len(*traces) != 2 {
+		t.Fatalf("trace count = %d, want 2 (one per Observe)", len(*traces))
+	}
+	second := (*traces)[1]
+	if second.Disposition != "dropped" || second.StageReached != "cache" {
+		t.Errorf("second trace = %s/%s; want dropped/cache", second.Disposition, second.StageReached)
+	}
+}
+
+// stage1RelevanceCalls counts how many classifier prompts contained the
+// stage1-relevance mode marker (reset per test).
+var stage1RelevanceCalls int
+
+func TestObserveBatchSingleStage1Call(t *testing.T) {
+	c, _ := cascadeFixture(t)
+	traces := captureTraces(c)
+	stage1RelevanceCalls = 0
+	stubClassifier(t, func(prompt string) (string, error) {
+		if strings.Contains(prompt, "MODE: stage1-relevance") {
+			stage1RelevanceCalls++
+			// Echo every input thread_key back as relevant so Stage1Relevance
+			// (which matches by key and fails closed) blesses both survivors.
+			i := strings.Index(prompt, "[")
+			j := strings.LastIndex(prompt, "]")
+			var inputs []ClassifyInput
+			if i >= 0 && j > i {
+				_ = json.Unmarshal([]byte(prompt[i:j+1]), &inputs)
+			}
+			out := make([]RelevanceVerdict, 0, len(inputs))
+			for _, in := range inputs {
+				out = append(out, RelevanceVerdict{ThreadKey: in.ThreadKey, Relevant: true})
+			}
+			b, _ := json.Marshal(out)
+			return string(b), nil
+		}
+		return `{"suggested_action":"reply","confidence":0.8,"summary":"q"}`, nil // stage2
+	})
+	stubDeepTriage(t, func(prompt string) (string, error) {
+		return `{"suggested_action":"reply","confidence":0.9,"summary":"q"}`, nil
+	})
+	evs := []monitor.InboundEvent{
+		msg("C1", "20.1", "U_ME", "self note"),  // stage0 drop
+		msg("C1", "21.1", "U_OTHER", "need a hand"),
+		msg("C1", "22.1", "U_OTHER", "another one"),
+	}
+	if err := c.ObserveBatch(context.Background(), evs); err != nil {
+		t.Fatalf("ObserveBatch: %v", err)
+	}
+	if stage1RelevanceCalls != 1 {
+		t.Errorf("stage1-relevance call count = %d, want exactly 1 (one batched call)", stage1RelevanceCalls)
+	}
+	if len(*traces) != 3 {
+		t.Errorf("trace count = %d, want 3 (one per event)", len(*traces))
 	}
 }
 
