@@ -191,6 +191,12 @@ CREATE TABLE IF NOT EXISTS steering_trace (
     model             TEXT
 );
 
+CREATE TABLE IF NOT EXISTS steering_watermark (
+    channel    TEXT PRIMARY KEY,
+    last_ts    TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+
 -- Two FTS indexes over search_docs, partitioned by scope. Transcripts are
 -- enormous (whole-session JSONL — ~100x the size of all briefs/updates/memories
 -- combined) and searched only on demand, so they live in their own index:
