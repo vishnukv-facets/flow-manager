@@ -65,6 +65,12 @@ func New(cfg Config) *Server {
 		cascade := steering.NewCascade(cfg.DB, steering.WatchConfigFromEnv())
 		cascade.ConfigFn = steering.WatchConfigFromEnv // live re-read on settings changes
 		dispatcher.Steerer = cascade
+		s.cascade = cascade
+		// Reuse a primed Haiku session across the cheap classifier stages (the
+		// heavy framing + task index sent once at session creation, only the
+		// per-message payload on each resume). No-op when
+		// FLOW_STEERING_SESSION_REUSE=0.
+		steering.EnableClassifierSessions()
 		slackListener := monitor.NewSlackListener(dispatcher)
 		slackListener.SetChangeNotifier(func(kind string) {
 			s.publishUIChange(kind)
@@ -207,6 +213,28 @@ func (s *Server) ListenAndServe(addr string) int {
 			go backfill.Run(bfCtx)
 		}
 	}
+	// Steerer backfill. The reaction backfill above only reconciles already-
+	// tracked threads; the steerer's continuous path (untracked firehose) has
+	// no catch-up of its own, so anything that arrives in a watched channel or
+	// DM while the socket is down — including before the steerer ever ran — is
+	// lost. This sweeps watched channels (bot token) + DMs (user token) via
+	// conversations.history since a per-channel watermark and replays them
+	// through the SAME cascade (ObserveBatch, origin=backfill). No-op when no
+	// Slack history client is configured or FLOW_STEERING_BACKFILL=0.
+	if s.cfg.DB != nil && s.cascade != nil && steeringBackfillEnabled() {
+		ch := monitor.NewSlackHistoryClient()
+		dm := monitor.NewSlackUserHistoryClient()
+		ims := monitor.NewSlackUserIMLister()
+		if ch != nil || (dm != nil && ims != nil) {
+			sbf := steering.NewSteeringBackfill(s.cfg.DB, s.cascade.ObserveBatch, ch, dm, ims, steering.WatchConfigFromEnv, 0, 0, 0)
+			sbf.SetLogger(func(format string, args ...any) {
+				fmt.Fprintf(os.Stderr, "[steering backfill] "+format+"\n", args...)
+			})
+			sbfCtx, sbfCancel := context.WithCancel(context.Background())
+			defer sbfCancel()
+			go sbf.Run(sbfCtx)
+		}
+	}
 	// Start the GitHub polling listener when explicitly enabled. Like
 	// Slack, Start() is a no-op when env config is incomplete.
 	if s.githubListener != nil {
@@ -249,6 +277,18 @@ func (s *Server) ListenAndServe(addr string) int {
 			return 1
 		}
 		return 0
+	}
+}
+
+// steeringBackfillEnabled reports whether the steerer catch-up sweep should
+// run. Defaults on; set FLOW_STEERING_BACKFILL=0 to disable while leaving the
+// rest of the steerer wired.
+func steeringBackfillEnabled() bool {
+	switch strings.ToLower(strings.TrimSpace(os.Getenv("FLOW_STEERING_BACKFILL"))) {
+	case "0", "false", "no", "off":
+		return false
+	default:
+		return true
 	}
 }
 

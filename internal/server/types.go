@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"flow/internal/monitor"
+	"flow/internal/steering"
 )
 
 type Config struct {
@@ -30,7 +31,12 @@ type Server struct {
 	caches         *uiCaches
 	slackListener  *monitor.SlackListener
 	githubListener *monitor.GitHubListener
-	inboxMonitors  *inboxMonitorManager
+	// cascade is the steering (attention-router) triage brain the dispatcher
+	// routes untracked messages into. Held on the server so the steerer
+	// backfill (ListenAndServe) can replay catch-up messages through the SAME
+	// cascade via ObserveBatch. Nil when no DB is configured.
+	cascade       *steering.Cascade
+	inboxMonitors *inboxMonitorManager
 	dbWatcher      *dbWatcher
 	// nameResolver maps Slack user/channel IDs to display names for the
 	// Inbox UI, caching lookups across requests. Nil when no Slack token is
