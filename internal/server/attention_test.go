@@ -292,6 +292,56 @@ func TestHandleAttentionTrace(t *testing.T) {
 	}
 }
 
+func TestHandleAttentionDecision(t *testing.T) {
+	s, db := attentionTestServer(t)
+	seedFeedItem(t, db, "fd1", "new")
+	// A trace whose feed_item_id points at the seeded feed item.
+	if err := flowdb.InsertSteeringTrace(db, flowdb.SteeringTrace{
+		ID: "dt1", CreatedAt: "2026-06-05T10:00:00Z", Origin: "live", Source: "slack",
+		Channel: "C1", ChannelType: "channel", Author: "u1", ThreadKey: "C1:fd1",
+		TextPreview: "why", Disposition: "surfaced", StageReached: "stage3",
+		FinalAction: "forward", FeedItemID: "fd1", LatencyMS: 12,
+	}); err != nil {
+		t.Fatalf("seed trace: %v", err)
+	}
+
+	// --- happy path ----------------------------------------------------------
+	req := httptest.NewRequest(http.MethodGet, "/api/attention/decision?feed_id=fd1", nil)
+	rec := httptest.NewRecorder()
+	s.handleAttentionDecision(rec, req)
+	if rec.Code != 200 {
+		t.Fatalf("status = %d, want 200; body: %s", rec.Code, rec.Body.String())
+	}
+	var view SteeringTraceView
+	if err := json.Unmarshal(rec.Body.Bytes(), &view); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if view.ID != "dt1" || view.FinalAction != "forward" || view.FeedItemID != "fd1" {
+		t.Errorf("view = %+v, want dt1/forward/fd1", view)
+	}
+
+	// --- missing feed_id → 400 -----------------------------------------------
+	rec2 := httptest.NewRecorder()
+	s.handleAttentionDecision(rec2, httptest.NewRequest(http.MethodGet, "/api/attention/decision", nil))
+	if rec2.Code != http.StatusBadRequest {
+		t.Errorf("missing feed_id → %d, want 400", rec2.Code)
+	}
+
+	// --- unknown feed_id → 404 -----------------------------------------------
+	rec3 := httptest.NewRecorder()
+	s.handleAttentionDecision(rec3, httptest.NewRequest(http.MethodGet, "/api/attention/decision?feed_id=ghost", nil))
+	if rec3.Code != http.StatusNotFound {
+		t.Errorf("unknown feed_id → %d, want 404", rec3.Code)
+	}
+
+	// --- POST rejected -------------------------------------------------------
+	rec4 := httptest.NewRecorder()
+	s.handleAttentionDecision(rec4, httptest.NewRequest(http.MethodPost, "/api/attention/decision?feed_id=fd1", nil))
+	if rec4.Code != http.StatusMethodNotAllowed {
+		t.Errorf("POST → %d, want 405", rec4.Code)
+	}
+}
+
 func TestConnectorPermalink(t *testing.T) {
 	// Slack: full team/channel/ts → deep link.
 	if got, want := connectorPermalink("slack", "T1", "C1", "123.45", ""), "slack://channel?team=T1&id=C1&message=123.45"; got != want {

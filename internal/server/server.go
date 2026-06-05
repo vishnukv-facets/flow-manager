@@ -129,6 +129,7 @@ func (s *Server) registerAPIRoutes(mux *http.ServeMux) {
 	// redirect URL); see slack_setup.go.
 	mux.HandleFunc("/api/attention", s.handleAttention)
 	mux.HandleFunc("/api/attention/trace", s.handleAttentionTrace)
+	mux.HandleFunc("/api/attention/decision", s.handleAttentionDecision)
 	mux.HandleFunc("/api/slack/channels", s.handleSlackChannels)
 	mux.HandleFunc("/api/slack/setup/status", s.handleSlackSetupStatus)
 	mux.HandleFunc("/api/slack/setup/create-app", s.handleSlackSetupCreateApp)

@@ -120,6 +120,50 @@ func TestSteeringTraceInsertAndList(t *testing.T) {
 	}
 }
 
+func TestGetSteeringTraceByFeedItem(t *testing.T) {
+	db := openTempDB(t)
+
+	traces := []SteeringTrace{
+		{ID: "g1", CreatedAt: "2026-06-05T08:00:00Z", Origin: "live", Source: "slack",
+			Disposition: "surfaced", StageReached: "stage3", FeedItemID: "fi-A", FinalAction: "reply"},
+		// A newer row for the SAME feed item — GetSteeringTraceByFeedItem must
+		// return this one (most recent).
+		{ID: "g2", CreatedAt: "2026-06-05T09:00:00Z", Origin: "live", Source: "slack",
+			Disposition: "surfaced", StageReached: "stage3", FeedItemID: "fi-A", FinalAction: "forward"},
+		{ID: "g3", CreatedAt: "2026-06-05T10:00:00Z", Origin: "live", Source: "github",
+			Disposition: "surfaced", StageReached: "stage3", FeedItemID: "fi-B", FinalAction: "make_task"},
+	}
+	for _, tr := range traces {
+		if err := InsertSteeringTrace(db, tr); err != nil {
+			t.Fatalf("seed %s: %v", tr.ID, err)
+		}
+	}
+
+	got, err := GetSteeringTraceByFeedItem(db, "fi-A")
+	if err != nil {
+		t.Fatalf("GetSteeringTraceByFeedItem(fi-A): %v", err)
+	}
+	if got.ID != "g2" {
+		t.Errorf("ID = %q, want g2 (most recent for fi-A)", got.ID)
+	}
+	if got.FinalAction != "forward" {
+		t.Errorf("FinalAction = %q, want forward", got.FinalAction)
+	}
+
+	got2, err := GetSteeringTraceByFeedItem(db, "fi-B")
+	if err != nil {
+		t.Fatalf("GetSteeringTraceByFeedItem(fi-B): %v", err)
+	}
+	if got2.ID != "g3" || got2.Source != "github" {
+		t.Errorf("fi-B trace = %+v, want g3/github", got2)
+	}
+
+	// Unknown feed item → error.
+	if _, err := GetSteeringTraceByFeedItem(db, "nope"); err == nil {
+		t.Error("GetSteeringTraceByFeedItem(unknown) should return an error")
+	}
+}
+
 func TestSteeringTraceStage1RelevantRoundTrip(t *testing.T) {
 	db := openTempDB(t)
 

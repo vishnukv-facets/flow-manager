@@ -210,6 +210,27 @@ func (s *Server) handleAttentionTrace(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, resp)
 }
 
+// handleAttentionDecision serves GET /api/attention/decision?feed_id=<id> —
+// the resolved cascade-decision trace for one feed item (the "why"). 404 when
+// the feed item predates tracing.
+func (s *Server) handleAttentionDecision(w http.ResponseWriter, r *http.Request) {
+	if !getOnly(w, r) {
+		return
+	}
+	feedID := strings.TrimSpace(r.URL.Query().Get("feed_id"))
+	if feedID == "" {
+		writeError(w, fmt.Errorf("feed_id required"), http.StatusBadRequest)
+		return
+	}
+	t, err := flowdb.GetSteeringTraceByFeedItem(s.cfg.DB, feedID)
+	if err != nil {
+		writeError(w, err, http.StatusNotFound)
+		return
+	}
+	s.warmSlackNames(r.Context(), []string{t.Author}, []string{t.Channel})
+	writeJSON(w, s.steeringTraceView(r.Context(), t))
+}
+
 func steeringFunnelView(f flowdb.SteeringFunnel) SteeringFunnelView {
 	return SteeringFunnelView{
 		Observed:      f.Observed,

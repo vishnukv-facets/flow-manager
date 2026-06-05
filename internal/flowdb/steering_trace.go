@@ -67,6 +67,89 @@ func InsertSteeringTrace(db *sql.DB, t SteeringTrace) error {
 	return nil
 }
 
+// steeringTraceCols is the SELECT column list shared by ListSteeringTrace and
+// GetSteeringTraceByFeedItem; scanSteeringTrace consumes rows in this order.
+const steeringTraceCols = `
+	id, created_at, origin, source,
+	channel, channel_type, author, thread_key, text_preview,
+	disposition, stage_reached, drop_reason,
+	stage1_relevant,
+	stage2_action, stage2_confidence,
+	stage3_action, stage3_confidence,
+	final_action, final_confidence,
+	feed_item_id, error,
+	latency_ms, model,
+	ts, team_id, url`
+
+// scanSteeringTrace scans one steering_trace row (columns in steeringTraceCols
+// order) into a SteeringTrace, handling the NULLable columns.
+func scanSteeringTrace(rows interface {
+	Scan(dest ...any) error
+}) (SteeringTrace, error) {
+	var tr SteeringTrace
+	var channel, channelType, author, threadKey, textPreview, dropReason sql.NullString
+	var stage2Action, stage3Action, finalAction, feedItemID, errStr, model sql.NullString
+	var ts, teamID, url sql.NullString
+	var stage1Rel sql.NullInt64
+	var stage2Conf, stage3Conf, finalConf sql.NullFloat64
+
+	if err := rows.Scan(
+		&tr.ID, &tr.CreatedAt, &tr.Origin, &tr.Source,
+		&channel, &channelType, &author, &threadKey, &textPreview,
+		&tr.Disposition, &tr.StageReached, &dropReason,
+		&stage1Rel,
+		&stage2Action, &stage2Conf,
+		&stage3Action, &stage3Conf,
+		&finalAction, &finalConf,
+		&feedItemID, &errStr,
+		&tr.LatencyMS, &model,
+		&ts, &teamID, &url,
+	); err != nil {
+		return SteeringTrace{}, err
+	}
+
+	tr.Channel = channel.String
+	tr.ChannelType = channelType.String
+	tr.Author = author.String
+	tr.ThreadKey = threadKey.String
+	tr.TextPreview = textPreview.String
+	tr.DropReason = dropReason.String
+	tr.Stage2Action = stage2Action.String
+	tr.Stage2Confidence = stage2Conf.Float64
+	tr.Stage3Action = stage3Action.String
+	tr.Stage3Confidence = stage3Conf.Float64
+	tr.FinalAction = finalAction.String
+	tr.FinalConfidence = finalConf.Float64
+	tr.FeedItemID = feedItemID.String
+	tr.Error = errStr.String
+	tr.Model = model.String
+	tr.TS = ts.String
+	tr.TeamID = teamID.String
+	tr.URL = url.String
+
+	if stage1Rel.Valid {
+		v := stage1Rel.Int64 == 1
+		tr.Stage1Relevant = &v
+	}
+	return tr, nil
+}
+
+// GetSteeringTraceByFeedItem returns the most recent trace row that surfaced
+// the given feed item (feed_item_id == id). Returns (zero, sql.ErrNoRows-wrapped)
+// when none — older feed items predate tracing.
+func GetSteeringTraceByFeedItem(db *sql.DB, feedID string) (SteeringTrace, error) {
+	row := db.QueryRow(
+		`SELECT `+steeringTraceCols+`
+		FROM steering_trace WHERE feed_item_id = ? ORDER BY created_at DESC, id DESC LIMIT 1`,
+		feedID,
+	)
+	tr, err := scanSteeringTrace(row)
+	if err != nil {
+		return SteeringTrace{}, fmt.Errorf("flowdb: get steering trace by feed item %q: %w", feedID, err)
+	}
+	return tr, nil
+}
+
 // TraceFilter narrows ListSteeringTrace.
 type TraceFilter struct {
 	Disposition string // "" = all
@@ -81,17 +164,7 @@ func ListSteeringTrace(db *sql.DB, f TraceFilter) ([]SteeringTrace, error) {
 		limit = 200
 	}
 
-	q := `SELECT
-		id, created_at, origin, source,
-		channel, channel_type, author, thread_key, text_preview,
-		disposition, stage_reached, drop_reason,
-		stage1_relevant,
-		stage2_action, stage2_confidence,
-		stage3_action, stage3_confidence,
-		final_action, final_confidence,
-		feed_item_id, error,
-		latency_ms, model,
-		ts, team_id, url
+	q := `SELECT ` + steeringTraceCols + `
 	FROM steering_trace`
 
 	args := []any{}
@@ -125,52 +198,10 @@ func ListSteeringTrace(db *sql.DB, f TraceFilter) ([]SteeringTrace, error) {
 
 	var out []SteeringTrace
 	for rows.Next() {
-		var tr SteeringTrace
-		var channel, channelType, author, threadKey, textPreview, dropReason sql.NullString
-		var stage2Action, stage3Action, finalAction, feedItemID, errStr, model sql.NullString
-		var ts, teamID, url sql.NullString
-		var stage1Rel sql.NullInt64
-		var stage2Conf, stage3Conf, finalConf sql.NullFloat64
-
-		if err := rows.Scan(
-			&tr.ID, &tr.CreatedAt, &tr.Origin, &tr.Source,
-			&channel, &channelType, &author, &threadKey, &textPreview,
-			&tr.Disposition, &tr.StageReached, &dropReason,
-			&stage1Rel,
-			&stage2Action, &stage2Conf,
-			&stage3Action, &stage3Conf,
-			&finalAction, &finalConf,
-			&feedItemID, &errStr,
-			&tr.LatencyMS, &model,
-			&ts, &teamID, &url,
-		); err != nil {
+		tr, err := scanSteeringTrace(rows)
+		if err != nil {
 			return nil, fmt.Errorf("flowdb: scan steering trace: %w", err)
 		}
-
-		tr.Channel = channel.String
-		tr.ChannelType = channelType.String
-		tr.Author = author.String
-		tr.ThreadKey = threadKey.String
-		tr.TextPreview = textPreview.String
-		tr.DropReason = dropReason.String
-		tr.Stage2Action = stage2Action.String
-		tr.Stage2Confidence = stage2Conf.Float64
-		tr.Stage3Action = stage3Action.String
-		tr.Stage3Confidence = stage3Conf.Float64
-		tr.FinalAction = finalAction.String
-		tr.FinalConfidence = finalConf.Float64
-		tr.FeedItemID = feedItemID.String
-		tr.Error = errStr.String
-		tr.Model = model.String
-		tr.TS = ts.String
-		tr.TeamID = teamID.String
-		tr.URL = url.String
-
-		if stage1Rel.Valid {
-			v := stage1Rel.Int64 == 1
-			tr.Stage1Relevant = &v
-		}
-
 		out = append(out, tr)
 	}
 	return out, rows.Err()
