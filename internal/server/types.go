@@ -347,6 +347,50 @@ type KBFileView struct {
 	Content  string `json:"content"`
 }
 
+// SteeringTraceView is the UI shape of a steering_trace row.
+type SteeringTraceView struct {
+	ID               string  `json:"id"`
+	CreatedAt        string  `json:"created_at"`
+	Origin           string  `json:"origin"`
+	Source           string  `json:"source"`
+	Channel          string  `json:"channel,omitempty"`
+	ChannelType      string  `json:"channel_type,omitempty"`
+	Author           string  `json:"author,omitempty"`
+	ThreadKey        string  `json:"thread_key,omitempty"`
+	TextPreview      string  `json:"text_preview,omitempty"`
+	Disposition      string  `json:"disposition"`
+	StageReached     string  `json:"stage_reached"`
+	DropReason       string  `json:"drop_reason,omitempty"`
+	Stage1Relevant   *bool   `json:"stage1_relevant,omitempty"`
+	Stage2Action     string  `json:"stage2_action,omitempty"`
+	Stage2Confidence float64 `json:"stage2_confidence,omitempty"`
+	Stage3Action     string  `json:"stage3_action,omitempty"`
+	Stage3Confidence float64 `json:"stage3_confidence,omitempty"`
+	FinalAction      string  `json:"final_action,omitempty"`
+	FinalConfidence  float64 `json:"final_confidence,omitempty"`
+	FeedItemID       string  `json:"feed_item_id,omitempty"`
+	Error            string  `json:"error,omitempty"`
+	LatencyMS        int64   `json:"latency_ms"`
+	Model            string  `json:"model,omitempty"`
+}
+
+// SteeringFunnelView is the funnel aggregate for the trace panel.
+type SteeringFunnelView struct {
+	Observed      int `json:"observed"`
+	DroppedStage0 int `json:"dropped_stage0"`
+	DroppedCache  int `json:"dropped_cache"`
+	DroppedStage1 int `json:"dropped_stage1"`
+	DroppedStage2 int `json:"dropped_stage2"`
+	Surfaced      int `json:"surfaced"`
+	Errors        int `json:"errors"`
+}
+
+// AttentionTraceResponse is the /api/attention/trace payload.
+type AttentionTraceResponse struct {
+	Funnel SteeringFunnelView  `json:"funnel"`
+	Items  []SteeringTraceView `json:"items"`
+}
+
 // AttentionItemView is the UI shape of an attention_feed row.
 type AttentionItemView struct {
 	ID                string  `json:"id"`

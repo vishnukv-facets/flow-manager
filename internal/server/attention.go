@@ -3,7 +3,9 @@ package server
 import (
 	"context"
 	"net/http"
+	"strconv"
 	"strings"
+	"time"
 
 	"flow/internal/flowdb"
 	"flow/internal/monitor"
@@ -76,6 +78,66 @@ func (s *Server) attentionAct(req actionRequest) (actionResponse, int) {
 		return actionResponse{OK: true, Message: "forwarded " + id}, http.StatusOK
 	default:
 		return actionResponse{OK: false, Message: "unknown attention action: " + req.AttentionAction}, http.StatusBadRequest
+	}
+}
+
+// handleAttentionTrace serves GET /api/attention/trace?since=&disposition=&limit=
+// — the steering decision-log funnel + recent trace rows. Defaults: since = 24h
+// ago, disposition = all, limit = 200.
+func (s *Server) handleAttentionTrace(w http.ResponseWriter, r *http.Request) {
+	if !getOnly(w, r) {
+		return
+	}
+	q := r.URL.Query()
+	since := strings.TrimSpace(q.Get("since"))
+	if since == "" {
+		since = time.Now().Add(-24 * time.Hour).UTC().Format(time.RFC3339)
+	}
+	disposition := strings.TrimSpace(q.Get("disposition"))
+	if disposition == "all" {
+		disposition = ""
+	}
+	limit := 200
+	if n, err := strconv.Atoi(strings.TrimSpace(q.Get("limit"))); err == nil && n > 0 {
+		limit = n
+	}
+	funnel, err := flowdb.SteeringFunnelSince(s.cfg.DB, since)
+	if err != nil {
+		writeError(w, err, http.StatusInternalServerError)
+		return
+	}
+	traces, err := flowdb.ListSteeringTrace(s.cfg.DB, flowdb.TraceFilter{Disposition: disposition, Since: since, Limit: limit})
+	if err != nil {
+		writeError(w, err, http.StatusInternalServerError)
+		return
+	}
+	resp := AttentionTraceResponse{Funnel: steeringFunnelView(funnel), Items: make([]SteeringTraceView, 0, len(traces))}
+	for _, t := range traces {
+		resp.Items = append(resp.Items, steeringTraceView(t))
+	}
+	writeJSON(w, resp)
+}
+
+func steeringFunnelView(f flowdb.SteeringFunnel) SteeringFunnelView {
+	return SteeringFunnelView{
+		Observed:      f.Observed,
+		DroppedStage0: f.DroppedStage0,
+		DroppedCache:  f.DroppedCache,
+		DroppedStage1: f.DroppedStage1,
+		DroppedStage2: f.DroppedStage2,
+		Surfaced:      f.Surfaced,
+		Errors:        f.Errors,
+	}
+}
+
+func steeringTraceView(t flowdb.SteeringTrace) SteeringTraceView {
+	return SteeringTraceView{
+		ID: t.ID, CreatedAt: t.CreatedAt, Origin: t.Origin, Source: t.Source,
+		Channel: t.Channel, ChannelType: t.ChannelType, Author: t.Author, ThreadKey: t.ThreadKey,
+		TextPreview: t.TextPreview, Disposition: t.Disposition, StageReached: t.StageReached, DropReason: t.DropReason,
+		Stage1Relevant: t.Stage1Relevant, Stage2Action: t.Stage2Action, Stage2Confidence: t.Stage2Confidence,
+		Stage3Action: t.Stage3Action, Stage3Confidence: t.Stage3Confidence, FinalAction: t.FinalAction,
+		FinalConfidence: t.FinalConfidence, FeedItemID: t.FeedItemID, Error: t.Error, LatencyMS: t.LatencyMS, Model: t.Model,
 	}
 }
 

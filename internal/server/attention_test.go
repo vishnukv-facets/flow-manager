@@ -131,3 +131,102 @@ func TestHandleSlackChannelsError(t *testing.T) {
 		t.Errorf("status = %d, want 502", rec.Code)
 	}
 }
+
+func seedTrace(t *testing.T, db *sql.DB, id, disposition, stage, createdAt string) {
+	t.Helper()
+	if err := flowdb.InsertSteeringTrace(db, flowdb.SteeringTrace{
+		ID: id, CreatedAt: createdAt, Origin: "slack", Source: "slack",
+		Channel: "C1", ChannelType: "channel", Author: "u1", ThreadKey: "C1:" + id,
+		TextPreview: "preview-" + id, Disposition: disposition, StageReached: stage,
+		LatencyMS: 42,
+	}); err != nil {
+		t.Fatalf("seedTrace %s: %v", id, err)
+	}
+}
+
+func TestHandleAttentionTrace(t *testing.T) {
+	s, db := attentionTestServer(t)
+
+	// Seed 4 rows inside the since window and 1 older row.
+	seedTrace(t, db, "tr1", "surfaced", "stage3", "2026-06-05T10:00:00Z")
+	seedTrace(t, db, "tr2", "dropped", "stage0", "2026-06-05T10:01:00Z")
+	seedTrace(t, db, "tr3", "dropped", "stage1", "2026-06-05T10:02:00Z")
+	seedTrace(t, db, "tr4", "error", "stage2", "2026-06-05T10:03:00Z")
+	seedTrace(t, db, "tr5", "dropped", "cache", "2026-06-01T10:00:00Z") // older — excluded
+
+	since := "2026-06-05T00:00:00Z"
+
+	// --- baseline: all rows in window ----------------------------------------
+	req := httptest.NewRequest(http.MethodGet, "/api/attention/trace?since="+since, nil)
+	rec := httptest.NewRecorder()
+	s.handleAttentionTrace(rec, req)
+	if rec.Code != 200 {
+		t.Fatalf("status = %d, want 200; body: %s", rec.Code, rec.Body.String())
+	}
+	var resp AttentionTraceResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	// Funnel should count 4 rows (tr1–tr4), not tr5.
+	if resp.Funnel.Observed != 4 {
+		t.Errorf("Funnel.Observed = %d, want 4", resp.Funnel.Observed)
+	}
+	if resp.Funnel.Surfaced != 1 {
+		t.Errorf("Funnel.Surfaced = %d, want 1", resp.Funnel.Surfaced)
+	}
+	if resp.Funnel.DroppedStage0 != 1 {
+		t.Errorf("Funnel.DroppedStage0 = %d, want 1", resp.Funnel.DroppedStage0)
+	}
+	if resp.Funnel.DroppedStage1 != 1 {
+		t.Errorf("Funnel.DroppedStage1 = %d, want 1", resp.Funnel.DroppedStage1)
+	}
+	if resp.Funnel.Errors != 1 {
+		t.Errorf("Funnel.Errors = %d, want 1", resp.Funnel.Errors)
+	}
+	if len(resp.Items) != 4 {
+		t.Errorf("len(Items) = %d, want 4", len(resp.Items))
+	}
+
+	// --- disposition filter ---------------------------------------------------
+	req2 := httptest.NewRequest(http.MethodGet, "/api/attention/trace?since="+since+"&disposition=dropped", nil)
+	rec2 := httptest.NewRecorder()
+	s.handleAttentionTrace(rec2, req2)
+	if rec2.Code != 200 {
+		t.Fatalf("disposition filter status = %d, want 200", rec2.Code)
+	}
+	var resp2 AttentionTraceResponse
+	if err := json.Unmarshal(rec2.Body.Bytes(), &resp2); err != nil {
+		t.Fatalf("decode resp2: %v", err)
+	}
+	for _, item := range resp2.Items {
+		if item.Disposition != "dropped" {
+			t.Errorf("disposition filter: got item with disposition=%q, want dropped", item.Disposition)
+		}
+	}
+	if len(resp2.Items) != 2 {
+		t.Errorf("disposition=dropped: len(Items) = %d, want 2", len(resp2.Items))
+	}
+
+	// --- limit filter ---------------------------------------------------------
+	req3 := httptest.NewRequest(http.MethodGet, "/api/attention/trace?since="+since+"&limit=1", nil)
+	rec3 := httptest.NewRecorder()
+	s.handleAttentionTrace(rec3, req3)
+	if rec3.Code != 200 {
+		t.Fatalf("limit filter status = %d, want 200", rec3.Code)
+	}
+	var resp3 AttentionTraceResponse
+	if err := json.Unmarshal(rec3.Body.Bytes(), &resp3); err != nil {
+		t.Fatalf("decode resp3: %v", err)
+	}
+	if len(resp3.Items) != 1 {
+		t.Errorf("limit=1: len(Items) = %d, want 1", len(resp3.Items))
+	}
+
+	// --- POST should be rejected ----------------------------------------------
+	req4 := httptest.NewRequest(http.MethodPost, "/api/attention/trace", nil)
+	rec4 := httptest.NewRecorder()
+	s.handleAttentionTrace(rec4, req4)
+	if rec4.Code != http.StatusMethodNotAllowed {
+		t.Errorf("POST → %d, want 405", rec4.Code)
+	}
+}
