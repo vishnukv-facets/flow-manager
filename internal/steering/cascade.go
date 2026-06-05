@@ -37,6 +37,15 @@ type Cascade struct {
 	// a Slack-aware cleaner is a no-op on GitHub text.
 	TextClean func(ctx context.Context, text string) string
 
+	// Autonomy is the per-action auto-act policy. AutonomyFn, when set, reads it
+	// live (so Settings changes take effect without a restart); else the static
+	// Autonomy is used. NewCascade seeds Autonomy with DefaultAutonomy (every
+	// action OFF — surface-only). After surfacing a verdict the cascade attempts
+	// the action through the autonomy gate (manual=false), so it only ever acts
+	// on its own when the operator opted that action in above its threshold.
+	Autonomy   AutonomyPolicy
+	AutonomyFn func() AutonomyPolicy
+
 	now    func() time.Time
 	newID  func() string
 	cache  *verdictCache
@@ -58,9 +67,51 @@ func NewCascade(db *sql.DB, cfg WatchConfig) *Cascade {
 		newID:  randomID,
 		cache:  newVerdictCache(10 * time.Minute),
 		budget: newBudgetGuard(deepBudgetPerHour()),
-		log:    func(f string, a ...any) { fmt.Fprintf(os.Stderr, "[steering] "+f+"\n", a...) },
-		trace:  func(t flowdb.SteeringTrace) { _ = flowdb.InsertSteeringTrace(db, t) },
+		log:      func(f string, a ...any) { fmt.Fprintf(os.Stderr, "[steering] "+f+"\n", a...) },
+		trace:    func(t flowdb.SteeringTrace) { _ = flowdb.InsertSteeringTrace(db, t) },
+		Autonomy: DefaultAutonomy(),
 	}
+}
+
+// autonomy returns the live autonomy policy (AutonomyFn when set, else the
+// static Autonomy, else the all-off default).
+func (c *Cascade) autonomy() AutonomyPolicy {
+	if c.AutonomyFn != nil {
+		return c.AutonomyFn()
+	}
+	if c.Autonomy != nil {
+		return c.Autonomy
+	}
+	return DefaultAutonomy()
+}
+
+// maybeAutoAct attempts the surfaced verdict's action through the autonomy gate.
+// ApplyAction with manual=false enforces the policy: it acts only when the
+// operator enabled that action above its confidence threshold, otherwise returns
+// ErrAutonomyDenied (a no-op). Only the internally-safe actions (make_task,
+// forward) are auto-actable here; outward sends (reply/afk_reply) stay
+// operator-confirmed until the AFK/presence work lands. The feed row is already
+// written, so a denied auto-act simply leaves it surfaced for the operator.
+func (c *Cascade) maybeAutoAct(ctx context.Context, feedID string, v Verdict) {
+	if feedID == "" {
+		return
+	}
+	if v.SuggestedAction != ActionMakeTask && v.SuggestedAction != ActionForward {
+		return
+	}
+	pol := c.autonomy()
+	if !pol.Allow(v.SuggestedAction, v.Confidence) {
+		return
+	}
+	item, err := flowdb.GetFeedItem(c.DB, feedID)
+	if err != nil {
+		return
+	}
+	if err := ApplyAction(ctx, c.DB, item, v.SuggestedAction, pol, false); err != nil {
+		c.log("auto-act %s for %s failed: %v", v.SuggestedAction, feedID, err)
+		return
+	}
+	c.log("auto-acted %s on %s (confidence %.2f >= threshold)", v.SuggestedAction, feedID, v.Confidence)
 }
 
 // Observe runs the cascade for one live inbound event. Errors from a stage
@@ -161,6 +212,7 @@ func (c *Cascade) finishItem(ctx context.Context, in ClassifyInput, tr *flowdb.S
 		tr.DropReason = "deep budget exhausted; surfaced stage2 verdict"
 		tr.FinalAction, tr.FinalConfidence, tr.FeedItemID = string(v2.SuggestedAction), v2.Confidence, id
 		c.emitTrace(tr, start)
+		c.maybeAutoAct(ctx, id, v2)
 		return werr
 	}
 
@@ -181,6 +233,7 @@ func (c *Cascade) finishItem(ctx context.Context, in ClassifyInput, tr *flowdb.S
 	tr.Disposition = "surfaced"
 	tr.FinalAction, tr.FinalConfidence, tr.FeedItemID = string(v3.SuggestedAction), v3.Confidence, id
 	c.emitTrace(tr, start)
+	c.maybeAutoAct(ctx, id, v3)
 	return werr
 }
 

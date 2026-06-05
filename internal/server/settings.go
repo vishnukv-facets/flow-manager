@@ -69,6 +69,10 @@ var settingsRegistry = []settingSpec{
 	{Key: "FLOW_STEERING_WATCH_CHANNELS", Label: "Watched channels", Group: "Steering", Type: settingString, Help: "Comma-separated Slack channel IDs the attention router watches (in addition to DMs + @mentions)."},
 	{Key: "FLOW_STEERING_MUTED_CHANNELS", Label: "Muted channels", Group: "Steering", Type: settingString, Help: "Comma-separated Slack channel IDs to never surface."},
 	{Key: "FLOW_STEERING_MUTED_KEYWORDS", Label: "Muted keywords", Group: "Steering", Type: settingString, Help: "Comma-separated keywords; messages containing them are dropped before triage."},
+	// Per-action autonomy policy as JSON ({"make_task":{"enabled":true,"threshold":0.8},...}).
+	// Hidden from the generic form — the Settings → Steering autonomy panel
+	// manages it with per-action toggles + thresholds. Off (surface-only) by default.
+	{Key: "FLOW_STEERING_AUTONOMY", Label: "Autonomy policy", Group: "Steering", Type: settingString, Hidden: true, Help: "Per-action autonomy (JSON). Lets the steerer act without asking above a confidence threshold."},
 	// General
 	{Key: "FLOW_STALE_DAYS", Label: "Stale threshold (days)", Group: "General", Type: settingInt, Default: "3", Help: "In-progress sessions quiet longer than this are flagged stale."},
 	{Key: "FLOW_MISSION_QUOTE", Label: "Mission Control quote", Group: "General", Type: settingBool, Default: "true", Help: "Show the rotating anime quote beside the greeting on Mission Control."},

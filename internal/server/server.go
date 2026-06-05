@@ -69,6 +69,7 @@ func New(cfg Config) *Server {
 		// real scope gate, so handing it every untracked message is cheap.
 		cascade := steering.NewCascade(cfg.DB, steering.WatchConfigFromEnv())
 		cascade.ConfigFn = steering.WatchConfigFromEnv // live re-read on settings changes
+		cascade.AutonomyFn = steering.AutonomyFromEnv  // live per-action auto-act policy
 		// De-ID feed text at ingest: clean Slack <@U…> mention markup to names
 		// BEFORE it reaches the classifier/LLM and the trace, so summaries and
 		// drafts never parrot raw IDs. nil resolver → no cleaner (identity).

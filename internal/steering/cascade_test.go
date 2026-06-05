@@ -474,6 +474,73 @@ func TestCascadeNoExistingTaskLeavesActionUnchanged(t *testing.T) {
 	}
 }
 
+// stubTaskSpawner swaps the steering taskSpawner var to count spawns instead of
+// shelling out to `flow spawn`.
+func stubTaskSpawner(t *testing.T) *int {
+	t.Helper()
+	calls := 0
+	old := taskSpawner
+	taskSpawner = func(_ context.Context, _, _, _, _ string) error { calls++; return nil }
+	t.Cleanup(func() { taskSpawner = old })
+	return &calls
+}
+
+func TestCascadeAutoActsWhenAutonomyEnabled(t *testing.T) {
+	c, db := cascadeFixture(t)
+	c.Autonomy = AutonomyPolicy{ActionMakeTask: {Enabled: true, Threshold: 0.5}}
+	old := matchExistingTask
+	matchExistingTask = func(_ *sql.DB, _ monitor.InboundEvent) (string, bool) { return "", false }
+	t.Cleanup(func() { matchExistingTask = old })
+	spawns := stubTaskSpawner(t)
+	stubClassifier(t, func(prompt string) (string, error) {
+		if strings.Contains(prompt, "MODE: stage1-relevance") {
+			return `[{"thread_key":"C1:93.1","relevant":true}]`, nil
+		}
+		return `{"suggested_action":"make_task","confidence":0.9,"summary":"q"}`, nil
+	})
+	stubDeepTriage(t, func(prompt string) (string, error) {
+		return `{"suggested_action":"make_task","confidence":0.95,"summary":"deep"}`, nil
+	})
+	if err := c.Observe(context.Background(), msg("C1", "93.1", "U_OTHER", "please")); err != nil {
+		t.Fatalf("Observe: %v", err)
+	}
+	if *spawns != 1 {
+		t.Errorf("taskSpawner calls = %d, want 1 (auto-acted)", *spawns)
+	}
+	if items, _ := flowdb.ListFeedItems(db, "new"); len(items) != 0 {
+		t.Errorf("new feed items = %d, want 0 (auto-acted → acted)", len(items))
+	}
+	if items, _ := flowdb.ListFeedItems(db, "acted"); len(items) != 1 {
+		t.Errorf("acted feed items = %d, want 1", len(items))
+	}
+}
+
+func TestCascadeSurfaceOnlyWhenAutonomyOff(t *testing.T) {
+	c, db := cascadeFixture(t) // NewCascade defaults Autonomy to all-off
+	old := matchExistingTask
+	matchExistingTask = func(_ *sql.DB, _ monitor.InboundEvent) (string, bool) { return "", false }
+	t.Cleanup(func() { matchExistingTask = old })
+	spawns := stubTaskSpawner(t)
+	stubClassifier(t, func(prompt string) (string, error) {
+		if strings.Contains(prompt, "MODE: stage1-relevance") {
+			return `[{"thread_key":"C1:94.1","relevant":true}]`, nil
+		}
+		return `{"suggested_action":"make_task","confidence":0.99,"summary":"q"}`, nil
+	})
+	stubDeepTriage(t, func(prompt string) (string, error) {
+		return `{"suggested_action":"make_task","confidence":0.99,"summary":"deep"}`, nil
+	})
+	if err := c.Observe(context.Background(), msg("C1", "94.1", "U_OTHER", "please")); err != nil {
+		t.Fatalf("Observe: %v", err)
+	}
+	if *spawns != 0 {
+		t.Errorf("taskSpawner calls = %d, want 0 (surface-only by default)", *spawns)
+	}
+	if items, _ := flowdb.ListFeedItems(db, "new"); len(items) != 1 {
+		t.Errorf("new feed items = %d, want 1 (surfaced, not acted)", len(items))
+	}
+}
+
 func TestMatchExistingTaskByTag(t *testing.T) {
 	_, db := cascadeFixture(t)
 	now := time.Now().UTC().Format(time.RFC3339)
