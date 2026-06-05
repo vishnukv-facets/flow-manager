@@ -22,6 +22,12 @@ type FeedItem struct {
 	Draft             string
 	Reason            string
 	ContextJSON       string
+	Channel           string // source channel/conversation id (Slack C…/D…, or owner/repo for github)
+	ChannelType       string // "channel" | "im" | "mpim" | "group" | "github" | ""
+	Author            string // source message author (Slack user id, or github login)
+	TS                string // source message timestamp anchor (Slack ts, etc.)
+	TeamID            string // Slack team/workspace id (for permalink construction)
+	URL               string // connector permalink (github item URL, etc.)
 	Status            string // new|acted|dismissed|snoozed|deferred
 	SnoozeUntil       string
 	LinkedTask        string // slug of the task this item spawned/forwarded to (set when acted)
@@ -57,11 +63,13 @@ func UpsertFeedItem(db *sql.DB, item FeedItem) (string, error) {
 			`UPDATE attention_feed SET
 			   source=?, summary=?, suggested_action=?, matched_task=?,
 			   suggested_project=?, suggested_priority=?, urgency=?, is_vip=?,
-			   confidence=?, draft=?, reason=?, context_json=?, linked_task=?
+			   confidence=?, draft=?, reason=?, context_json=?,
+			   channel=?, channel_type=?, author=?, ts=?, team_id=?, url=?, linked_task=?
 			 WHERE id=?`,
 			item.Source, item.Summary, item.SuggestedAction, NullIfEmpty(item.MatchedTask),
 			NullIfEmpty(item.SuggestedProject), NullIfEmpty(item.SuggestedPriority), NullIfEmpty(item.Urgency), boolToInt(item.IsVIP),
-			item.Confidence, NullIfEmpty(item.Draft), NullIfEmpty(item.Reason), NullIfEmpty(item.ContextJSON), NullIfEmpty(item.LinkedTask),
+			item.Confidence, NullIfEmpty(item.Draft), NullIfEmpty(item.Reason), NullIfEmpty(item.ContextJSON),
+			NullIfEmpty(item.Channel), NullIfEmpty(item.ChannelType), NullIfEmpty(item.Author), NullIfEmpty(item.TS), NullIfEmpty(item.TeamID), NullIfEmpty(item.URL), NullIfEmpty(item.LinkedTask),
 			existingID,
 		)
 		if uerr != nil {
@@ -74,11 +82,14 @@ func UpsertFeedItem(db *sql.DB, item FeedItem) (string, error) {
 		`INSERT INTO attention_feed (
 		   id, source, thread_key, summary, suggested_action, matched_task,
 		   suggested_project, suggested_priority, urgency, is_vip, confidence,
-		   draft, reason, context_json, status, snooze_until, linked_task, created_at, acted_at
-		 ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+		   draft, reason, context_json, channel, channel_type, author, ts, team_id, url,
+		   status, snooze_until, linked_task, created_at, acted_at
+		 ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
 		item.ID, item.Source, item.ThreadKey, item.Summary, item.SuggestedAction, NullIfEmpty(item.MatchedTask),
 		NullIfEmpty(item.SuggestedProject), NullIfEmpty(item.SuggestedPriority), NullIfEmpty(item.Urgency), boolToInt(item.IsVIP), item.Confidence,
-		NullIfEmpty(item.Draft), NullIfEmpty(item.Reason), NullIfEmpty(item.ContextJSON), item.Status, NullIfEmpty(item.SnoozeUntil), NullIfEmpty(item.LinkedTask), item.CreatedAt, NullIfEmpty(item.ActedAt),
+		NullIfEmpty(item.Draft), NullIfEmpty(item.Reason), NullIfEmpty(item.ContextJSON),
+		NullIfEmpty(item.Channel), NullIfEmpty(item.ChannelType), NullIfEmpty(item.Author), NullIfEmpty(item.TS), NullIfEmpty(item.TeamID), NullIfEmpty(item.URL),
+		item.Status, NullIfEmpty(item.SnoozeUntil), NullIfEmpty(item.LinkedTask), item.CreatedAt, NullIfEmpty(item.ActedAt),
 	)
 	if err != nil {
 		return "", fmt.Errorf("flowdb: insert feed item: %w", err)
@@ -91,7 +102,8 @@ func UpsertFeedItem(db *sql.DB, item FeedItem) (string, error) {
 func ListFeedItems(db *sql.DB, status string) ([]FeedItem, error) {
 	q := `SELECT id, source, thread_key, summary, suggested_action, matched_task,
 	             suggested_project, suggested_priority, urgency, is_vip, confidence,
-	             draft, reason, context_json, status, snooze_until, linked_task, created_at, acted_at
+	             draft, reason, context_json, channel, channel_type, author, ts, team_id, url,
+	             status, snooze_until, linked_task, created_at, acted_at
 	      FROM attention_feed`
 	args := []any{}
 	if status != "" {
@@ -109,12 +121,13 @@ func ListFeedItems(db *sql.DB, status string) ([]FeedItem, error) {
 	var out []FeedItem
 	for rows.Next() {
 		var it FeedItem
-		var matched, project, priority, urgency, draft, reason, ctx, snooze, linked, acted sql.NullString
+		var matched, project, priority, urgency, draft, reason, ctx, channel, channelType, author, ts, teamID, url, snooze, linked, acted sql.NullString
 		var isVIP int
 		if err := rows.Scan(
 			&it.ID, &it.Source, &it.ThreadKey, &it.Summary, &it.SuggestedAction, &matched,
 			&project, &priority, &urgency, &isVIP, &it.Confidence,
-			&draft, &reason, &ctx, &it.Status, &snooze, &linked, &it.CreatedAt, &acted,
+			&draft, &reason, &ctx, &channel, &channelType, &author, &ts, &teamID, &url,
+			&it.Status, &snooze, &linked, &it.CreatedAt, &acted,
 		); err != nil {
 			return nil, fmt.Errorf("flowdb: scan feed item: %w", err)
 		}
@@ -126,6 +139,12 @@ func ListFeedItems(db *sql.DB, status string) ([]FeedItem, error) {
 		it.Draft = draft.String
 		it.Reason = reason.String
 		it.ContextJSON = ctx.String
+		it.Channel = channel.String
+		it.ChannelType = channelType.String
+		it.Author = author.String
+		it.TS = ts.String
+		it.TeamID = teamID.String
+		it.URL = url.String
 		it.SnoozeUntil = snooze.String
 		it.LinkedTask = linked.String
 		it.ActedAt = acted.String
@@ -181,17 +200,19 @@ func boolToInt(b bool) int {
 // (including sql.ErrNoRows) when no row matches.
 func GetFeedItem(db *sql.DB, id string) (FeedItem, error) {
 	var it FeedItem
-	var matched, project, priority, urgency, draft, reason, ctx, snooze, linked, acted sql.NullString
+	var matched, project, priority, urgency, draft, reason, ctx, channel, channelType, author, ts, teamID, url, snooze, linked, acted sql.NullString
 	var isVIP int
 	err := db.QueryRow(
 		`SELECT id, source, thread_key, summary, suggested_action, matched_task,
 		        suggested_project, suggested_priority, urgency, is_vip, confidence,
-		        draft, reason, context_json, status, snooze_until, linked_task, created_at, acted_at
+		        draft, reason, context_json, channel, channel_type, author, ts, team_id, url,
+		        status, snooze_until, linked_task, created_at, acted_at
 		 FROM attention_feed WHERE id = ?`, id,
 	).Scan(
 		&it.ID, &it.Source, &it.ThreadKey, &it.Summary, &it.SuggestedAction, &matched,
 		&project, &priority, &urgency, &isVIP, &it.Confidence,
-		&draft, &reason, &ctx, &it.Status, &snooze, &linked, &it.CreatedAt, &acted,
+		&draft, &reason, &ctx, &channel, &channelType, &author, &ts, &teamID, &url,
+		&it.Status, &snooze, &linked, &it.CreatedAt, &acted,
 	)
 	if err != nil {
 		return FeedItem{}, fmt.Errorf("flowdb: get feed item %q: %w", id, err)
@@ -204,6 +225,12 @@ func GetFeedItem(db *sql.DB, id string) (FeedItem, error) {
 	it.Draft = draft.String
 	it.Reason = reason.String
 	it.ContextJSON = ctx.String
+	it.Channel = channel.String
+	it.ChannelType = channelType.String
+	it.Author = author.String
+	it.TS = ts.String
+	it.TeamID = teamID.String
+	it.URL = url.String
 	it.SnoozeUntil = snooze.String
 	it.LinkedTask = linked.String
 	it.ActedAt = acted.String

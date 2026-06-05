@@ -120,14 +120,14 @@ func (c *Cascade) observe(ctx context.Context, ev monitor.InboundEvent, origin s
 	}
 	t := true
 	tr.Stage1Relevant = &t
-	return c.finishItem(ctx, in, tr, start)
+	return c.finishItem(ctx, in, tr, start, ev)
 }
 
 // finishItem runs the per-item tail of the cascade — task index → Stage 2 →
 // budget gate → Stage 3 deep triage → feed write — and emits a trace at every
 // exit. It assumes Stage 0/cache/Stage 1 have already passed and tr.ThreadKey
 // + tr.Stage1Relevant are set.
-func (c *Cascade) finishItem(ctx context.Context, in ClassifyInput, tr *flowdb.SteeringTrace, start time.Time) error {
+func (c *Cascade) finishItem(ctx context.Context, in ClassifyInput, tr *flowdb.SteeringTrace, start time.Time, ev monitor.InboundEvent) error {
 	taskIndex, err := BuildTaskIndex(c.DB)
 	if err != nil {
 		tr.Disposition, tr.StageReached, tr.Error = "error", "stage1", err.Error()
@@ -155,7 +155,7 @@ func (c *Cascade) finishItem(ctx context.Context, in ClassifyInput, tr *flowdb.S
 	if !c.budget.allow(c.now()) {
 		c.log("deep-triage budget exhausted; surfacing stage2 verdict for %s", in.ThreadKey)
 		c.cache.mark(in.ThreadKey, c.now())
-		id, werr := c.writeFeed(v2)
+		id, werr := c.writeFeed(v2, ev)
 		tr.Disposition, tr.StageReached = "surfaced", "stage2"
 		tr.DropReason = "deep budget exhausted; surfaced stage2 verdict"
 		tr.FinalAction, tr.FinalConfidence, tr.FeedItemID = string(v2.SuggestedAction), v2.Confidence, id
@@ -175,7 +175,7 @@ func (c *Cascade) finishItem(ctx context.Context, in ClassifyInput, tr *flowdb.S
 		tr.StageReached = "stage3"
 	}
 	c.cache.mark(in.ThreadKey, c.now())
-	id, werr := c.writeFeed(v3)
+	id, werr := c.writeFeed(v3, ev)
 	tr.Disposition = "surfaced"
 	tr.FinalAction, tr.FinalConfidence, tr.FeedItemID = string(v3.SuggestedAction), v3.Confidence, id
 	c.emitTrace(tr, start)
@@ -194,6 +194,7 @@ func (c *Cascade) ObserveBatch(ctx context.Context, evs []monitor.InboundEvent) 
 		in    ClassifyInput
 		tr    *flowdb.SteeringTrace
 		start time.Time
+		ev    monitor.InboundEvent
 	}
 	var survivors []pending
 	var inputs []ClassifyInput
@@ -214,7 +215,7 @@ func (c *Cascade) ObserveBatch(ctx context.Context, evs []monitor.InboundEvent) 
 			continue
 		}
 		in := ClassifyInput{ThreadKey: s0.ThreadKey, Source: connectorOf(ev), Author: ev.UserID, Text: cleaned}
-		survivors = append(survivors, pending{in, tr, start})
+		survivors = append(survivors, pending{in, tr, start, ev})
 		inputs = append(inputs, in)
 	}
 	if len(inputs) == 0 {
@@ -244,7 +245,7 @@ func (c *Cascade) ObserveBatch(ctx context.Context, evs []monitor.InboundEvent) 
 		}
 		t := true
 		p.tr.Stage1Relevant = &t
-		if e := c.finishItem(ctx, p.in, p.tr, p.start); e != nil && firstErr == nil {
+		if e := c.finishItem(ctx, p.in, p.tr, p.start, p.ev); e != nil && firstErr == nil {
 			firstErr = e
 		}
 	}
@@ -300,7 +301,7 @@ func preview(s string) string {
 
 // writeFeed maps a Verdict to a surface-only ('new') Attention feed row and
 // returns the upserted item's id.
-func (c *Cascade) writeFeed(v Verdict) (string, error) {
+func (c *Cascade) writeFeed(v Verdict, ev monitor.InboundEvent) (string, error) {
 	item := flowdb.FeedItem{
 		ID:                c.newID(),
 		Source:            v.Source,
@@ -315,6 +316,12 @@ func (c *Cascade) writeFeed(v Verdict) (string, error) {
 		Confidence:        v.Confidence,
 		Draft:             v.Draft,
 		Reason:            v.Reason,
+		Channel:           ev.Channel,
+		ChannelType:       ev.ChannelType,
+		Author:            ev.UserID,
+		TS:                ev.TS,
+		TeamID:            ev.TeamID,
+		URL:               ev.URL,
 		Status:            "new",
 		CreatedAt:         c.now().UTC().Format(time.RFC3339),
 	}

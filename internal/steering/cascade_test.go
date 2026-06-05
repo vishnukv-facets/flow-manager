@@ -102,6 +102,39 @@ func TestCascadeSurfacesSurvivor(t *testing.T) {
 	}
 }
 
+func TestCascadeFeedCapturesSourceContext(t *testing.T) {
+	c, db := cascadeFixture(t)
+	stubClassifier(t, func(prompt string) (string, error) {
+		if strings.Contains(prompt, "MODE: stage1-relevance") {
+			return `[{"thread_key":"D30:30.1","relevant":true}]`, nil
+		}
+		return `{"suggested_action":"reply","confidence":0.8,"summary":"q"}`, nil
+	})
+	stubDeepTriage(t, func(prompt string) (string, error) {
+		return `{"suggested_action":"reply","confidence":0.9,"summary":"q","draft":"On it."}`, nil
+	})
+	ev := monitor.InboundEvent{
+		Kind: "message", ChannelType: "im", Channel: "D30", TS: "30.1", ThreadTS: "30.1",
+		UserID: "U_BOB", Text: "need help", TeamID: "T_WS",
+		URL: "https://example.slack.com/archives/D30/p301",
+	}
+	// Stage0 watches C1 by default; an im DM must clear Stage 0. Override config
+	// to watch this DM channel so the event survives to the feed write.
+	c.Config.WatchedChannels = map[string]bool{"C1": true, "D30": true}
+	if err := c.Observe(context.Background(), ev); err != nil {
+		t.Fatalf("Observe: %v", err)
+	}
+	items, _ := flowdb.ListFeedItems(db, "new")
+	if len(items) != 1 {
+		t.Fatalf("feed len = %d, want 1", len(items))
+	}
+	it := items[0]
+	if it.Channel != "D30" || it.ChannelType != "im" || it.Author != "U_BOB" ||
+		it.TS != "30.1" || it.TeamID != "T_WS" || it.URL != "https://example.slack.com/archives/D30/p301" {
+		t.Errorf("feed row missing source context: %+v", it)
+	}
+}
+
 func TestCascadeStage0DropWritesNothing(t *testing.T) {
 	c, db := cascadeFixture(t)
 	// self-authored → Stage0 drops before any model call

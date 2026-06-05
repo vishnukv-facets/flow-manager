@@ -142,6 +142,59 @@ func TestSetFeedItemActed(t *testing.T) {
 	}
 }
 
+func TestFeedItemSourceContextRoundTrip(t *testing.T) {
+	db := openTempDB(t)
+	defer db.Close()
+
+	in := FeedItem{
+		ID: "sc1", Source: "slack", ThreadKey: "C1:700.1", SuggestedAction: "reply",
+		Channel: "C700", ChannelType: "channel", Author: "U_BOB", TS: "700.1",
+		TeamID: "T123", URL: "https://example.slack.com/archives/C700/p7001",
+		Status: "new", CreatedAt: "2026-06-05T10:00:00Z",
+	}
+	if _, err := UpsertFeedItem(db, in); err != nil {
+		t.Fatalf("upsert: %v", err)
+	}
+
+	got, err := GetFeedItem(db, "sc1")
+	if err != nil {
+		t.Fatalf("GetFeedItem: %v", err)
+	}
+	if got.Channel != "C700" || got.ChannelType != "channel" || got.Author != "U_BOB" ||
+		got.TS != "700.1" || got.TeamID != "T123" || got.URL != "https://example.slack.com/archives/C700/p7001" {
+		t.Errorf("GetFeedItem source-context round-trip mismatch: %+v", got)
+	}
+
+	list, _ := ListFeedItems(db, "new")
+	if len(list) != 1 {
+		t.Fatalf("list len = %d, want 1", len(list))
+	}
+	l := list[0]
+	if l.Channel != "C700" || l.ChannelType != "channel" || l.Author != "U_BOB" ||
+		l.TS != "700.1" || l.TeamID != "T123" || l.URL != "https://example.slack.com/archives/C700/p7001" {
+		t.Errorf("ListFeedItems source-context round-trip mismatch: %+v", l)
+	}
+
+	// Coalescing onto an existing 'new' row must also refresh the source context.
+	upd := FeedItem{
+		ID: "sc2", Source: "slack", ThreadKey: "C1:700.1", SuggestedAction: "make_task",
+		Channel: "C700", ChannelType: "channel", Author: "U_CAROL", TS: "700.2",
+		TeamID: "T123", URL: "https://example.slack.com/archives/C700/p7002",
+		Status: "new", CreatedAt: "2026-06-05T10:05:00Z",
+	}
+	id, err := UpsertFeedItem(db, upd)
+	if err != nil {
+		t.Fatalf("coalesce upsert: %v", err)
+	}
+	if id != "sc1" {
+		t.Fatalf("coalesced id = %q, want sc1", id)
+	}
+	got2, _ := GetFeedItem(db, "sc1")
+	if got2.Author != "U_CAROL" || got2.TS != "700.2" || got2.URL != "https://example.slack.com/archives/C700/p7002" {
+		t.Errorf("coalesce did not refresh source context: %+v", got2)
+	}
+}
+
 func TestGetFeedItem(t *testing.T) {
 	db := openTempDB(t)
 	defer db.Close()

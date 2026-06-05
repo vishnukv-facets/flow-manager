@@ -159,6 +159,12 @@ CREATE TABLE IF NOT EXISTS attention_feed (
     draft              TEXT,
     reason             TEXT,
     context_json       TEXT,
+    channel            TEXT,
+    channel_type       TEXT,
+    author             TEXT,
+    ts                 TEXT,
+    team_id            TEXT,
+    url                TEXT,
     status             TEXT NOT NULL DEFAULT 'new' CHECK (status IN ('new','acted','dismissed','snoozed','deferred')),
     snooze_until       TEXT,
     linked_task        TEXT,
@@ -950,6 +956,61 @@ func runMigrations(db *sql.DB) error {
 	if !has {
 		if _, err := db.Exec(`ALTER TABLE attention_feed ADD COLUMN linked_task TEXT`); err != nil {
 			return fmt.Errorf("add attention_feed.linked_task: %w", err)
+		}
+	}
+
+	has, err = columnExists(db, "attention_feed", "channel")
+	if err != nil {
+		return err
+	}
+	if !has {
+		if _, err := db.Exec(`ALTER TABLE attention_feed ADD COLUMN channel TEXT`); err != nil {
+			return fmt.Errorf("add attention_feed.channel: %w", err)
+		}
+	}
+	has, err = columnExists(db, "attention_feed", "channel_type")
+	if err != nil {
+		return err
+	}
+	if !has {
+		if _, err := db.Exec(`ALTER TABLE attention_feed ADD COLUMN channel_type TEXT`); err != nil {
+			return fmt.Errorf("add attention_feed.channel_type: %w", err)
+		}
+	}
+	has, err = columnExists(db, "attention_feed", "author")
+	if err != nil {
+		return err
+	}
+	if !has {
+		if _, err := db.Exec(`ALTER TABLE attention_feed ADD COLUMN author TEXT`); err != nil {
+			return fmt.Errorf("add attention_feed.author: %w", err)
+		}
+	}
+	has, err = columnExists(db, "attention_feed", "ts")
+	if err != nil {
+		return err
+	}
+	if !has {
+		if _, err := db.Exec(`ALTER TABLE attention_feed ADD COLUMN ts TEXT`); err != nil {
+			return fmt.Errorf("add attention_feed.ts: %w", err)
+		}
+	}
+	has, err = columnExists(db, "attention_feed", "team_id")
+	if err != nil {
+		return err
+	}
+	if !has {
+		if _, err := db.Exec(`ALTER TABLE attention_feed ADD COLUMN team_id TEXT`); err != nil {
+			return fmt.Errorf("add attention_feed.team_id: %w", err)
+		}
+	}
+	has, err = columnExists(db, "attention_feed", "url")
+	if err != nil {
+		return err
+	}
+	if !has {
+		if _, err := db.Exec(`ALTER TABLE attention_feed ADD COLUMN url TEXT`); err != nil {
+			return fmt.Errorf("add attention_feed.url: %w", err)
 		}
 	}
 
