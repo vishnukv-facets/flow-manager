@@ -9,6 +9,7 @@ import (
 	"net/http/httptest"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"flow/internal/flowdb"
 	"flow/internal/monitor"
@@ -79,11 +80,11 @@ func TestAttentionActMakeTaskStart(t *testing.T) {
 	// Stub the spawn + session-open seams so the test stays hermetic (no real
 	// `flow spawn`, no PTY). The make-task seam marks the row acted+linked.
 	oldMake, oldStart := attentionMakeTask, attentionStartSession
-	var startedSlug string
+	startedCh := make(chan string, 4) // buffered: session start is now async (goroutine)
 	attentionMakeTask = func(srv *Server, item flowdb.FeedItem) error {
 		return flowdb.SetFeedItemActed(srv.cfg.DB, item.ID, steering.FeedTaskSlug(item), "2026-06-05T11:00:00Z")
 	}
-	attentionStartSession = func(_ *Server, slug string) error { startedSlug = slug; return nil }
+	attentionStartSession = func(_ *Server, slug string) error { startedCh <- slug; return nil }
 	t.Cleanup(func() { attentionMakeTask, attentionStartSession = oldMake, oldStart })
 
 	resp, status := s.runAction(actionRequest{Kind: "attention-act", Target: "ms1", AttentionAction: "make-task-start"})
@@ -92,8 +93,14 @@ func TestAttentionActMakeTaskStart(t *testing.T) {
 	}
 	item, _ := flowdb.GetFeedItem(db, "ms1")
 	wantSlug := steering.FeedTaskSlug(item)
-	if startedSlug != wantSlug {
-		t.Errorf("started session for %q, want %q", startedSlug, wantSlug)
+	// The action returns immediately; the open runs in the background.
+	select {
+	case startedSlug := <-startedCh:
+		if startedSlug != wantSlug {
+			t.Errorf("started session for %q, want %q", startedSlug, wantSlug)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("background session start did not fire within 2s")
 	}
 	if item.Status != "acted" || item.LinkedTask != wantSlug {
 		t.Errorf("feed row = status %q linked %q, want acted/%s", item.Status, item.LinkedTask, wantSlug)

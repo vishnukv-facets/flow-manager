@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"net/http"
+	"os"
 	"strconv"
 	"strings"
 	"time"
@@ -25,6 +26,21 @@ var attentionMakeTask = func(s *Server, item flowdb.FeedItem) error {
 // tests can stub the PTY attach.
 var attentionStartSession = func(s *Server, slug string) error {
 	return (&slackTaskOpener{server: s}).OpenInUI(slug)
+}
+
+// startSessionAsync opens/resumes a task's live session WITHOUT blocking the
+// caller. Spawning a Claude/Codex session (PTY + prime) routinely takes longer
+// than the UI's 30s RPC timeout, and the agent posts/acts on its own once the
+// session is up — so an action that only needs the agent to *eventually* run
+// must return immediately and let the open proceed in the background. Errors are
+// logged, never surfaced: the task already exists and the operator can open it
+// manually. This is what keeps "Send reply" from timing out while Claude boots.
+func (s *Server) startSessionAsync(slug string) {
+	go func() {
+		if err := attentionStartSession(s, slug); err != nil {
+			fmt.Fprintf(os.Stderr, "attention: background session open %s: %v\n", slug, err)
+		}
+	}()
 }
 
 // handleAttention serves GET /api/attention[?status=new|acted|dismissed|all]
@@ -179,11 +195,10 @@ func (s *Server) attentionAct(req actionRequest) (actionResponse, int) {
 			return actionResponse{OK: false, Message: err.Error()}, http.StatusInternalServerError
 		}
 		slug := steering.FeedTaskSlug(item)
-		if err := attentionStartSession(s, slug); err != nil {
-			// The task was created; opening the live session is best-effort.
-			return actionResponse{OK: true, Message: "made task " + slug + " (couldn't auto-open session: " + err.Error() + ")"}, http.StatusOK
-		}
-		return actionResponse{OK: true, Message: "made task " + slug + " and started session"}, http.StatusOK
+		// Open the session in the background — starting the agent can outlast the
+		// UI's RPC timeout, and the task is already created either way.
+		s.startSessionAsync(slug)
+		return actionResponse{OK: true, Message: "made task " + slug + " — starting its session"}, http.StatusOK
 	case "forward":
 		if err := steering.ApplyAction(context.Background(), s.cfg.DB, item, steering.ActionForward, steering.DefaultAutonomy(), true); err != nil {
 			return actionResponse{OK: false, Message: err.Error()}, http.StatusInternalServerError
@@ -202,20 +217,23 @@ func (s *Server) attentionAct(req actionRequest) (actionResponse, int) {
 			return actionResponse{OK: false, Message: "send-reply needs a draft or reply_text"}, http.StatusBadRequest
 		}
 		if target := strings.TrimSpace(item.MatchedTask); target != "" {
+			// An agent already owns this thread — hand it the reply (via its inbox)
+			// and resume its session in the background so it posts via its own MCP
+			// tools. The server never posts to Slack itself.
 			if err := steering.InjectReplyToTask(context.Background(), s.cfg.DB, item, text, target); err != nil {
 				return actionResponse{OK: false, Message: err.Error()}, http.StatusInternalServerError
 			}
-			_ = attentionStartSession(s, target) // open/resume so the agent sends now (best-effort)
-			return actionResponse{OK: true, Message: "reply handed to session " + target + " — the agent will post it"}, http.StatusOK
+			s.startSessionAsync(target)
+			return actionResponse{OK: true, Message: "reply handed to session " + target + " — that agent is posting it to Slack"}, http.StatusOK
 		}
+		// No agent owns this thread yet — spawn a reply task primed with the draft
+		// + thread context; that agent reads the thread and posts via its MCP tools.
 		slug, err := steering.MakeReplyTaskFromFeed(context.Background(), s.cfg.DB, item, text)
 		if err != nil {
 			return actionResponse{OK: false, Message: err.Error()}, http.StatusInternalServerError
 		}
-		if err := attentionStartSession(s, slug); err != nil {
-			return actionResponse{OK: true, Message: "made reply task " + slug + " (open it to let the agent send)"}, http.StatusOK
-		}
-		return actionResponse{OK: true, Message: "reply task " + slug + " started — the agent will post it"}, http.StatusOK
+		s.startSessionAsync(slug)
+		return actionResponse{OK: true, Message: "reply task " + slug + " started — that agent is posting it to Slack"}, http.StatusOK
 	default:
 		return actionResponse{OK: false, Message: "unknown attention action: " + req.AttentionAction}, http.StatusBadRequest
 	}
