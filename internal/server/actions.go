@@ -197,6 +197,15 @@ func (s *Server) runAction(req actionRequest) (actionResponse, int) {
 			return actionResponse{OK: false, Message: err.Error(), Output: out}, http.StatusInternalServerError
 		}
 		return actionResponse{OK: true, Message: "archived " + target, Output: out}, http.StatusOK
+	case "unarchive":
+		if err := validateSlug(target); err != nil {
+			return actionResponse{OK: false, Message: err.Error()}, http.StatusBadRequest
+		}
+		out, err := s.runFlowCommand("unarchive", target)
+		if err != nil {
+			return actionResponse{OK: false, Message: err.Error(), Output: out}, http.StatusInternalServerError
+		}
+		return actionResponse{OK: true, Message: "unarchived " + target, Output: out}, http.StatusOK
 	case "done":
 		if err := validateSlug(target); err != nil {
 			return actionResponse{OK: false, Message: err.Error()}, http.StatusBadRequest
