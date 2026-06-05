@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"net/http"
 	"os"
 	"strings"
 	"time"
@@ -25,10 +26,12 @@ func cmdAttention(args []string) int {
 		return cmdAttentionList(rest)
 	case "act":
 		return cmdAttentionAct(rest)
+	case "sent":
+		return cmdAttentionSent(rest)
 	case "trace":
 		return cmdAttentionTrace(rest)
 	default:
-		fmt.Fprintf(os.Stderr, "error: unknown attention subcommand %q (want list|act|trace)\n", sub)
+		fmt.Fprintf(os.Stderr, "error: unknown attention subcommand %q (want list|act|sent|trace)\n", sub)
 		printAttentionUsage()
 		return 2
 	}
@@ -39,6 +42,7 @@ func printAttentionUsage() {
 
   flow attention list [--status new|acted|dismissed|snoozed|all]   (default: new)
   flow attention act <id> <make-task|forward|dismiss>
+  flow attention sent <id> [--close-floating <floating-id>]
   flow attention trace [--since 24h] [--disposition dropped|surfaced|error|all] [--limit 50]`)
 }
 
@@ -106,6 +110,89 @@ func cmdAttentionAct(args []string) int {
 		fmt.Fprintf(os.Stderr, "error: unknown action %q (want make-task|forward|dismiss)\n", actionArg)
 		return 2
 	}
+}
+
+// cmdAttentionSent marks a feed item 'acted' (sent) — the bookkeeping step an
+// ephemeral send-reply session runs AFTER it has actually posted the reply via
+// its MCP tools. Splitting "post" (the agent, which alone knows it succeeded)
+// from "mark sent" (this command) is what stops the old false-"acted" bug: the
+// card only resolves when the agent confirms the post by running this. With
+// --close-floating it also closes its own watchable floating window (best-effort
+// HTTP to the running `flow ui serve`), so a successful send auto-tidies while a
+// failure leaves the window open and the card 'new'.
+func cmdAttentionSent(args []string) int {
+	if leadingHelpArg(args) || len(args) == 0 {
+		fmt.Fprintln(os.Stderr, "usage: flow attention sent <id> [--close-floating <floating-id>]")
+		return 2
+	}
+	id := args[0]
+	fs := flagSet("attention sent")
+	closeFloating := fs.String("close-floating", "", "floating terminal id to close after marking sent")
+	if handled, rc := parseFlagSet(fs, args[1:]); handled {
+		return rc
+	}
+
+	db, rc := openAttentionDB()
+	if rc != 0 {
+		return rc
+	}
+	defer db.Close()
+
+	item, err := flowdb.GetFeedItem(db, id)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "error: no feed item with id %q\n", id)
+		return 1
+	}
+	// Preserve any existing task linkage so the card stays attributed to the task
+	// it relates to (the ephemeral no-task path simply has none).
+	link := strings.TrimSpace(item.LinkedTask)
+	if link == "" {
+		link = strings.TrimSpace(item.MatchedTask)
+	}
+	if err := flowdb.SetFeedItemActed(db, id, link, time.Now().UTC().Format(time.RFC3339)); err != nil {
+		fmt.Fprintf(os.Stderr, "error: %v\n", err)
+		return 1
+	}
+	if cf := strings.TrimSpace(*closeFloating); cf != "" {
+		closeFloatingTerminalBestEffort(cf)
+	}
+	fmt.Printf("marked %s sent\n", id)
+	return 0
+}
+
+// closeFloatingTerminalBestEffort asks the running flow server to close a
+// floating terminal. It targets the server via FLOW_HOOK_URL (set in every
+// flow-spawned session's env) and never fails the caller: closing the watchable
+// window is a courtesy, not part of the send. The connection may be reset when
+// the server tears down this very session's PTY — that's expected and ignored.
+func closeFloatingTerminalBestEffort(id string) {
+	base := serverBaseFromHookURL()
+	if base == "" {
+		return
+	}
+	payload := fmt.Sprintf(`{"kind":"close-floating-terminal","slug":%q}`, id)
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, base+"/api/actions", strings.NewReader(payload))
+	if err != nil {
+		return
+	}
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return
+	}
+	_ = resp.Body.Close()
+}
+
+// serverBaseFromHookURL derives the flow server's base URL from FLOW_HOOK_URL
+// (".../api/hooks/agent"). Returns "" when unset, which makes the close a no-op.
+func serverBaseFromHookURL() string {
+	h := strings.TrimSpace(os.Getenv("FLOW_HOOK_URL"))
+	if h == "" {
+		return ""
+	}
+	return strings.TrimSuffix(h, "/api/hooks/agent")
 }
 
 // runAttentionAction applies an operator-initiated (manual) feed action and

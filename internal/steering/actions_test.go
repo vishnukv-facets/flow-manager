@@ -2,6 +2,7 @@ package steering
 
 import (
 	"context"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -134,6 +135,69 @@ func TestMakeTaskFromFeedTagsSourceThread(t *testing.T) {
 
 // Regression: retrying Send reply when the task already exists must NOT spawn a
 // duplicate (which fails on UNIQUE tasks.slug) — it injects into the existing task.
+func TestInjectReplyToTaskRecordsUpdate(t *testing.T) {
+	root := t.TempDir()
+	t.Setenv("FLOW_ROOT", root) // so monitor.TaskDir resolves the updates/ path
+	db, err := flowdb.OpenDB(filepath.Join(root, "flow.db"))
+	if err != nil {
+		t.Fatalf("OpenDB: %v", err)
+	}
+	defer db.Close()
+	_, tells := stubActionIO(t)
+
+	item := flowdb.FeedItem{
+		ID: "r1", Source: "slack", ThreadKey: "C_eng:1700000000.000200", Channel: "C_eng",
+		Summary: "rollout date?", SuggestedAction: "send_reply", MatchedTask: "rollout-task",
+		Status: "new", CreatedAt: "2026-06-05T10:00:00Z",
+	}
+	if _, err := flowdb.UpsertFeedItem(db, item); err != nil {
+		t.Fatalf("seed feed: %v", err)
+	}
+
+	if err := InjectReplyToTask(context.Background(), db, item, "Targeting Friday.", "rollout-task", "keep it warm"); err != nil {
+		t.Fatalf("InjectReplyToTask: %v", err)
+	}
+
+	// The reply must be injected into the task's inbox AND recorded as a durable
+	// update so the task's agent knows what went out on the thread.
+	if len(*tells) != 1 || (*tells)[0].slug != "rollout-task" {
+		t.Errorf("must inject the reply via tell into rollout-task, got %+v", *tells)
+	}
+	updatesDir := filepath.Join(root, "tasks", "rollout-task", "updates")
+	entries, err := os.ReadDir(updatesDir)
+	if err != nil || len(entries) != 1 {
+		t.Fatalf("want exactly one update file in %s, got %v (err %v)", updatesDir, entries, err)
+	}
+	body, err := os.ReadFile(filepath.Join(updatesDir, entries[0].Name()))
+	if err != nil {
+		t.Fatalf("read update: %v", err)
+	}
+	for _, want := range []string{"Targeting Friday.", "C_eng:1700000000.000200", "keep it warm"} {
+		if !strings.Contains(string(body), want) {
+			t.Errorf("update note missing %q:\n%s", want, body)
+		}
+	}
+	if fi, _ := flowdb.GetFeedItem(db, "r1"); fi.Status != "acted" || fi.LinkedTask != "rollout-task" {
+		t.Errorf("feed row = status %q linked %q, want acted/rollout-task", fi.Status, fi.LinkedTask)
+	}
+}
+
+func TestSlackSendSessionPrompt(t *testing.T) {
+	item := flowdb.FeedItem{Source: "slack", ThreadKey: "C9:1.2", Channel: "C9"}
+	doneCmd := "flow attention sent r9 --close-floating send-abc"
+	p := SlackSendSessionPrompt(item, "  ship it  ", "", doneCmd)
+	for _, want := range []string{"Slack MCP", "C9:1.2", "ship it", doneCmd, "ONLY when"} {
+		if !strings.Contains(p, want) {
+			t.Errorf("prompt missing %q:\n%s", want, p)
+		}
+	}
+	// With operator instructions, the prompt must tell the agent to apply them.
+	pi := SlackSendSessionPrompt(item, "ship it", "make it shorter", doneCmd)
+	if !strings.Contains(pi, "make it shorter") || !strings.Contains(pi, "APPLY") {
+		t.Errorf("instructed prompt missing revision guidance:\n%s", pi)
+	}
+}
+
 func TestMakeReplyTaskFromFeedIdempotent(t *testing.T) {
 	db, err := flowdb.OpenDB(filepath.Join(t.TempDir(), "flow.db"))
 	if err != nil {

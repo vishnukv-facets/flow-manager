@@ -363,6 +363,9 @@ function FeedDetail({ item, onClose }: { item: AttentionItem | null; onClose: ()
         reply_text: replyText,
         reply_instructions: replyInstructions.trim() || undefined,
       },
+      // Slack sends spin an ephemeral floating session that posts via the Slack
+      // MCP in the background — DON'T pop it open; it appears as a tray chip the
+      // operator can click to watch. It self-closes on success, stays on failure.
       { onSuccess: onClose },
     )
   }

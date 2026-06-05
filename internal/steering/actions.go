@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -146,7 +147,44 @@ func InjectReplyToTask(ctx context.Context, db *sql.DB, item flowdb.FeedItem, te
 	if err := taskTeller(ctx, targetSlug, feedReplyInstruction(item, text, instructions)); err != nil {
 		return err
 	}
+	// Record a durable note in the matched task's updates/ so its agent (and any
+	// future session) knows what reply went out on this thread — the inbox
+	// instruction above is transient and consumed, whereas updates/ is the
+	// permanent progress log read at every SessionStart. Best-effort: a write
+	// failure must not fail the reply (the inbox injection still carries it), so
+	// we log and continue.
+	if err := recordReplyUpdate(targetSlug, item, text, instructions); err != nil {
+		fmt.Fprintf(os.Stderr, "steering: record reply update on %s: %v\n", targetSlug, err)
+	}
 	return flowdb.SetFeedItemActed(db, item.ID, targetSlug, nowRFC3339())
+}
+
+// recordReplyUpdate writes a date-stamped progress note into the task's updates/
+// directory recording the reply dispatched from the attention feed. The filename
+// carries the time so two replies on the same day don't clobber each other.
+func recordReplyUpdate(slug string, item flowdb.FeedItem, text, instructions string) error {
+	dir := strings.TrimSpace(monitor.TaskDir(slug))
+	if dir == "" {
+		return fmt.Errorf("cannot resolve task dir for %q", slug)
+	}
+	updatesDir := filepath.Join(dir, "updates")
+	if err := os.MkdirAll(updatesDir, 0o755); err != nil {
+		return err
+	}
+	now := time.Now()
+	path := filepath.Join(updatesDir, now.Format("2006-01-02")+"-attention-reply-"+now.Format("150405")+".md")
+	var b strings.Builder
+	fmt.Fprintf(&b, "# Reply sent via attention router — %s\n\n", now.Format("2006-01-02 15:04"))
+	fmt.Fprintf(&b, "Posted to %s thread `%s`.\n", item.Source, item.ThreadKey)
+	if ch := strings.TrimSpace(item.Channel); ch != "" {
+		fmt.Fprintf(&b, "Channel: %s\n", ch)
+	}
+	fmt.Fprintf(&b, "\n## Reply\n%s\n", strings.TrimSpace(text))
+	if ins := strings.TrimSpace(instructions); ins != "" {
+		fmt.Fprintf(&b, "\n## Operator revision instructions (applied before posting)\n%s\n", ins)
+	}
+	b.WriteString("\n---\n*Recorded automatically when the reply was dispatched from the attention feed.*\n")
+	return os.WriteFile(path, []byte(b.String()), 0o644)
 }
 
 // MakeReplyTaskFromFeed spawns a fresh task whose job is to post the reply, then

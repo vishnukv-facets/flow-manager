@@ -53,6 +53,35 @@ func TestCmdAttentionActDismiss(t *testing.T) {
 	}
 }
 
+func TestCmdAttentionSent(t *testing.T) {
+	db := attentionTestDB(t)
+	if _, err := flowdb.UpsertFeedItem(db, flowdb.FeedItem{ID: "s1", Source: "slack", ThreadKey: "C1:1.1", SuggestedAction: "reply", Status: "new", CreatedAt: "2026-06-05T10:00:00Z"}); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+	// No --close-floating + no FLOW_HOOK_URL → the close is a no-op, but the card
+	// must still flip to acted.
+	if rc := cmdAttentionSent([]string{"s1"}); rc != 0 {
+		t.Fatalf("sent rc = %d, want 0", rc)
+	}
+	acted, _ := flowdb.ListFeedItems(db, "acted")
+	if len(acted) != 1 || acted[0].ID != "s1" {
+		t.Fatalf("item should be acted, got %d acted rows", len(acted))
+	}
+	if news, _ := flowdb.ListFeedItems(db, "new"); len(news) != 0 {
+		t.Errorf("no items should remain 'new', got %d", len(news))
+	}
+}
+
+func TestCmdAttentionSentErrors(t *testing.T) {
+	attentionTestDB(t)
+	if rc := cmdAttentionSent(nil); rc != 2 {
+		t.Errorf("missing id should rc=2, got %d", rc)
+	}
+	if rc := cmdAttentionSent([]string{"missing-id"}); rc != 1 {
+		t.Errorf("missing feed item should rc=1, got %d", rc)
+	}
+}
+
 func TestCmdAttentionActErrors(t *testing.T) {
 	db := attentionTestDB(t)
 	if _, err := flowdb.UpsertFeedItem(db, flowdb.FeedItem{ID: "e1", Source: "slack", ThreadKey: "C1:1.1", SuggestedAction: "reply", Status: "new", CreatedAt: "2026-06-05T10:00:00Z"}); err != nil {

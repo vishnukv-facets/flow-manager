@@ -255,22 +255,45 @@ func (s *Server) attentionAct(req actionRequest) (actionResponse, int) {
 			s.startSessionAsync(target)
 			return actionResponse{OK: true, Message: "reply handed to session " + target + " — that agent is posting it"}, http.StatusOK
 		}
-		// No task owns this thread: the hidden triage-layer agent (Haiku, bypass,
-		// connector MCP — the same headless session layer that surfaced this item)
-		// posts the approved reply directly. No visible task is spawned, and bypass
-		// means no auto-mode permission gate to trip. Runs in the background since
-		// claude -p can outlast the UI's RPC timeout; the card flips to 'acted'
-		// once the agent confirms it posted.
-		go func(it flowdb.FeedItem, reply, ins string) {
-			bctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
-			defer cancel()
-			if err := steering.SendReplyViaAgent(bctx, s.cfg.DB, it, reply, ins); err != nil {
-				fmt.Fprintf(os.Stderr, "attention: send-reply via hidden agent: %v\n", err)
-				return
-			}
-			s.publishUIChange("attention")
-		}(item, text, instructions)
-		return actionResponse{OK: true, Message: "posting your reply via the triage agent — no task created"}, http.StatusOK
+		// No task owns this thread. How we post depends on the connector:
+		if item.Source == "github" {
+			// GitHub posts go through the `gh` CLI, which works in a headless
+			// `claude -p` (no MCP needed). Run it in the background — claude -p can
+			// outlast the UI's RPC timeout; the card flips to 'acted' once the agent
+			// confirms it posted. No visible task is spawned.
+			go func(it flowdb.FeedItem, reply, ins string) {
+				bctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+				defer cancel()
+				if err := steering.SendReplyViaAgent(bctx, s.cfg.DB, it, reply, ins); err != nil {
+					fmt.Fprintf(os.Stderr, "attention: send-reply via gh agent: %v\n", err)
+					return
+				}
+				s.publishUIChange("attention")
+			}(item, text, instructions)
+			return actionResponse{OK: true, Message: "posting your reply via the gh agent — no task created"}, http.StatusOK
+		}
+		// Slack (and any other connector whose posting needs a claude.ai MCP): a
+		// headless `claude -p` has NO Slack MCP, so it cannot post. Spin an
+		// ephemeral, watchable floating session that DOES (a real interactive
+		// bypass Claude session). It posts the approved reply, then marks the card
+		// sent and closes itself — and it's not a task, so nothing lands in the
+		// Tasks list. On failure it stays open so the operator can see why.
+		if s.terminals == nil {
+			return actionResponse{OK: false, Message: "terminal hub is not running — cannot open a send session"}, http.StatusServiceUnavailable
+		}
+		launch, err := s.prepareSendReplyFloatingLaunch(item, text, instructions)
+		if err != nil {
+			return actionResponse{OK: false, Message: err.Error()}, http.StatusInternalServerError
+		}
+		ft := s.terminals.registerFloatingLaunch(launch, "Send reply")
+		// Start it detached so the reply posts in the background whether or not the
+		// operator opens the window. It surfaces as a tray chip they can click to
+		// watch; on success it self-closes, on failure it stays for inspection.
+		if err := s.terminals.startFloatingDetached(ft.ID); err != nil {
+			s.terminals.stopFloating(ft.ID)
+			return actionResponse{OK: false, Message: err.Error()}, http.StatusInternalServerError
+		}
+		return actionResponse{OK: true, Message: "posting your reply in the background — open the Send reply terminal from the tray to watch", FloatingTerminal: &ft}, http.StatusOK
 	default:
 		return actionResponse{OK: false, Message: "unknown attention action: " + req.AttentionAction}, http.StatusBadRequest
 	}
