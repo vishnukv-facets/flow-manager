@@ -426,6 +426,7 @@ type AttentionItemView struct {
 	Reason            string  `json:"reason,omitempty"`
 	Status            string  `json:"status"`
 	LinkedTask        string  `json:"linked_task,omitempty"`
+	Retriaging        bool    `json:"retriaging,omitempty"`
 	CreatedAt         string  `json:"created_at"`
 	ActedAt           string  `json:"acted_at,omitempty"`
 	Channel           string  `json:"channel,omitempty"`

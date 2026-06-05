@@ -585,6 +585,7 @@ export interface AttentionItem {
   draft?: string
   reason?: string
   status: string
+  retriaging?: boolean
   created_at: string
   acted_at?: string
   linked_task?: string

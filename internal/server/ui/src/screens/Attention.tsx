@@ -161,6 +161,9 @@ function AttentionCard({
   onOpen: () => void
 }) {
   const urgent = item.urgency === 'urgent'
+  // Re-triage is in flight if the client just fired it OR the server says so
+  // (the server flag survives a page refresh and blocks double-firing).
+  const busy = !!retriaging || !!item.retriaging
   const [, navigate] = useLocation()
   const channelLabel = item.channel_name || item.channel || ''
   const linkLabel =
@@ -243,14 +246,14 @@ function AttentionCard({
           <button
             type="button"
             className="btn icon ghost sm"
-            title={retriaging ? 'Re-running triage…' : 'Re-run triage (re-read task context, refresh the decision)'}
+            title={busy ? 'Re-running triage…' : 'Re-run triage (re-read task context, refresh the decision)'}
             aria-label="Re-run triage"
-            disabled={disabled || retriaging}
+            disabled={disabled || busy}
             onClick={() => onAct(item, 'retriage')}
           >
-            <RefreshCw size={13} className={retriaging ? 'spin' : undefined} />
+            <RefreshCw size={13} className={busy ? 'spin' : undefined} />
           </button>
-          {retriaging ? <span className="dim mono" style={{ fontSize: 11.5 }}>re-triaging…</span> : null}
+          {busy ? <span className="dim mono" style={{ fontSize: 11.5 }}>re-triaging…</span> : null}
           <MuteMenu item={item} disabled={disabled} onAct={onAct} />
         </div>
       ) : (

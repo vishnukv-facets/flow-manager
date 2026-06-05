@@ -31,8 +31,19 @@ type FeedItem struct {
 	Status            string // new|acted|dismissed|snoozed|deferred
 	SnoozeUntil       string
 	LinkedTask        string // slug of the task this item spawned/forwarded to (set when acted)
+	RetriagingAt      string // RFC3339, set while an operator-forced re-triage is in flight; cleared on completion
 	CreatedAt         string // RFC3339
 	ActedAt           string // RFC3339, set when status leaves 'new'
+}
+
+// SetFeedRetriaging marks a feed item as having an in-flight re-triage (at = now)
+// or clears it (at = ""). Surfaced to the UI so the spinner + disabled state
+// survive a page refresh and prevent double-firing the async re-triage.
+func SetFeedRetriaging(db *sql.DB, id, at string) error {
+	if _, err := db.Exec(`UPDATE attention_feed SET retriaging_at = ? WHERE id = ?`, NullIfEmpty(at), id); err != nil {
+		return fmt.Errorf("flowdb: set feed retriaging %q: %w", id, err)
+	}
+	return nil
 }
 
 // UpsertFeedItem inserts a feed item, coalescing by thread_key: if a row for
@@ -103,7 +114,7 @@ func ListFeedItems(db *sql.DB, status string) ([]FeedItem, error) {
 	q := `SELECT id, source, thread_key, summary, suggested_action, matched_task,
 	             suggested_project, suggested_priority, urgency, is_vip, confidence,
 	             draft, reason, context_json, channel, channel_type, author, ts, team_id, url,
-	             status, snooze_until, linked_task, created_at, acted_at
+	             status, snooze_until, linked_task, retriaging_at, created_at, acted_at
 	      FROM attention_feed`
 	args := []any{}
 	if status != "" {
@@ -121,13 +132,13 @@ func ListFeedItems(db *sql.DB, status string) ([]FeedItem, error) {
 	var out []FeedItem
 	for rows.Next() {
 		var it FeedItem
-		var matched, project, priority, urgency, draft, reason, ctx, channel, channelType, author, ts, teamID, url, snooze, linked, acted sql.NullString
+		var matched, project, priority, urgency, draft, reason, ctx, channel, channelType, author, ts, teamID, url, snooze, linked, retriaging, acted sql.NullString
 		var isVIP int
 		if err := rows.Scan(
 			&it.ID, &it.Source, &it.ThreadKey, &it.Summary, &it.SuggestedAction, &matched,
 			&project, &priority, &urgency, &isVIP, &it.Confidence,
 			&draft, &reason, &ctx, &channel, &channelType, &author, &ts, &teamID, &url,
-			&it.Status, &snooze, &linked, &it.CreatedAt, &acted,
+			&it.Status, &snooze, &linked, &retriaging, &it.CreatedAt, &acted,
 		); err != nil {
 			return nil, fmt.Errorf("flowdb: scan feed item: %w", err)
 		}
@@ -147,6 +158,7 @@ func ListFeedItems(db *sql.DB, status string) ([]FeedItem, error) {
 		it.URL = url.String
 		it.SnoozeUntil = snooze.String
 		it.LinkedTask = linked.String
+		it.RetriagingAt = retriaging.String
 		it.ActedAt = acted.String
 		out = append(out, it)
 	}
@@ -239,19 +251,19 @@ func boolToInt(b bool) int {
 // (including sql.ErrNoRows) when no row matches.
 func GetFeedItem(db *sql.DB, id string) (FeedItem, error) {
 	var it FeedItem
-	var matched, project, priority, urgency, draft, reason, ctx, channel, channelType, author, ts, teamID, url, snooze, linked, acted sql.NullString
+	var matched, project, priority, urgency, draft, reason, ctx, channel, channelType, author, ts, teamID, url, snooze, linked, retriaging, acted sql.NullString
 	var isVIP int
 	err := db.QueryRow(
 		`SELECT id, source, thread_key, summary, suggested_action, matched_task,
 		        suggested_project, suggested_priority, urgency, is_vip, confidence,
 		        draft, reason, context_json, channel, channel_type, author, ts, team_id, url,
-		        status, snooze_until, linked_task, created_at, acted_at
+		        status, snooze_until, linked_task, retriaging_at, created_at, acted_at
 		 FROM attention_feed WHERE id = ?`, id,
 	).Scan(
 		&it.ID, &it.Source, &it.ThreadKey, &it.Summary, &it.SuggestedAction, &matched,
 		&project, &priority, &urgency, &isVIP, &it.Confidence,
 		&draft, &reason, &ctx, &channel, &channelType, &author, &ts, &teamID, &url,
-		&it.Status, &snooze, &linked, &it.CreatedAt, &acted,
+		&it.Status, &snooze, &linked, &retriaging, &it.CreatedAt, &acted,
 	)
 	if err != nil {
 		return FeedItem{}, fmt.Errorf("flowdb: get feed item %q: %w", id, err)
@@ -272,6 +284,7 @@ func GetFeedItem(db *sql.DB, id string) (FeedItem, error) {
 	it.URL = url.String
 	it.SnoozeUntil = snooze.String
 	it.LinkedTask = linked.String
+	it.RetriagingAt = retriaging.String
 	it.ActedAt = acted.String
 	return it, nil
 }

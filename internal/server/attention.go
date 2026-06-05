@@ -116,7 +116,8 @@ func (s *Server) attentionItemView(ctx context.Context, it flowdb.FeedItem) Atte
 		SuggestedProject: it.SuggestedProject, SuggestedPriority: it.SuggestedPriority,
 		Urgency: it.Urgency, IsVIP: it.IsVIP, Confidence: it.Confidence,
 		Draft: draft, Reason: reason, Status: it.Status, LinkedTask: it.LinkedTask,
-		CreatedAt: it.CreatedAt, ActedAt: it.ActedAt,
+		Retriaging: it.RetriagingAt != "",
+		CreatedAt:  it.CreatedAt, ActedAt: it.ActedAt,
 	}
 	v.Channel, v.ChannelType, v.Author = it.Channel, it.ChannelType, it.Author
 	if it.Source == "github" {
@@ -199,13 +200,17 @@ func (s *Server) attentionAct(req actionRequest) (actionResponse, int) {
 		if s.cascade == nil {
 			return actionResponse{OK: false, Message: "steering cascade is not running"}, http.StatusServiceUnavailable
 		}
+		// Mark in-flight server-side so the spinner + disabled state survive a page
+		// refresh and can't be double-fired; clear it when the async run finishes.
+		_ = flowdb.SetFeedRetriaging(s.cfg.DB, id, time.Now().UTC().Format(time.RFC3339))
+		s.publishUIChange("attention")
 		go func(it flowdb.FeedItem) {
 			bctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 			defer cancel()
 			if err := s.cascade.Retriage(bctx, it); err != nil {
 				fmt.Fprintf(os.Stderr, "attention: retriage %s: %v\n", it.ID, err)
-				return
 			}
+			_ = flowdb.SetFeedRetriaging(s.cfg.DB, it.ID, "")
 			s.publishUIChange("attention")
 		}(item)
 		return actionResponse{OK: true, Message: "re-running triage — the card will update with the fresh decision"}, http.StatusOK
