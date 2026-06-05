@@ -1,4 +1,4 @@
-import { QueryClient, useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import { QueryClient, keepPreviousData, useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { apiAction, apiGet, apiGetText } from './api'
 import { rpc } from './rpc'
 import { events } from './events'
@@ -204,6 +204,9 @@ export function useAttention(status: string = 'new') {
   return useQuery({
     queryKey: ['attention', status],
     queryFn: () => apiGet<AttentionItem[]>(`/api/attention${q}`),
+    // Keep the prior status tab's results visible while the new one loads, so
+    // switching new/acted/dismissed/all feels instant instead of blanking.
+    placeholderData: keepPreviousData,
   })
 }
 export function useAttentionTrace(since: string, disposition: string = 'all') {
@@ -213,6 +216,9 @@ export function useAttentionTrace(since: string, disposition: string = 'all') {
     queryKey: ['attention-trace', since, disposition],
     queryFn: () => apiGet<AttentionTraceResponse>(`/api/attention/trace?${params.toString()}`),
     refetchInterval: 15000, // keep the live window fresh while watching
+    // Each 1h/24h/7d (or disposition) switch is a new query key; show the prior
+    // window's rows immediately rather than dropping to a spinner.
+    placeholderData: keepPreviousData,
   })
 }
 export function useSlackChannels() {

@@ -1,6 +1,6 @@
 import { useState, type ReactNode } from 'react'
 import { useLocation } from 'wouter'
-import { AlertTriangle, ArrowRight, Check, ExternalLink, Filter, Inbox, ListPlus, Play, Share2 } from 'lucide-react'
+import { AlertTriangle, ArrowRight, AtSign, Check, ExternalLink, Filter, Github, Hash, Inbox, ListPlus, Lock, MessageSquare, Play, Share2 } from 'lucide-react'
 import { useAction, useAttention, useAttentionTrace } from '../lib/query'
 import { useDocumentTitle } from '../lib/useDocumentTitle'
 import { EmptyState, ErrorNote, Loading, SourceIcon } from '../components/ui'
@@ -88,6 +88,19 @@ function FeedView() {
   )
 }
 
+// Small glyph for the origin line: a Slack channel (#) vs DM (lock/@) vs GitHub
+// repo. `channel_type` carries slack's im/mpim/channel hint when present.
+function OriginIcon({ source, channelType }: { source?: string; channelType?: string }) {
+  if (source === 'github') return <Github size={12} />
+  const isDM = channelType === 'im' || channelType === 'mpim' || channelType === 'dm'
+  if (source === 'slack') {
+    if (channelType === 'mpim') return <AtSign size={12} />
+    if (isDM) return <Lock size={12} />
+    return <Hash size={12} />
+  }
+  return <MessageSquare size={12} />
+}
+
 function AttentionCard({
   item,
   disabled,
@@ -99,6 +112,9 @@ function AttentionCard({
 }) {
   const urgent = item.urgency === 'urgent'
   const [, navigate] = useLocation()
+  const channelLabel = item.channel_name || item.channel || ''
+  const linkLabel =
+    item.source === 'slack' ? 'View in Slack' : item.source === 'github' ? 'View on GitHub' : 'Open source'
   return (
     <div className={`card att-card${urgent ? ' att-urgent' : ''}`}>
       <div className="att-head row gap">
@@ -109,6 +125,21 @@ function AttentionCard({
         <span className="spacer" />
         <span className="num faint" title="confidence">{Math.round(item.confidence * 100)}%</span>
       </div>
+
+      {channelLabel || item.permalink || item.author_name ? (
+        <div className="att-origin row gap">
+          <span className="att-origin-where faint" title={channelLabel || undefined}>
+            <OriginIcon source={item.source} channelType={item.channel_type} />
+            <span>{channelLabel || '—'}</span>
+          </span>
+          {item.author_name ? <span className="att-origin-from faint">from {item.author_name}</span> : null}
+          {item.permalink ? (
+            <a className="btn ghost sm" href={item.permalink} target="_blank" rel="noreferrer">
+              <ExternalLink size={13} /> {linkLabel}
+            </a>
+          ) : null}
+        </div>
+      ) : null}
 
       <div className="att-summary">{item.summary || <span className="faint">(no summary)</span>}</div>
       {item.reason ? <div className="att-reason dim">{item.reason}</div> : null}

@@ -579,6 +579,13 @@ export interface AttentionItem {
   created_at: string
   acted_at?: string
   linked_task?: string
+  // Resolved origin fields (no raw IDs) — where the message came from + a link.
+  channel?: string
+  channel_type?: string
+  channel_name?: string // "#general" (slack), "owner/repo" (github), or "DM · Name" / "Direct message"
+  author?: string
+  author_name?: string // resolved display name / GitHub login
+  permalink?: string // slack:// deep link OR https GitHub URL
 }
 
 export interface SteeringFunnel {

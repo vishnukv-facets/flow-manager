@@ -4255,6 +4255,30 @@ summary.detail-branch.as-button:hover {
 .att-card.att-urgent {
   border-left: 2px solid var(--warn);
 }
+/* Origin line: where the message came from (channel/DM/repo) + a source link. */
+.att-origin {
+  margin-top: -2px;
+  flex-wrap: wrap;
+  font-size: 11.5px;
+}
+.att-origin-where {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.att-origin-where svg {
+  flex: none;
+}
+.att-origin-from {
+  font-size: 11.5px;
+}
+.att-origin a.btn {
+  margin-left: auto;
+}
 .att-summary {
   font-size: 14px;
   line-height: 1.45;
