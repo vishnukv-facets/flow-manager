@@ -62,7 +62,8 @@ func Stage1Relevance(ctx context.Context, inputs []ClassifyInput) ([]RelevanceVe
 	if err != nil {
 		return nil, fmt.Errorf("steering: marshal stage1 inputs: %w", err)
 	}
-	raw, err := classifierRunner(ctx, stage1Prompt(string(payload)))
+	payloadJSON := string(payload)
+	raw, err := runClassifier(ctx, "stage1", stage1Prime(), stage1Payload(payloadJSON), "stage1-v1")
 	if err != nil {
 		return nil, err
 	}
@@ -93,7 +94,7 @@ func Stage1Relevance(ctx context.Context, inputs []ClassifyInput) ([]RelevanceVe
 // receives the event plus a compact task/project index (BuildTaskIndex) so it
 // can propose a matched task / project, and returns a Verdict.
 func Stage2Score(ctx context.Context, in ClassifyInput, taskIndex string) (Verdict, error) {
-	raw, err := classifierRunner(ctx, stage2Prompt(in, taskIndex))
+	raw, err := runClassifier(ctx, "stage2", stage2Prime(taskIndex), stage2Payload(in), "stage2:"+shortHash(taskIndex))
 	if err != nil {
 		return Verdict{}, err
 	}
@@ -172,20 +173,34 @@ func extractJSON(s string) (string, error) {
 	return "", fmt.Errorf("unbalanced JSON starting at %d", start)
 }
 
-func stage1Prompt(inputsJSON string) string {
+// stage1Prime is the static instruction block reused across session turns.
+// stage1Payload is the compact per-call tail. By construction:
+//
+//	stage1Prime() + "\n\n" + stage1Payload(x) == stage1Prompt(x)
+func stage1Prime() string {
 	return `MODE: stage1-relevance
 
 You are a fast relevance gate for an operator's incoming messages. For EACH event below, decide whether it is plausibly something the operator personally needs to see (a question for them, a request, a decision, an escalation, a blocker) versus noise (chit-chat, FYIs, resolved threads, bot output).
 
 Respond with ONLY a minified JSON array, no prose and no code fences. One object per event:
-[{"thread_key":"<copy of input thread_key>","relevant":true|false,"category":"<short label>","urgency_hint":"urgent|normal|low"}]
-
-Events (JSON array):
-` + inputsJSON
+[{"thread_key":"<copy of input thread_key>","relevant":true|false,"category":"<short label>","urgency_hint":"urgent|normal|low"}]`
 }
 
-func stage2Prompt(in ClassifyInput, taskIndex string) string {
-	payload, _ := json.Marshal(in)
+func stage1Payload(inputsJSON string) string {
+	return "Events (JSON array):\n" + inputsJSON
+}
+
+// stage1Prompt is the composed prompt kept for compatibility with any other
+// callers. It is byte-identical to stage1Prime()+"\n\n"+stage1Payload(x).
+func stage1Prompt(inputsJSON string) string {
+	return stage1Prime() + "\n\n" + stage1Payload(inputsJSON)
+}
+
+// stage2Prime is the static instruction block for Stage 2 (varies by task
+// index). stage2Payload is the compact per-call message tail. By construction:
+//
+//	stage2Prime(ti) + "\n\n" + stage2Payload(in) == stage2Prompt(in, ti)
+func stage2Prime(taskIndex string) string {
 	return `MODE: stage2-score
 
 You are scoring one incoming message for an operator. Using the message and the operator's current task/project index, decide the best single action and how confident you are.
@@ -201,8 +216,16 @@ Respond with ONLY a minified JSON object, no prose, no code fences:
 {"suggested_action":"...","matched_task":"<slug or empty>","suggested_project":"<slug or empty>","suggested_priority":"high|medium|low","urgency":"urgent|normal|low","confidence":0.0,"summary":"<= 140 chars","reason":"<why>"}
 
 Operator task/project index:
-` + taskIndex + `
+` + taskIndex
+}
 
-Message (JSON):
-` + string(payload)
+func stage2Payload(in ClassifyInput) string {
+	payload, _ := json.Marshal(in)
+	return "Message (JSON):\n" + string(payload)
+}
+
+// stage2Prompt is the composed prompt kept for compatibility with any other
+// callers. It is byte-identical to stage2Prime(ti)+"\n\n"+stage2Payload(in).
+func stage2Prompt(in ClassifyInput, taskIndex string) string {
+	return stage2Prime(taskIndex) + "\n\n" + stage2Payload(in)
 }
