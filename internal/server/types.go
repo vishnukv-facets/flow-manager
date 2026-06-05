@@ -347,6 +347,26 @@ type KBFileView struct {
 	Content  string `json:"content"`
 }
 
+// AttentionItemView is the UI shape of an attention_feed row.
+type AttentionItemView struct {
+	ID                string  `json:"id"`
+	Source            string  `json:"source"`
+	ThreadKey         string  `json:"thread_key"`
+	Summary           string  `json:"summary"`
+	SuggestedAction   string  `json:"suggested_action"`
+	MatchedTask       string  `json:"matched_task,omitempty"`
+	SuggestedProject  string  `json:"suggested_project,omitempty"`
+	SuggestedPriority string  `json:"suggested_priority,omitempty"`
+	Urgency           string  `json:"urgency,omitempty"`
+	IsVIP             bool    `json:"is_vip"`
+	Confidence        float64 `json:"confidence"`
+	Draft             string  `json:"draft,omitempty"`
+	Reason            string  `json:"reason,omitempty"`
+	Status            string  `json:"status"`
+	CreatedAt         string  `json:"created_at"`
+	ActedAt           string  `json:"acted_at,omitempty"`
+}
+
 type WorkdirView struct {
 	Path           string  `json:"path"`
 	Name           *string `json:"name"`

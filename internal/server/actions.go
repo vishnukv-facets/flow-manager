@@ -44,6 +44,10 @@ type actionRequest struct {
 	PermissionMode string `json:"permission_mode"`
 	Mkdir          bool   `json:"mkdir"`
 
+	// AttentionAction is the verb for the attention-act action kind:
+	// make-task | forward | dismiss. Target carries the feed item id.
+	AttentionAction string `json:"attention_action,omitempty"`
+
 	// Settings carries key→value pairs for the update-settings action.
 	Settings map[string]string `json:"settings,omitempty"`
 
@@ -269,6 +273,8 @@ func (s *Server) runAction(req actionRequest) (actionResponse, int) {
 		return s.closeFloatingTerminal(req)
 	case "update-settings":
 		return s.updateSettings(req)
+	case "attention-act":
+		return s.attentionAct(req)
 	default:
 		return actionResponse{OK: false, Message: "unknown action " + req.Kind}, http.StatusBadRequest
 	}
