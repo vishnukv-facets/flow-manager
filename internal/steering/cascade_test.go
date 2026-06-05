@@ -45,6 +45,40 @@ func msg(channel, ts, user, text string) monitor.InboundEvent {
 	return monitor.InboundEvent{Kind: "message", ChannelType: "channel", Channel: channel, TS: ts, ThreadTS: ts, UserID: user, Text: text}
 }
 
+func TestObserveTraceGitHubSource(t *testing.T) {
+	c, _ := cascadeFixture(t)
+	traces := captureTraces(c)
+	stubClassifier(t, func(prompt string) (string, error) {
+		if strings.Contains(prompt, "MODE: stage1-relevance") {
+			return `[{"thread_key":"o/r:gh-pr:o/r#5","relevant":false}]`, nil // stage1 drops, cheap
+		}
+		return `{"suggested_action":"reply","confidence":0.8}`, nil
+	})
+	ev := monitor.InboundEvent{
+		Kind: "pr_comment", ChannelType: "github", Channel: "o/r",
+		TS: "2026-06-05T10:00:00Z", ThreadTS: "gh-pr:o/r#5",
+		UserID: "reviewer", Text: "please review",
+		URL: "https://github.com/o/r/pull/5",
+	}
+	if err := c.Observe(context.Background(), ev); err != nil {
+		t.Fatalf("Observe: %v", err)
+	}
+	if len(*traces) != 1 {
+		t.Fatalf("trace count = %d, want exactly 1", len(*traces))
+	}
+	tr := (*traces)[0]
+	if tr.Source != "github" {
+		t.Errorf("trace Source = %q, want %q", tr.Source, "github")
+	}
+	if tr.URL != "https://github.com/o/r/pull/5" {
+		t.Errorf("trace URL = %q, want the GitHub url", tr.URL)
+	}
+	// It reached stage1 (so Stage 0 did NOT drop the github event) and dropped there.
+	if tr.StageReached != "stage1" {
+		t.Errorf("StageReached = %q, want stage1 (github event must clear Stage 0)", tr.StageReached)
+	}
+}
+
 func TestCascadeSurfacesSurvivor(t *testing.T) {
 	c, db := cascadeFixture(t)
 	stubClassifier(t, func(prompt string) (string, error) {

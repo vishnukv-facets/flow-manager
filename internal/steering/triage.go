@@ -33,13 +33,26 @@ func DeepTriage(ctx context.Context, in ClassifyInput, taskIndex string) (Verdic
 	return parseVerdict(raw, in.Source, in.ThreadKey)
 }
 
+// contextHintFor returns the connector-specific instruction for how the deep
+// triage step should read the full surrounding context. Adding a connector
+// means adding a case here (plus its connectorOf discriminator and Stage 0
+// policy). Unknown sources fall back to the Slack hint (default connector).
+func contextHintFor(source string) string {
+	switch source {
+	case "github":
+		return "For GitHub, use the `gh` CLI or the GitHub MCP to read the full PR/issue and its comments. The thread_key encodes owner/repo plus gh-pr/gh-issue#<number>; the item URL is the canonical link."
+	default:
+		return "For Slack, use the Slack MCP tools to read the thread (channel + thread_ts are encoded in thread_key as \"<channel>:<thread_ts>\")."
+	}
+}
+
 func deepTriagePrompt(in ClassifyInput, taskIndex string) string {
 	payload, _ := json.Marshal(in)
 	return `MODE: stage3-deep
 
 You are the deep-triage step of an operator's attention router. A cheap gate has already decided this message is worth a closer look. Do the following, then emit a single verdict:
 
-1. Read the full surrounding context. For Slack, use the Slack MCP tools to read the thread (channel + thread_ts are encoded in thread_key as "<channel>:<thread_ts>").
+1. Read the full surrounding context. ` + contextHintFor(in.Source) + `
 2. Consider the operator's task/project index below to decide whether this belongs to an existing task (set matched_task) or warrants a new one.
 3. If a reply from the operator is appropriate, draft it in the operator's voice. DO NOT SEND ANYTHING — the draft is surfaced for the operator's approval only.
 

@@ -24,6 +24,7 @@ type SteeringTrace struct {
 	Model                                 string
 	TS                                    string // Slack message ts (for permalink)
 	TeamID                                string // Slack team/workspace id (for permalink)
+	URL                                   string // connector permalink (GitHub item URL, etc.)
 }
 
 // InsertSteeringTrace writes one decision-log row.

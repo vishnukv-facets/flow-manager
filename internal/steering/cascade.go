@@ -95,7 +95,7 @@ func (c *Cascade) observe(ctx context.Context, ev monitor.InboundEvent, origin s
 		return nil
 	}
 
-	in := ClassifyInput{ThreadKey: s0.ThreadKey, Source: "slack", Author: ev.UserID, Text: ev.Text}
+	in := ClassifyInput{ThreadKey: s0.ThreadKey, Source: connectorOf(ev), Author: ev.UserID, Text: ev.Text}
 
 	rel, err := Stage1Relevance(ctx, []ClassifyInput{in})
 	if err != nil {
@@ -205,7 +205,7 @@ func (c *Cascade) ObserveBatch(ctx context.Context, evs []monitor.InboundEvent) 
 			c.emitTrace(tr, start)
 			continue
 		}
-		in := ClassifyInput{ThreadKey: s0.ThreadKey, Source: "slack", Author: ev.UserID, Text: ev.Text}
+		in := ClassifyInput{ThreadKey: s0.ThreadKey, Source: connectorOf(ev), Author: ev.UserID, Text: ev.Text}
 		survivors = append(survivors, pending{in, tr, start})
 		inputs = append(inputs, in)
 	}
@@ -250,7 +250,7 @@ func (c *Cascade) newTrace(ev monitor.InboundEvent, origin string) *flowdb.Steer
 		ID:          c.newID(),
 		CreatedAt:   c.now().UTC().Format(time.RFC3339),
 		Origin:      origin,
-		Source:      "slack",
+		Source:      connectorOf(ev),
 		Channel:     ev.Channel,
 		ChannelType: ev.ChannelType,
 		Author:      ev.UserID,
@@ -258,6 +258,7 @@ func (c *Cascade) newTrace(ev monitor.InboundEvent, origin string) *flowdb.Steer
 		Model:       classifierModel(),
 		TS:          ev.TS,
 		TeamID:      ev.TeamID,
+		URL:         ev.URL,
 	}
 }
 
