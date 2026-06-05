@@ -178,6 +178,31 @@ func TestSteeringTraceStage1RelevantRoundTrip(t *testing.T) {
 	}
 }
 
+func TestSteeringTraceURLRoundTrip(t *testing.T) {
+	db := openTempDB(t)
+
+	tr := SteeringTrace{
+		ID: "url1", CreatedAt: "2026-06-05T10:00:00Z",
+		Origin: "live", Source: "github", Channel: "o/r",
+		Disposition: "surfaced", StageReached: "stage3",
+		URL: "https://github.com/o/r/pull/5",
+	}
+	if err := InsertSteeringTrace(db, tr); err != nil {
+		t.Fatalf("insert: %v", err)
+	}
+
+	all, err := ListSteeringTrace(db, TraceFilter{})
+	if err != nil {
+		t.Fatalf("list: %v", err)
+	}
+	if len(all) != 1 {
+		t.Fatalf("want 1 row, got %d", len(all))
+	}
+	if all[0].URL != "https://github.com/o/r/pull/5" {
+		t.Errorf("URL = %q, want %q", all[0].URL, "https://github.com/o/r/pull/5")
+	}
+}
+
 func TestSteeringTraceTSTeamIDRoundTrip(t *testing.T) {
 	db := openTempDB(t)
 

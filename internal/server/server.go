@@ -76,9 +76,14 @@ func New(cfg Config) *Server {
 			s.publishUIChange(kind)
 		})
 		s.slackListener = slackListener
-		s.githubListener = monitor.NewGitHubListener(
-			monitor.NewGitHubDispatcher(cfg.DB, &slackTaskOpener{server: s}),
-		)
+		ghDispatcher := monitor.NewGitHubDispatcher(cfg.DB, &slackTaskOpener{server: s})
+		// Trace-only parallel: route every GitHub event through the SAME cascade
+		// so it surfaces in the steering trace + attention feed. The GitHub task
+		// pipeline is untouched (the steerer call is additive + best-effort).
+		if s.cascade != nil {
+			ghDispatcher.Steerer = s.cascade
+		}
+		s.githubListener = monitor.NewGitHubListener(ghDispatcher)
 	}
 	return s
 }

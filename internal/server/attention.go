@@ -139,9 +139,16 @@ func (s *Server) steeringTraceView(ctx context.Context, t flowdb.SteeringTrace) 
 		Stage1Relevant: t.Stage1Relevant, Stage2Action: t.Stage2Action, Stage2Confidence: t.Stage2Confidence,
 		Stage3Action: t.Stage3Action, Stage3Confidence: t.Stage3Confidence, FinalAction: t.FinalAction,
 		FinalConfidence: t.FinalConfidence, FeedItemID: t.FeedItemID, Error: t.Error, LatencyMS: t.LatencyMS, Model: t.Model,
-		TS: t.TS, TeamID: t.TeamID,
+		TS: t.TS, TeamID: t.TeamID, URL: t.URL,
 	}
-	if s.nameResolver != nil {
+	if t.Source == "github" {
+		// GitHub fields are already human: owner/repo channel, GitHub login
+		// author, the item URL is the canonical permalink. No resolver needed.
+		v.ChannelName = t.Channel
+		v.AuthorName = t.Author
+		v.Text = t.TextPreview
+		v.Permalink = t.URL
+	} else if s.nameResolver != nil {
 		v.ChannelName = s.nameResolver.ChannelName(ctx, t.Channel)
 		v.AuthorName = s.nameResolver.UserName(ctx, t.Author)
 		v.Text = s.nameResolver.CleanText(ctx, t.TextPreview)
@@ -149,7 +156,9 @@ func (s *Server) steeringTraceView(ctx context.Context, t flowdb.SteeringTrace) 
 	if v.Text == "" {
 		v.Text = t.TextPreview
 	}
-	v.Permalink = steeringPermalink(t)
+	if v.Permalink == "" {
+		v.Permalink = steeringPermalink(t)
+	}
 	return v
 }
 

@@ -50,8 +50,9 @@ var resolveProjectForRepo = func(db *sql.DB, repoKey string) (string, bool) {
 // mirrors Dispatcher for Slack but keeps GitHub-specific tags, briefs, and
 // idempotency isolated.
 type GitHubDispatcher struct {
-	DB     *sql.DB
-	Opener TaskOpener
+	DB      *sql.DB
+	Opener  TaskOpener
+	Steerer MessageObserver // optional: ALSO routes each new event through the steering cascade (trace-only parallel; never affects the task pipeline)
 }
 
 func NewGitHubDispatcher(db *sql.DB, opener TaskOpener) *GitHubDispatcher {
@@ -72,6 +73,17 @@ func (d *GitHubDispatcher) Dispatch(ctx context.Context, ev GitHubEvent) error {
 		}
 		if seen {
 			return nil
+		}
+	}
+
+	// Trace-only parallel: ALSO hand each NEW event to the steering cascade so
+	// it appears in the steering trace + attention feed with full GitHub
+	// detail. This runs once per new event (after the dedup early-returns,
+	// before the task pipeline) and is strictly additive — errors are logged,
+	// never returned, so the existing GitHub task pipeline below runs regardless.
+	if d.Steerer != nil {
+		if err := d.Steerer.Observe(ctx, gitHubEventToInboxEvent(ev)); err != nil {
+			fmt.Fprintf(os.Stderr, "github steerer observe: %v\n", err)
 		}
 	}
 

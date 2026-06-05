@@ -247,6 +247,27 @@ func TestSteeringPermalink(t *testing.T) {
 	}
 }
 
+func TestSteeringTraceViewGitHub(t *testing.T) {
+	s, _ := attentionTestServer(t) // nil nameResolver
+	tr := flowdb.SteeringTrace{
+		Source: "github", Channel: "o/r", Author: "octocat",
+		TextPreview: "please review", URL: "https://github.com/o/r/pull/5",
+	}
+	v := s.steeringTraceView(context.Background(), tr)
+	if v.ChannelName != "o/r" {
+		t.Errorf("ChannelName = %q, want %q (github repo is already human)", v.ChannelName, "o/r")
+	}
+	if v.AuthorName != "octocat" {
+		t.Errorf("AuthorName = %q, want %q (github login is already human)", v.AuthorName, "octocat")
+	}
+	if v.Text != "please review" {
+		t.Errorf("Text = %q, want %q", v.Text, "please review")
+	}
+	if v.Permalink != "https://github.com/o/r/pull/5" {
+		t.Errorf("Permalink = %q, want the GitHub url", v.Permalink)
+	}
+}
+
 func TestAttentionTraceResolvesNames(t *testing.T) {
 	s, db := attentionTestServer(t)
 	// The test server leaves nameResolver nil — exercise the graceful path.

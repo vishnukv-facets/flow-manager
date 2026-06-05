@@ -48,8 +48,8 @@ func InsertSteeringTrace(db *sql.DB, t SteeringTrace) error {
 			final_action, final_confidence,
 			feed_item_id, error,
 			latency_ms, model,
-			ts, team_id
-		) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+			ts, team_id, url
+		) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
 		t.ID, t.CreatedAt, t.Origin, t.Source,
 		NullIfEmpty(t.Channel), NullIfEmpty(t.ChannelType), NullIfEmpty(t.Author), NullIfEmpty(t.ThreadKey), NullIfEmpty(t.TextPreview),
 		t.Disposition, t.StageReached, NullIfEmpty(t.DropReason),
@@ -59,7 +59,7 @@ func InsertSteeringTrace(db *sql.DB, t SteeringTrace) error {
 		NullIfEmpty(t.FinalAction), t.FinalConfidence,
 		NullIfEmpty(t.FeedItemID), NullIfEmpty(t.Error),
 		t.LatencyMS, NullIfEmpty(t.Model),
-		NullIfEmpty(t.TS), NullIfEmpty(t.TeamID),
+		NullIfEmpty(t.TS), NullIfEmpty(t.TeamID), NullIfEmpty(t.URL),
 	)
 	if err != nil {
 		return fmt.Errorf("flowdb: insert steering trace: %w", err)
@@ -91,7 +91,7 @@ func ListSteeringTrace(db *sql.DB, f TraceFilter) ([]SteeringTrace, error) {
 		final_action, final_confidence,
 		feed_item_id, error,
 		latency_ms, model,
-		ts, team_id
+		ts, team_id, url
 	FROM steering_trace`
 
 	args := []any{}
@@ -128,7 +128,7 @@ func ListSteeringTrace(db *sql.DB, f TraceFilter) ([]SteeringTrace, error) {
 		var tr SteeringTrace
 		var channel, channelType, author, threadKey, textPreview, dropReason sql.NullString
 		var stage2Action, stage3Action, finalAction, feedItemID, errStr, model sql.NullString
-		var ts, teamID sql.NullString
+		var ts, teamID, url sql.NullString
 		var stage1Rel sql.NullInt64
 		var stage2Conf, stage3Conf, finalConf sql.NullFloat64
 
@@ -142,7 +142,7 @@ func ListSteeringTrace(db *sql.DB, f TraceFilter) ([]SteeringTrace, error) {
 			&finalAction, &finalConf,
 			&feedItemID, &errStr,
 			&tr.LatencyMS, &model,
-			&ts, &teamID,
+			&ts, &teamID, &url,
 		); err != nil {
 			return nil, fmt.Errorf("flowdb: scan steering trace: %w", err)
 		}
@@ -164,6 +164,7 @@ func ListSteeringTrace(db *sql.DB, f TraceFilter) ([]SteeringTrace, error) {
 		tr.Model = model.String
 		tr.TS = ts.String
 		tr.TeamID = teamID.String
+		tr.URL = url.String
 
 		if stage1Rel.Valid {
 			v := stage1Rel.Int64 == 1

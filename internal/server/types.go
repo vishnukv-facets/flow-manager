@@ -384,6 +384,7 @@ type SteeringTraceView struct {
 	Permalink        string  `json:"permalink,omitempty"`
 	TS               string  `json:"ts,omitempty"`
 	TeamID           string  `json:"team_id,omitempty"`
+	URL              string  `json:"url,omitempty"` // connector permalink (GitHub item URL, etc.)
 }
 
 // SteeringFunnelView is the funnel aggregate for the trace panel.
