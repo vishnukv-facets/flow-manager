@@ -165,3 +165,72 @@ func (r *SlackNameResolver) store(cache map[string]nameCacheEntry, id, name stri
 	defer r.mu.Unlock()
 	cache[id] = nameCacheEntry{name: name, at: time.Now()}
 }
+
+// Warm concurrently resolves (and caches) the given user and channel IDs so a
+// subsequent batch of UserName/ChannelName/CleanText calls hits the warm cache
+// instead of making one serial API round-trip per row. This is what keeps the
+// Attention feed/trace fast: a cold render of N rows would otherwise block on N
+// sequential users.info/conversations.info calls. Deduplicates, skips IDs
+// already cached, bounds concurrency, and respects ctx (callers should pass a
+// timeout). Nil-safe and safe for concurrent use.
+func (r *SlackNameResolver) Warm(ctx context.Context, userIDs, channelIDs []string) {
+	if r == nil {
+		return
+	}
+	type job struct {
+		id   string
+		user bool
+	}
+	seen := make(map[string]bool)
+	var jobs []job
+	add := func(id string, user bool) {
+		id = strings.TrimSpace(id)
+		key := "c:" + id
+		if user {
+			key = "u:" + id
+		}
+		if id == "" || seen[key] {
+			return
+		}
+		seen[key] = true
+		cache := r.chans
+		if user {
+			cache = r.users
+		}
+		if _, ok := r.lookup(cache, id); ok {
+			return // already cached (fresh) — no API call needed
+		}
+		jobs = append(jobs, job{id: id, user: user})
+	}
+	for _, id := range userIDs {
+		add(id, true)
+	}
+	for _, id := range channelIDs {
+		add(id, false)
+	}
+	if len(jobs) == 0 {
+		return
+	}
+	const maxConcurrency = 8
+	sem := make(chan struct{}, maxConcurrency)
+	var wg sync.WaitGroup
+	for _, j := range jobs {
+		select {
+		case <-ctx.Done():
+			wg.Wait()
+			return
+		case sem <- struct{}{}:
+		}
+		wg.Add(1)
+		go func(j job) {
+			defer wg.Done()
+			defer func() { <-sem }()
+			if j.user {
+				r.UserName(ctx, j.id)
+			} else {
+				r.ChannelName(ctx, j.id)
+			}
+		}(j)
+	}
+	wg.Wait()
+}

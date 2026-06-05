@@ -45,11 +45,36 @@ func (s *Server) handleAttention(w http.ResponseWriter, r *http.Request) {
 		writeError(w, err, http.StatusInternalServerError)
 		return
 	}
+	// Warm the distinct channel/author names concurrently so the per-row view
+	// loop below hits the cache instead of making one serial Slack API call per
+	// row (the cold-render stall).
+	users := make([]string, 0, len(items))
+	chans := make([]string, 0, len(items))
+	for _, it := range items {
+		if it.Source == "github" {
+			continue
+		}
+		users = append(users, it.Author)
+		chans = append(chans, it.Channel)
+	}
+	s.warmSlackNames(r.Context(), users, chans)
 	views := make([]AttentionItemView, 0, len(items))
 	for _, it := range items {
 		views = append(views, s.attentionItemView(r.Context(), it))
 	}
 	writeJSON(w, views)
+}
+
+// warmSlackNames concurrently pre-resolves the given user/channel IDs (bounded,
+// time-boxed) so a subsequent batch of per-row name lookups is all cache hits.
+// No-op when no resolver is configured or nothing to warm.
+func (s *Server) warmSlackNames(ctx context.Context, users, chans []string) {
+	if s.nameResolver == nil || (len(users) == 0 && len(chans) == 0) {
+		return
+	}
+	wctx, cancel := context.WithTimeout(ctx, 2*time.Second)
+	defer cancel()
+	s.nameResolver.Warm(wctx, users, chans)
 }
 
 // attentionItemView maps a feed row to its UI shape. As a display safety-net it
@@ -165,6 +190,19 @@ func (s *Server) handleAttentionTrace(w http.ResponseWriter, r *http.Request) {
 		writeError(w, err, http.StatusInternalServerError)
 		return
 	}
+	// Warm distinct channel/author names concurrently so the per-row view loop
+	// below is all cache hits — otherwise a cold render blocks on one serial
+	// Slack API call per distinct ID (the load stall).
+	users := make([]string, 0, len(traces))
+	chans := make([]string, 0, len(traces))
+	for _, t := range traces {
+		if t.Source == "github" {
+			continue
+		}
+		users = append(users, t.Author)
+		chans = append(chans, t.Channel)
+	}
+	s.warmSlackNames(r.Context(), users, chans)
 	resp := AttentionTraceResponse{Funnel: steeringFunnelView(funnel), Items: make([]SteeringTraceView, 0, len(traces))}
 	for _, t := range traces {
 		resp.Items = append(resp.Items, s.steeringTraceView(r.Context(), t))
