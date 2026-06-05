@@ -580,6 +580,45 @@ export interface AttentionItem {
   acted_at?: string
 }
 
+export interface SteeringFunnel {
+  observed: number
+  dropped_stage0: number
+  dropped_cache: number
+  dropped_stage1: number
+  dropped_stage2: number
+  surfaced: number
+  errors: number
+}
+export interface SteeringTrace {
+  id: string
+  created_at: string
+  origin: string
+  source: string
+  channel?: string
+  channel_type?: string
+  author?: string
+  thread_key?: string
+  text_preview?: string
+  disposition: string
+  stage_reached: string
+  drop_reason?: string
+  stage1_relevant?: boolean
+  stage2_action?: string
+  stage2_confidence?: number
+  stage3_action?: string
+  stage3_confidence?: number
+  final_action?: string
+  final_confidence?: number
+  feed_item_id?: string
+  error?: string
+  latency_ms: number
+  model?: string
+}
+export interface AttentionTraceResponse {
+  funnel: SteeringFunnel
+  items: SteeringTrace[]
+}
+
 export interface SlackChannel {
   id: string
   name: string

@@ -6,6 +6,7 @@ import { pushToast } from './toast'
 import type {
   ActionRequest,
   AttentionItem,
+  AttentionTraceResponse,
   HealthView,
   InboxConversation,
   InboxFeed,
@@ -203,6 +204,15 @@ export function useAttention(status: string = 'new') {
   return useQuery({
     queryKey: ['attention', status],
     queryFn: () => apiGet<AttentionItem[]>(`/api/attention${q}`),
+  })
+}
+export function useAttentionTrace(since: string, disposition: string = 'all') {
+  const params = new URLSearchParams({ since })
+  if (disposition && disposition !== 'all') params.set('disposition', disposition)
+  return useQuery({
+    queryKey: ['attention-trace', since, disposition],
+    queryFn: () => apiGet<AttentionTraceResponse>(`/api/attention/trace?${params.toString()}`),
+    refetchInterval: 15000, // keep the live window fresh while watching
   })
 }
 export function useSlackChannels() {
