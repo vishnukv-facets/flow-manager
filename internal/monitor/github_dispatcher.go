@@ -157,6 +157,13 @@ func (d *GitHubDispatcher) dispatchGitHubReview(ctx context.Context, ev GitHubEv
 	if err := AppendInboxEvent(slug, gitHubEventToInboxEvent(ev)); err != nil {
 		return fmt.Errorf("github monitor: append inbox: %w", err)
 	}
+	// A comment/review on a tracked PR/issue is an external reply — resolve the
+	// task's waiting_on if it was blocked on this (Phase 2 loop-closing).
+	if found {
+		if autoResolveWaitingOn(d.DB, slug, ev.Author, GitHubSelfLogins()) {
+			fmt.Fprintf(os.Stderr, "github monitor: auto-resolved waiting_on for %s (comment from %s)\n", slug, ev.Author)
+		}
+	}
 	if ev.Kind == GitHubEventPRReviewChangesRequested {
 		if err := d.reopenTaskForGitHubReview(slug); err != nil {
 			return err

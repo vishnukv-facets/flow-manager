@@ -770,6 +770,22 @@ func NowISO() string {
 	return time.Now().Format(time.RFC3339)
 }
 
+// ClearTaskWaitingOn clears a task's waiting_on note (Phase 2 loop-closing: a
+// reply arrived on a task you were blocked on, so the wait is resolved). Returns
+// true only when a non-empty note was actually cleared, so callers can log/notify
+// just on a real transition.
+func ClearTaskWaitingOn(db *sql.DB, slug string) (bool, error) {
+	res, err := db.Exec(
+		`UPDATE tasks SET waiting_on=NULL, updated_at=? WHERE slug=? AND waiting_on IS NOT NULL AND TRIM(waiting_on) != ''`,
+		NowISO(), slug,
+	)
+	if err != nil {
+		return false, fmt.Errorf("flowdb: clear waiting_on %q: %w", slug, err)
+	}
+	n, _ := res.RowsAffected()
+	return n > 0, nil
+}
+
 // NullIfEmpty returns a *string pointing to s, or nil if s is empty.
 func NullIfEmpty(s string) any {
 	if s == "" {

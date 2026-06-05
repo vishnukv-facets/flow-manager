@@ -128,7 +128,13 @@ func (d *Dispatcher) dispatchMessage(ctx context.Context, ev InboundEvent) error
 			return fmt.Errorf("monitor: lookup task by thread key: %w", err)
 		}
 		if found {
-			return AppendInboxEvent(slug, ev)
+			if err := AppendInboxEvent(slug, ev); err != nil {
+				return err
+			}
+			if autoResolveWaitingOn(d.DB, slug, ev.UserID, SelfUserIDs()) {
+				fmt.Fprintf(os.Stderr, "monitor: auto-resolved waiting_on for %s (reply from %s)\n", slug, ev.UserID)
+			}
+			return nil
 		}
 	}
 	// DMs are monitored as threads too: when the agent opens or replies in a DM,
@@ -143,6 +149,34 @@ func (d *Dispatcher) dispatchMessage(ctx context.Context, ev InboundEvent) error
 		return d.Steerer.Observe(ctx, ev)
 	}
 	return nil
+}
+
+// autoResolveWaitingOn clears a tracked task's waiting_on when an external reply
+// arrives — the thing the operator was blocked on has activity, so the wait is
+// resolved (Phase 2 loop-closing). No-op when: the DB is nil, the gate
+// FLOW_STEERING_AUTO_RESOLVE_WAITING is off, the reply is from a bot/system (no
+// author) or from the operator themselves, or the task has no waiting note.
+// Returns whether a note was actually cleared. selfIDs is the operator's
+// identity on this connector (Slack user IDs / GitHub logins).
+func autoResolveWaitingOn(db *sql.DB, slug, authorID string, selfIDs []string) bool {
+	if db == nil || !envBoolDefault("FLOW_STEERING_AUTO_RESOLVE_WAITING", true) {
+		return false
+	}
+	authorID = strings.TrimSpace(authorID)
+	if authorID == "" {
+		return false
+	}
+	for _, s := range selfIDs {
+		if strings.EqualFold(strings.TrimSpace(s), authorID) {
+			return false // the operator's own message doesn't resolve their wait
+		}
+	}
+	cleared, err := flowdb.ClearTaskWaitingOn(db, slug)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "monitor: auto-resolve waiting_on %s: %v\n", slug, err)
+		return false
+	}
+	return cleared
 }
 
 func (d *Dispatcher) findTaskByThreadKey(key string) (slug string, found bool, err error) {
