@@ -2,6 +2,7 @@ package server
 
 import (
 	"context"
+	"fmt"
 	"net/http"
 	"strconv"
 	"strings"
@@ -113,7 +114,7 @@ func (s *Server) handleAttentionTrace(w http.ResponseWriter, r *http.Request) {
 	}
 	resp := AttentionTraceResponse{Funnel: steeringFunnelView(funnel), Items: make([]SteeringTraceView, 0, len(traces))}
 	for _, t := range traces {
-		resp.Items = append(resp.Items, steeringTraceView(t))
+		resp.Items = append(resp.Items, s.steeringTraceView(r.Context(), t))
 	}
 	writeJSON(w, resp)
 }
@@ -130,15 +131,38 @@ func steeringFunnelView(f flowdb.SteeringFunnel) SteeringFunnelView {
 	}
 }
 
-func steeringTraceView(t flowdb.SteeringTrace) SteeringTraceView {
-	return SteeringTraceView{
+func (s *Server) steeringTraceView(ctx context.Context, t flowdb.SteeringTrace) SteeringTraceView {
+	v := SteeringTraceView{
 		ID: t.ID, CreatedAt: t.CreatedAt, Origin: t.Origin, Source: t.Source,
 		Channel: t.Channel, ChannelType: t.ChannelType, Author: t.Author, ThreadKey: t.ThreadKey,
 		TextPreview: t.TextPreview, Disposition: t.Disposition, StageReached: t.StageReached, DropReason: t.DropReason,
 		Stage1Relevant: t.Stage1Relevant, Stage2Action: t.Stage2Action, Stage2Confidence: t.Stage2Confidence,
 		Stage3Action: t.Stage3Action, Stage3Confidence: t.Stage3Confidence, FinalAction: t.FinalAction,
 		FinalConfidence: t.FinalConfidence, FeedItemID: t.FeedItemID, Error: t.Error, LatencyMS: t.LatencyMS, Model: t.Model,
+		TS: t.TS, TeamID: t.TeamID,
 	}
+	if s.nameResolver != nil {
+		v.ChannelName = s.nameResolver.ChannelName(ctx, t.Channel)
+		v.AuthorName = s.nameResolver.UserName(ctx, t.Author)
+		v.Text = s.nameResolver.CleanText(ctx, t.TextPreview)
+	}
+	if v.Text == "" {
+		v.Text = t.TextPreview
+	}
+	v.Permalink = steeringPermalink(t)
+	return v
+}
+
+// steeringPermalink builds a best-effort slack:// deep link to the traced
+// message (team + channel + ts). Empty when team/channel/ts aren't all known.
+func steeringPermalink(t flowdb.SteeringTrace) string {
+	team := strings.TrimSpace(t.TeamID)
+	channel := strings.TrimSpace(t.Channel)
+	ts := strings.TrimSpace(t.TS)
+	if t.Source == "slack" && team != "" && channel != "" && ts != "" {
+		return fmt.Sprintf("slack://channel?team=%s&id=%s&message=%s", team, channel, ts)
+	}
+	return ""
 }
 
 // listSlackChannelsFn is the mockable seam for the channel-list endpoint.

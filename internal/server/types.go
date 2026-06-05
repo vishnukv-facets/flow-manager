@@ -378,6 +378,12 @@ type SteeringTraceView struct {
 	Error            string  `json:"error,omitempty"`
 	LatencyMS        int64   `json:"latency_ms"`
 	Model            string  `json:"model,omitempty"`
+	ChannelName      string  `json:"channel_name,omitempty"`
+	AuthorName       string  `json:"author_name,omitempty"`
+	Text             string  `json:"text,omitempty"` // mentions resolved, full (not just preview)
+	Permalink        string  `json:"permalink,omitempty"`
+	TS               string  `json:"ts,omitempty"`
+	TeamID           string  `json:"team_id,omitempty"`
 }
 
 // SteeringFunnelView is the funnel aggregate for the trace panel.

@@ -22,6 +22,8 @@ type SteeringTrace struct {
 	FeedItemID, Error                     string
 	LatencyMS                             int64
 	Model                                 string
+	TS                                    string // Slack message ts (for permalink)
+	TeamID                                string // Slack team/workspace id (for permalink)
 }
 
 // InsertSteeringTrace writes one decision-log row.
@@ -44,8 +46,9 @@ func InsertSteeringTrace(db *sql.DB, t SteeringTrace) error {
 			stage3_action, stage3_confidence,
 			final_action, final_confidence,
 			feed_item_id, error,
-			latency_ms, model
-		) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+			latency_ms, model,
+			ts, team_id
+		) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
 		t.ID, t.CreatedAt, t.Origin, t.Source,
 		NullIfEmpty(t.Channel), NullIfEmpty(t.ChannelType), NullIfEmpty(t.Author), NullIfEmpty(t.ThreadKey), NullIfEmpty(t.TextPreview),
 		t.Disposition, t.StageReached, NullIfEmpty(t.DropReason),
@@ -55,6 +58,7 @@ func InsertSteeringTrace(db *sql.DB, t SteeringTrace) error {
 		NullIfEmpty(t.FinalAction), t.FinalConfidence,
 		NullIfEmpty(t.FeedItemID), NullIfEmpty(t.Error),
 		t.LatencyMS, NullIfEmpty(t.Model),
+		NullIfEmpty(t.TS), NullIfEmpty(t.TeamID),
 	)
 	if err != nil {
 		return fmt.Errorf("flowdb: insert steering trace: %w", err)
@@ -85,7 +89,8 @@ func ListSteeringTrace(db *sql.DB, f TraceFilter) ([]SteeringTrace, error) {
 		stage3_action, stage3_confidence,
 		final_action, final_confidence,
 		feed_item_id, error,
-		latency_ms, model
+		latency_ms, model,
+		ts, team_id
 	FROM steering_trace`
 
 	args := []any{}
@@ -122,6 +127,7 @@ func ListSteeringTrace(db *sql.DB, f TraceFilter) ([]SteeringTrace, error) {
 		var tr SteeringTrace
 		var channel, channelType, author, threadKey, textPreview, dropReason sql.NullString
 		var stage2Action, stage3Action, finalAction, feedItemID, errStr, model sql.NullString
+		var ts, teamID sql.NullString
 		var stage1Rel sql.NullInt64
 		var stage2Conf, stage3Conf, finalConf sql.NullFloat64
 
@@ -135,6 +141,7 @@ func ListSteeringTrace(db *sql.DB, f TraceFilter) ([]SteeringTrace, error) {
 			&finalAction, &finalConf,
 			&feedItemID, &errStr,
 			&tr.LatencyMS, &model,
+			&ts, &teamID,
 		); err != nil {
 			return nil, fmt.Errorf("flowdb: scan steering trace: %w", err)
 		}
@@ -154,6 +161,8 @@ func ListSteeringTrace(db *sql.DB, f TraceFilter) ([]SteeringTrace, error) {
 		tr.FeedItemID = feedItemID.String
 		tr.Error = errStr.String
 		tr.Model = model.String
+		tr.TS = ts.String
+		tr.TeamID = teamID.String
 
 		if stage1Rel.Valid {
 			v := stage1Rel.Int64 == 1

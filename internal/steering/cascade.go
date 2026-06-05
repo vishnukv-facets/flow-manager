@@ -256,6 +256,8 @@ func (c *Cascade) newTrace(ev monitor.InboundEvent, origin string) *flowdb.Steer
 		Author:      ev.UserID,
 		TextPreview: preview(ev.Text),
 		Model:       classifierModel(),
+		TS:          ev.TS,
+		TeamID:      ev.TeamID,
 	}
 }
 

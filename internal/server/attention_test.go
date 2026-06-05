@@ -230,3 +230,54 @@ func TestHandleAttentionTrace(t *testing.T) {
 		t.Errorf("POST → %d, want 405", rec4.Code)
 	}
 }
+
+func TestSteeringPermalink(t *testing.T) {
+	got := steeringPermalink(flowdb.SteeringTrace{Source: "slack", TeamID: "T1", Channel: "C1", TS: "123.45"})
+	want := "slack://channel?team=T1&id=C1&message=123.45"
+	if got != want {
+		t.Errorf("permalink = %q, want %q", got, want)
+	}
+	// Missing team → empty.
+	if got := steeringPermalink(flowdb.SteeringTrace{Source: "slack", Channel: "C1", TS: "123.45"}); got != "" {
+		t.Errorf("missing team: permalink = %q, want empty", got)
+	}
+	// Non-slack source → empty.
+	if got := steeringPermalink(flowdb.SteeringTrace{Source: "github", TeamID: "T1", Channel: "C1", TS: "123.45"}); got != "" {
+		t.Errorf("non-slack source: permalink = %q, want empty", got)
+	}
+}
+
+func TestAttentionTraceResolvesNames(t *testing.T) {
+	s, db := attentionTestServer(t)
+	// The test server leaves nameResolver nil — exercise the graceful path.
+	if s.nameResolver != nil {
+		t.Fatal("expected nil nameResolver on the test server")
+	}
+	seedTrace(t, db, "rn1", "surfaced", "stage3", "2026-06-05T10:00:00Z")
+
+	since := "2026-06-05T00:00:00Z"
+	req := httptest.NewRequest(http.MethodGet, "/api/attention/trace?since="+since, nil)
+	rec := httptest.NewRecorder()
+	s.handleAttentionTrace(rec, req)
+	if rec.Code != 200 {
+		t.Fatalf("status = %d, want 200; body: %s", rec.Code, rec.Body.String())
+	}
+	var resp AttentionTraceResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if len(resp.Items) != 1 {
+		t.Fatalf("len(Items) = %d, want 1", len(resp.Items))
+	}
+	it := resp.Items[0]
+	// With a nil resolver, names stay empty and Text falls back to the preview.
+	if it.ChannelName != "" {
+		t.Errorf("ChannelName = %q, want empty (nil resolver)", it.ChannelName)
+	}
+	if it.AuthorName != "" {
+		t.Errorf("AuthorName = %q, want empty (nil resolver)", it.AuthorName)
+	}
+	if it.Text != "preview-rn1" {
+		t.Errorf("Text = %q, want fallback to preview %q", it.Text, "preview-rn1")
+	}
+}

@@ -188,7 +188,9 @@ CREATE TABLE IF NOT EXISTS steering_trace (
     feed_item_id      TEXT,
     error             TEXT,
     latency_ms        INTEGER NOT NULL DEFAULT 0,
-    model             TEXT
+    model             TEXT,
+    ts                TEXT,
+    team_id           TEXT
 );
 
 CREATE TABLE IF NOT EXISTS steering_watermark (
@@ -908,6 +910,25 @@ func runMigrations(db *sql.DB) error {
 	if !has {
 		if _, err := db.Exec(`ALTER TABLE tasks ADD COLUMN status_changed_at TEXT`); err != nil {
 			return fmt.Errorf("add tasks.status_changed_at: %w", err)
+		}
+	}
+
+	has, err = columnExists(db, "steering_trace", "ts")
+	if err != nil {
+		return err
+	}
+	if !has {
+		if _, err := db.Exec(`ALTER TABLE steering_trace ADD COLUMN ts TEXT`); err != nil {
+			return fmt.Errorf("add steering_trace.ts: %w", err)
+		}
+	}
+	has, err = columnExists(db, "steering_trace", "team_id")
+	if err != nil {
+		return err
+	}
+	if !has {
+		if _, err := db.Exec(`ALTER TABLE steering_trace ADD COLUMN team_id TEXT`); err != nil {
+			return fmt.Errorf("add steering_trace.team_id: %w", err)
 		}
 	}
 

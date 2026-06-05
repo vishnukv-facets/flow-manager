@@ -178,6 +178,35 @@ func TestSteeringTraceStage1RelevantRoundTrip(t *testing.T) {
 	}
 }
 
+func TestSteeringTraceTSTeamIDRoundTrip(t *testing.T) {
+	db := openTempDB(t)
+
+	tr := SteeringTrace{
+		ID: "ts1", CreatedAt: "2026-06-05T10:00:00Z",
+		Origin: "live", Source: "slack", Channel: "C1",
+		Disposition: "surfaced", StageReached: "stage3",
+		TS: "1700000000.000100", TeamID: "T1",
+		LatencyMS: 0,
+	}
+	if err := InsertSteeringTrace(db, tr); err != nil {
+		t.Fatalf("insert: %v", err)
+	}
+
+	all, err := ListSteeringTrace(db, TraceFilter{})
+	if err != nil {
+		t.Fatalf("list: %v", err)
+	}
+	if len(all) != 1 {
+		t.Fatalf("want 1 row, got %d", len(all))
+	}
+	if all[0].TS != "1700000000.000100" {
+		t.Errorf("TS = %q, want %q", all[0].TS, "1700000000.000100")
+	}
+	if all[0].TeamID != "T1" {
+		t.Errorf("TeamID = %q, want %q", all[0].TeamID, "T1")
+	}
+}
+
 func TestSteeringFunnelSince(t *testing.T) {
 	db := openTempDB(t)
 
