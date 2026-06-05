@@ -53,7 +53,7 @@ func deepTriagePrompt(in ClassifyInput, taskIndex string) string {
 You are the deep-triage step of an operator's attention router. A cheap gate has already decided this message is worth a closer look. Do the following, then emit a single verdict:
 
 1. Read the full surrounding context. ` + contextHintFor(in.Source) + `
-2. Consider the operator's task/project index below to decide whether this belongs to an existing task (set matched_task) or warrants a new one.
+2. Decide whether this message belongs to an EXISTING task (set matched_task) or warrants a new one. Do NOT decide from the task name alone — for any plausibly related task (especially ones in the project this message seems to belong to), use your file tools to READ that task's brief.md AND the progress notes in its updates/ directory (paths are given in the index below) before judging. A message belongs to an existing task when it continues, follows up on, or is the next step of the work that task covers — even if it arrives in a different Slack thread/DM. Prefer matched_task to an existing active task in such cases; only treat it as net-new when, after reading, no active task actually covers it.
 3. If a reply from the operator is appropriate, draft it in the operator's voice. DO NOT SEND ANYTHING — the draft is surfaced for the operator's approval only.
 
 Always refer to people and channels by name; never output raw platform IDs (e.g. Slack user IDs like U0123, channel IDs like C0123).
