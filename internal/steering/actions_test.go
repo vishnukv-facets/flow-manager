@@ -12,12 +12,19 @@ import (
 // stubActionIO swaps the shell-out vars and records calls.
 type spawnRec struct{ name, slug, brief, project string }
 type tellRec struct{ slug, msg string }
+type tagRec struct{ slug, tag string }
+
+// stubbedTags records taskTagger calls for the most recent stubActionIO setup,
+// so tests can assert source-thread tagging without changing the helper's return
+// signature (used by 11 call sites). Reset on each stubActionIO call.
+var stubbedTags []tagRec
 
 func stubActionIO(t *testing.T) (*[]spawnRec, *[]tellRec) {
 	t.Helper()
 	var spawns []spawnRec
 	var tells []tellRec
-	oldSpawn, oldTell := taskSpawner, taskTeller
+	stubbedTags = nil
+	oldSpawn, oldTell, oldTag := taskSpawner, taskTeller, taskTagger
 	taskSpawner = func(_ context.Context, name, slug, brief, project string) error {
 		spawns = append(spawns, spawnRec{name, slug, brief, project})
 		return nil
@@ -26,7 +33,11 @@ func stubActionIO(t *testing.T) (*[]spawnRec, *[]tellRec) {
 		tells = append(tells, tellRec{slug, msg})
 		return nil
 	}
-	t.Cleanup(func() { taskSpawner, taskTeller = oldSpawn, oldTell })
+	taskTagger = func(_ context.Context, slug, tag string) error {
+		stubbedTags = append(stubbedTags, tagRec{slug, tag})
+		return nil
+	}
+	t.Cleanup(func() { taskSpawner, taskTeller, taskTagger = oldSpawn, oldTell, oldTag })
 	return &spawns, &tells
 }
 
@@ -66,6 +77,58 @@ func TestMakeTaskFromFeed(t *testing.T) {
 	// feed row marked acted
 	if items, _ := flowdb.ListFeedItems(db, "acted"); len(items) != 1 {
 		t.Errorf("feed item should be 'acted', got %d acted rows", len(items))
+	}
+}
+
+func TestFeedTrackingTag(t *testing.T) {
+	cases := []struct {
+		name string
+		item flowdb.FeedItem
+		want string
+	}{
+		{"slack thread", flowdb.FeedItem{Source: "slack", ThreadKey: "C_eng:1700000000.000100"}, "slack-thread:C_eng:1700000000.000100"},
+		{"github pr composite", flowdb.FeedItem{Source: "github", ThreadKey: "owner/repo:gh-pr:owner/repo#550"}, "gh-pr:owner/repo#550"},
+		{"github issue composite", flowdb.FeedItem{Source: "github", ThreadKey: "owner/repo:gh-issue:owner/repo#7"}, "gh-issue:owner/repo#7"},
+		{"github no link tag → empty", flowdb.FeedItem{Source: "github", ThreadKey: "owner/repo:weird"}, ""},
+		{"empty thread key → empty", flowdb.FeedItem{Source: "slack", ThreadKey: ""}, ""},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := feedTrackingTag(tc.item); got != tc.want {
+				t.Errorf("feedTrackingTag = %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
+
+// MakeTaskFromFeed must tag the spawned task with its source thread so a later
+// reply on that thread routes home (the Samarthya loop-closing fix).
+func TestMakeTaskFromFeedTagsSourceThread(t *testing.T) {
+	db, err := flowdb.OpenDB(filepath.Join(t.TempDir(), "flow.db"))
+	if err != nil {
+		t.Fatalf("OpenDB: %v", err)
+	}
+	defer db.Close()
+	stubActionIO(t)
+
+	item := flowdb.FeedItem{
+		ID: "tt1", Source: "slack", ThreadKey: "C_eng:1700000000.000100", Summary: "grant access",
+		SuggestedAction: "make_task", Status: "new", CreatedAt: "2026-06-05T10:00:00Z",
+	}
+	if _, err := flowdb.UpsertFeedItem(db, item); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+	if err := MakeTaskFromFeed(context.Background(), db, item); err != nil {
+		t.Fatalf("MakeTaskFromFeed: %v", err)
+	}
+	if len(stubbedTags) != 1 {
+		t.Fatalf("taskTagger calls = %d, want 1", len(stubbedTags))
+	}
+	if stubbedTags[0].tag != "slack-thread:C_eng:1700000000.000100" {
+		t.Errorf("tag = %q, want slack-thread:C_eng:1700000000.000100", stubbedTags[0].tag)
+	}
+	if stubbedTags[0].slug != FeedTaskSlug(item) {
+		t.Errorf("tagged slug = %q, want %q", stubbedTags[0].slug, FeedTaskSlug(item))
 	}
 }
 

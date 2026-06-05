@@ -5,11 +5,13 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"os"
 	"os/exec"
 	"strings"
 	"time"
 
 	"flow/internal/flowdb"
+	"flow/internal/monitor"
 )
 
 // taskSpawner shells out to `flow spawn` to create a task from a feed item
@@ -38,13 +40,69 @@ var taskTeller = func(ctx context.Context, slug, message string) error {
 	return nil
 }
 
+// taskTagger shells out to `flow update task <slug> --tag <tag>` (mirrors
+// monitor.tagFlowTask). Mockable in tests.
+var taskTagger = func(ctx context.Context, slug, tag string) error {
+	cmd := exec.CommandContext(ctx, "flow", "update", "task", slug, "--tag", tag)
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("steering: flow update task --tag %s: %w (output: %s)", tag, err, strings.TrimSpace(string(out)))
+	}
+	return nil
+}
+
+// feedTrackingTag returns the linkage tag that ties a spawned task back to its
+// source thread, so a later reply on that thread routes home (autoResolveWaitingOn
+// + inbox-wake). It mirrors what the dispatchers look up:
+//
+//   - Slack:  "slack-thread:<channel>:<thread_ts>" — the feed item's ThreadKey
+//     is already "<channel>:<thread_ts>", so we just prefix it.
+//   - GitHub: the bare link tag "gh-pr:owner/repo#N" / "gh-issue:owner/repo#N".
+//     The feed item's ThreadKey for GitHub is the composite
+//     "owner/repo:gh-pr:owner/repo#N", so we slice from the link-tag marker.
+//
+// Returns "" when no deterministic linkage can be derived (the caller then
+// skips tagging rather than inventing a tag).
+func feedTrackingTag(item flowdb.FeedItem) string {
+	key := strings.TrimSpace(item.ThreadKey)
+	if key == "" {
+		return ""
+	}
+	for _, marker := range []string{"gh-pr:", "gh-issue:"} {
+		if i := strings.Index(key, marker); i >= 0 {
+			return key[i:] // bare link tag, exactly what findTaskByGitHubTag matches
+		}
+	}
+	if strings.EqualFold(strings.TrimSpace(item.Source), "github") {
+		return "" // github-sourced but no recognizable link tag — don't guess
+	}
+	return monitor.SlackThreadTagPrefix + key
+}
+
 // MakeTaskFromFeed spawns a flow task from a feed item's pre-assembled context
-// pack and marks the feed row 'acted'.
+// pack, tags it with its source thread so future replies route back, and marks
+// the feed row 'acted'.
 func MakeTaskFromFeed(ctx context.Context, db *sql.DB, item flowdb.FeedItem) error {
-	if err := taskSpawner(ctx, feedTaskName(item), FeedTaskSlug(item), feedTaskBrief(item), item.SuggestedProject); err != nil {
+	slug := FeedTaskSlug(item)
+	if err := taskSpawner(ctx, feedTaskName(item), slug, feedTaskBrief(item), item.SuggestedProject); err != nil {
 		return err
 	}
-	return flowdb.SetFeedItemActed(db, item.ID, FeedTaskSlug(item), nowRFC3339())
+	tagSourceThread(ctx, slug, item)
+	return flowdb.SetFeedItemActed(db, item.ID, slug, nowRFC3339())
+}
+
+// tagSourceThread best-effort tags a freshly spawned task with its source-thread
+// linkage tag. Failure is non-fatal: the task still exists and is usable; it just
+// won't auto-route in-thread replies until tagged. We log to stderr rather than
+// abort the action.
+func tagSourceThread(ctx context.Context, slug string, item flowdb.FeedItem) {
+	tag := feedTrackingTag(item)
+	if tag == "" {
+		return
+	}
+	if err := taskTagger(ctx, slug, tag); err != nil {
+		fmt.Fprintf(os.Stderr, "steering: tag source thread on %s: %v\n", slug, err)
+	}
 }
 
 // ForwardFeed hands a summarized context block to the matched task's inbox via
@@ -84,6 +142,7 @@ func MakeReplyTaskFromFeed(ctx context.Context, db *sql.DB, item flowdb.FeedItem
 	if err := taskSpawner(ctx, feedTaskName(item), slug, feedReplyTaskBrief(item, text), item.SuggestedProject); err != nil {
 		return "", err
 	}
+	tagSourceThread(ctx, slug, item)
 	if err := flowdb.SetFeedItemActed(db, item.ID, slug, nowRFC3339()); err != nil {
 		return slug, err
 	}
