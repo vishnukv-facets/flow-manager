@@ -159,6 +159,41 @@ func TestCascadeStage1DropWritesNothing(t *testing.T) {
 	}
 }
 
+// A deep-triage 'drop' verdict must NOT become a feed card — it's cascade-
+// classified noise. It still records a dropped trace for transparency.
+func TestCascadeDeepDropNotSurfaced(t *testing.T) {
+	c, db := cascadeFixture(t)
+	traces := captureTraces(c)
+	stubClassifier(t, func(prompt string) (string, error) {
+		if strings.Contains(prompt, "MODE: stage1-relevance") {
+			return `[{"thread_key":"C1:7.1","relevant":true}]`, nil
+		}
+		return `{"suggested_action":"reply","confidence":0.7,"summary":"q"}`, nil // stage2 passes
+	})
+	stubDeepTriage(t, func(prompt string) (string, error) {
+		return `{"suggested_action":"drop","confidence":0.85,"summary":"bot noise, not for operator"}`, nil
+	})
+	if err := c.Observe(context.Background(), msg("C1", "7.1", "U_OTHER", "create+close dashboard task")); err != nil {
+		t.Fatalf("Observe: %v", err)
+	}
+	if items, _ := flowdb.ListFeedItems(db, "new"); len(items) != 0 {
+		t.Errorf("drop verdict must not surface a feed card, got %d", len(items))
+	}
+	if len(*traces) != 1 {
+		t.Fatalf("trace count = %d, want 1", len(*traces))
+	}
+	tr := (*traces)[0]
+	if tr.Disposition != "dropped" {
+		t.Errorf("trace disposition = %q, want dropped", tr.Disposition)
+	}
+	if tr.StageReached != "stage3" {
+		t.Errorf("trace stage = %q, want stage3", tr.StageReached)
+	}
+	if tr.FeedItemID != "" {
+		t.Errorf("dropped trace must not record a FeedItemID, got %q", tr.FeedItemID)
+	}
+}
+
 func TestCascadeVerdictCacheSkipsRepeat(t *testing.T) {
 	c, db := cascadeFixture(t)
 	calls := 0

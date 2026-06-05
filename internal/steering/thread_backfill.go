@@ -107,6 +107,36 @@ func ReconcileOpenFeedMatches(db *sql.DB, logf func(string, ...any)) (int, error
 	return flipped, nil
 }
 
+// DismissSurfacedDropCards clears feed cards that should never have been
+// surfaced: still-'new' rows whose suggested action is 'drop' (cascade-classified
+// noise that an earlier bug let through to the feed). They move to 'dismissed' —
+// gone from the active feed, still auditable under 'dismissed'/'all' and in the
+// trace. Runs on boot; deterministic, no network. Returns the count dismissed.
+func DismissSurfacedDropCards(db *sql.DB, logf func(string, ...any)) (int, error) {
+	if db == nil {
+		return 0, nil
+	}
+	items, err := flowdb.ListFeedItems(db, "new")
+	if err != nil {
+		return 0, fmt.Errorf("steering: sweep list new feed: %w", err)
+	}
+	now := nowRFC3339()
+	dismissed := 0
+	for _, item := range items {
+		if item.SuggestedAction != string(ActionDrop) {
+			continue
+		}
+		if err := flowdb.SetFeedItemStatus(db, item.ID, "dismissed", now); err != nil {
+			if logf != nil {
+				logf("sweep: dismiss drop card %s: %v", item.ID, err)
+			}
+			continue
+		}
+		dismissed++
+	}
+	return dismissed, nil
+}
+
 // findTaskByTag returns the slug of a task carrying tag, preferring a non-done
 // one and INCLUDING archived tasks (an archived task still tracks its thread).
 // Mirrors matchExistingTask's selection but keyed directly on a tag. ok=false

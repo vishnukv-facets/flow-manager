@@ -279,6 +279,16 @@ func (s *Server) ListenAndServe(addr string) int {
 			} else if m > 0 {
 				fmt.Fprintf(os.Stderr, "[feed reconcile] flipped %d open card(s) to forward an existing task\n", m)
 			}
+			// Clear any 'drop'-verdict cards that an earlier bug surfaced — they're
+			// cascade-classified noise and shouldn't sit in the active feed.
+			d, derr := steering.DismissSurfacedDropCards(s.cfg.DB, func(format string, args ...any) {
+				fmt.Fprintf(os.Stderr, "[feed reconcile] "+format+"\n", args...)
+			})
+			if derr != nil {
+				fmt.Fprintf(os.Stderr, "[feed reconcile] %v\n", derr)
+			} else if d > 0 {
+				fmt.Fprintf(os.Stderr, "[feed reconcile] dismissed %d stale drop-verdict card(s)\n", d)
+			}
 		}()
 	}
 	// Start the GitHub polling listener when explicitly enabled. Like

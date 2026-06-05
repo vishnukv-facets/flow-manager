@@ -249,6 +249,16 @@ func (c *Cascade) finishItem(ctx context.Context, in ClassifyInput, tr *flowdb.S
 	}
 	c.cache.mark(in.ThreadKey, c.now())
 	c.applyExistingTaskMatch(&v3, ev)
+	// A deep-triage 'drop' verdict is noise the cascade itself rejected — it
+	// belongs in the trace (for transparency), never as a feed card nagging the
+	// operator. Stage 2 already drops early; this is the same guard for the
+	// deeper verdict (and the stage2 fallback when deep triage errored).
+	if v3.SuggestedAction == ActionDrop {
+		tr.Disposition, tr.DropReason = "dropped", "deep-triage verdict: drop"
+		tr.FinalAction, tr.FinalConfidence = string(v3.SuggestedAction), v3.Confidence
+		c.emitTrace(tr, start)
+		return nil
+	}
 	id, werr := c.writeFeed(v3, ev)
 	tr.Disposition = "surfaced"
 	tr.FinalAction, tr.FinalConfidence, tr.FeedItemID = string(v3.SuggestedAction), v3.Confidence, id

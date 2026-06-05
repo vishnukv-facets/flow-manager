@@ -144,6 +144,45 @@ func TestReconcileOpenFeedMatches(t *testing.T) {
 	}
 }
 
+func TestDismissSurfacedDropCards(t *testing.T) {
+	db, err := flowdb.OpenDB(filepath.Join(t.TempDir(), "flow.db"))
+	if err != nil {
+		t.Fatalf("OpenDB: %v", err)
+	}
+	defer db.Close()
+
+	mk := func(id, action, status string) {
+		t.Helper()
+		if _, err := flowdb.UpsertFeedItem(db, flowdb.FeedItem{
+			ID: id, Source: "slack", ThreadKey: "C:" + id, SuggestedAction: action,
+			Status: status, CreatedAt: "2026-06-05T10:00:00Z",
+		}); err != nil {
+			t.Fatalf("seed %s: %v", id, err)
+		}
+	}
+	mk("d1", "drop", "new")   // surfaced drop → must be dismissed
+	mk("d2", "drop", "new")   // another → dismissed
+	mk("r1", "reply", "new")  // genuine card → untouched
+	mk("a1", "drop", "acted") // already resolved → untouched
+
+	n, err := DismissSurfacedDropCards(db, nil)
+	if err != nil {
+		t.Fatalf("sweep: %v", err)
+	}
+	if n != 2 {
+		t.Fatalf("dismissed = %d, want 2", n)
+	}
+	if got, _ := flowdb.GetFeedItem(db, "d1"); got.Status != "dismissed" {
+		t.Errorf("d1 status = %q, want dismissed", got.Status)
+	}
+	if got, _ := flowdb.GetFeedItem(db, "r1"); got.Status != "new" {
+		t.Errorf("r1 (reply) status = %q, want new (untouched)", got.Status)
+	}
+	if newItems, _ := flowdb.ListFeedItems(db, "new"); len(newItems) != 1 {
+		t.Errorf("remaining new cards = %d, want 1 (the reply)", len(newItems))
+	}
+}
+
 func TestBackfillSkipsDeletedTask(t *testing.T) {
 	db, err := flowdb.OpenDB(filepath.Join(t.TempDir(), "flow.db"))
 	if err != nil {
