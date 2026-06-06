@@ -2,6 +2,9 @@ package server
 
 import (
 	"bytes"
+	"fmt"
+	"os"
+	"strings"
 	"testing"
 	"time"
 )
@@ -165,32 +168,72 @@ func TestTerminalAddClientChunksLargeReplay(t *testing.T) {
 	}
 }
 
-func TestTerminalSessionSendHistoryChunksLargeReplay(t *testing.T) {
-	replay := bytes.Repeat([]byte("h"), terminalReplayChunkBytes()+9)
-	sess := &terminalSession{
-		provider:   "codex",
-		clients:    map[*terminalClient]struct{}{},
-		scrollback: replay,
+func TestTerminalProtocolDoesNotExposeHistoryReseedMessages(t *testing.T) {
+	data, err := os.ReadFile("terminal_bridge.go")
+	if err != nil {
+		t.Fatal(err)
 	}
-	client := &terminalClient{send: make(chan terminalWSMessage, 8), done: make(chan struct{})}
+	source := string(data)
+	for _, forbidden := range []string{`"history-start"`, `"history-chunk"`, `"history-end"`, "sendHistory"} {
+		if strings.Contains(source, forbidden) {
+			t.Fatalf("terminal bridge still exposes history reseed protocol marker %s", forbidden)
+		}
+	}
+}
 
-	sess.sendHistory(client)
+func TestBrowserTerminalDefaultScrollbackIsMaxPractical(t *testing.T) {
+	data, err := os.ReadFile("ui/src/components/Terminal.tsx")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(data), "const DEFAULT_TERMINAL_SCROLLBACK_LINES = 1_000_000") {
+		t.Fatal("browser terminal default scrollback should be 1,000,000 lines")
+	}
+}
 
-	start := <-client.send
-	first := <-client.send
-	second := <-client.send
-	end := <-client.send
-	if start.Type != "history-start" {
-		t.Fatalf("start message = %+v, want history-start", start)
+func TestBrowserTerminalUsesNativeTmuxMouseScrollAndCopy(t *testing.T) {
+	data, err := os.ReadFile("ui/src/components/Terminal.tsx")
+	if err != nil {
+		t.Fatal(err)
 	}
-	if first.Type != "history-chunk" || len(first.Data) != terminalReplayChunkBytes() {
-		t.Fatalf("first history chunk = type %q len %d", first.Type, len(first.Data))
+	source := string(data)
+	for _, forbidden := range []string{
+		"attachCustomWheelEventHandler",
+		"copy scroll-guard",
+		"armCopyScrollGuard",
+		"term.onSelectionChange",
+		"term.getSelection()",
+	} {
+		if strings.Contains(source, forbidden) {
+			t.Fatalf("browser terminal should let tmux own mouse scroll/copy; found %q", forbidden)
+		}
 	}
-	if second.Type != "history-chunk" || len(second.Data) != 9 {
-		t.Fatalf("second history chunk = type %q len %d", second.Type, len(second.Data))
+	for _, required := range []string{
+		"registerOscHandler(52",
+		"uploadTerminalAttachments",
+		"host.addEventListener('paste', onHostPaste, true)",
+		"host.addEventListener('drop', onHostDrop)",
+	} {
+		if !strings.Contains(source, required) {
+			t.Fatalf("browser terminal lost required copy/attachment support %q", required)
+		}
 	}
-	if end.Type != "history-end" {
-		t.Fatalf("end message = %+v, want history-end", end)
+}
+
+func TestBrowserTerminalUsesSharedTmuxSessionWithoutBrowserAttachWorkaround(t *testing.T) {
+	data, err := os.ReadFile("terminal_bridge.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	source := string(data)
+	for _, forbidden := range []string{
+		"ensureBrowserAttachOptions",
+		"ensureSharedTerminalBrowserAttachOptions",
+		`"mouse", "off"`,
+	} {
+		if strings.Contains(source, forbidden) {
+			t.Fatalf("browser terminal should use the shared tmux session without attach workaround %q", forbidden)
+		}
 	}
 }
 
@@ -200,7 +243,7 @@ func TestTerminalDataChunksExpandToFitClientQueue(t *testing.T) {
 	client := &terminalClient{send: make(chan terminalWSMessage, 4), done: make(chan struct{})}
 
 	client.queue(terminalWSMessage{Type: "status"})
-	queueTerminalDataChunks(client, "output", replay, 0)
+	queueTerminalDataChunks(client, "output", replay)
 
 	select {
 	case <-client.done:
@@ -210,28 +253,6 @@ func TestTerminalDataChunksExpandToFitClientQueue(t *testing.T) {
 	if got := len(client.send); got != 4 {
 		t.Fatalf("queued messages = %d, want 4", got)
 	}
-}
-
-func TestTerminalDataChunksReserveQueueSlotsForHistoryEnd(t *testing.T) {
-	t.Setenv("FLOW_TERMINAL_REPLAY_CHUNK_BYTES", "16384")
-	replay := bytes.Repeat([]byte("h"), 50*1024)
-	client := &terminalClient{send: make(chan terminalWSMessage, 4), done: make(chan struct{})}
-
-	client.queue(terminalWSMessage{Type: "history-start"})
-	queueTerminalDataChunks(client, "history-chunk", replay, 1)
-	client.queue(terminalWSMessage{Type: "history-end"})
-
-	select {
-	case <-client.done:
-		t.Fatal("adaptive history chunking should preserve room for history-end")
-	default:
-	}
-	for i := 0; i < 4; i++ {
-		if msg := <-client.send; msg.Type == "history-end" {
-			return
-		}
-	}
-	t.Fatal("history-end was not queued")
 }
 
 func TestTerminalResizeOwnerUsesLargestConnectedGrid(t *testing.T) {
@@ -256,6 +277,102 @@ func TestTerminalResizeOwnerUsesLargestConnectedGrid(t *testing.T) {
 	}
 	if !sess.clientOwnsResize(second) {
 		t.Fatal("larger resized client should become resize owner")
+	}
+}
+
+func TestTerminalHubBrowserAttachUsesSeparatePTYForConcurrentBrowserClients(t *testing.T) {
+	root, db := testRootDB(t)
+	insertProjectTask(t, db, root)
+	if _, err := db.Exec(`UPDATE tasks SET status = 'in-progress', session_provider = 'codex', session_id = '55555555-5555-4555-8555-555555555555' WHERE slug = 'build-ui'`); err != nil {
+		t.Fatal(err)
+	}
+
+	oldSharedLookPath := sharedTerminalLookPath
+	oldSharedCommand := sharedTerminalCommand
+	sharedTerminalLookPath = func(name string) (string, error) {
+		if name == "tmux" {
+			return "/usr/bin/tmux", nil
+		}
+		return "", fmt.Errorf("not found")
+	}
+	resetSharedTerminalAvailable()
+	defer func() {
+		sharedTerminalLookPath = oldSharedLookPath
+		sharedTerminalCommand = oldSharedCommand
+		resetSharedTerminalAvailable()
+	}()
+
+	var commands [][]string
+	sessionExists := false
+	sharedTerminalCommand = func(args ...string) ([]byte, error) {
+		commands = append(commands, append([]string(nil), args...))
+		if len(args) == 0 {
+			return nil, nil
+		}
+		switch args[0] {
+		case "has-session":
+			if sessionExists {
+				return nil, nil
+			}
+			return nil, fmt.Errorf("missing session")
+		case "list-panes":
+			return []byte("FLOW_PERMISSION_MODE='auto' FLOW_SESSION_PROVIDER='codex' FLOW_TASK='build-ui' codex exec prompt\n"), nil
+		case "capture-pane":
+			return []byte("history line\n"), nil
+		case "kill-session":
+			sessionExists = false
+			return nil, nil
+		default:
+			if containsString(args, "new-session") {
+				sessionExists = true
+			}
+			return nil, nil
+		}
+	}
+
+	binDir := t.TempDir()
+	for _, bin := range []string{"codex", "tmux"} {
+		path := binDir + "/" + bin
+		if err := os.WriteFile(path, []byte("#!/bin/sh\nsleep 2\n"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	if !sharedTerminalAvailable() {
+		t.Fatal("test setup did not make tmux available")
+	}
+
+	srv := New(Config{DB: db, FlowRoot: root, CommandPath: "/bin/flow"})
+
+	first, firstTransient, err := srv.terminals.attachBrowser("build-ui", 120, 32)
+	if err != nil {
+		t.Fatalf("first attachBrowser: %v", err)
+	}
+	if firstTransient {
+		t.Fatal("first browser attach should be the tracked terminal session")
+	}
+	firstClient := &terminalClient{send: make(chan terminalWSMessage, 8), done: make(chan struct{})}
+	first.addClient(firstClient, false, 120, 32)
+	defer first.terminate()
+
+	second, secondTransient, err := srv.terminals.attachBrowser("build-ui", 80, 24)
+	if err != nil {
+		t.Fatalf("second attachBrowser: %v", err)
+	}
+	if !secondTransient {
+		t.Fatal("second concurrent browser attach should use its own transient PTY")
+	}
+	if second == first {
+		t.Fatal("second browser attach reused the first browser PTY")
+	}
+	defer second.detachBrowserAttach()
+	if got := srv.terminals.sessions["build-ui"]; got != first {
+		t.Fatal("transient browser attach replaced the tracked terminal session")
+	}
+
+	got := commandLog(commands)
+	if strings.Count(got, "new-session") != 1 {
+		t.Fatalf("expected one shared tmux session, got commands:\n%s", got)
 	}
 }
 

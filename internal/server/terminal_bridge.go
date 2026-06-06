@@ -181,7 +181,7 @@ func (s *Server) handleTerminalWebSocket(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	sess, err := s.terminals.attach(slug, cols, rows)
+	sess, transient, err := s.terminals.attachBrowser(slug, cols, rows)
 	if err != nil {
 		_ = conn.WriteJSON(terminalWSMessage{Type: "error", Message: err.Error()})
 		_ = conn.Close()
@@ -194,6 +194,9 @@ func (s *Server) handleTerminalWebSocket(w http.ResponseWriter, r *http.Request)
 	go client.writeLoop()
 	client.readLoop(sess)
 	sess.removeClient(client)
+	if transient {
+		sess.detachBrowserAttach()
+	}
 }
 
 func (s *Server) handleFloatingTerminalWebSocket(w http.ResponseWriter, r *http.Request) {
@@ -213,7 +216,7 @@ func (s *Server) handleFloatingTerminalWebSocket(w http.ResponseWriter, r *http.
 		return
 	}
 
-	sess, err := s.terminals.attachFloating(id, cols, rows)
+	sess, transient, err := s.terminals.attachFloatingBrowser(id, cols, rows)
 	if err != nil {
 		_ = conn.WriteJSON(terminalWSMessage{Type: "error", Message: err.Error()})
 		_ = conn.Close()
@@ -226,6 +229,9 @@ func (s *Server) handleFloatingTerminalWebSocket(w http.ResponseWriter, r *http.
 	go client.writeLoop()
 	client.readLoop(sess)
 	sess.removeClient(client)
+	if transient {
+		sess.detachBrowserAttach()
+	}
 }
 
 func intQueryDefault(r *http.Request, key string, def int) int {
@@ -279,6 +285,28 @@ func (h *terminalHub) attach(slug string, cols, rows int) (*terminalSession, err
 		h.server.inboxMonitors.start(slug)
 	}
 	return sess, nil
+}
+
+func (h *terminalHub) attachBrowser(slug string, cols, rows int) (*terminalSession, bool, error) {
+	h.mu.Lock()
+	sess := h.sessions[slug]
+	h.mu.Unlock()
+	if sess != nil && sess.running() && sess.clientCount() > 0 {
+		launch, err := h.server.prepareTerminalLaunch(slug)
+		if err != nil {
+			return nil, false, err
+		}
+		transient, err := h.startSessionLocked(launch, cols, rows)
+		if err != nil {
+			if launch.Created {
+				h.server.rollbackPreparedTerminalLaunch(launch)
+			}
+			return nil, false, err
+		}
+		return transient, true, nil
+	}
+	sess, err := h.attach(slug, cols, rows)
+	return sess, false, err
 }
 
 func (h *terminalHub) lockLaunch(slug string) func() {
@@ -488,6 +516,26 @@ func (h *terminalHub) attachFloating(id string, cols, rows int) (*terminalSessio
 	h.sessions[id] = sess
 	h.mu.Unlock()
 	return sess, nil
+}
+
+func (h *terminalHub) attachFloatingBrowser(id string, cols, rows int) (*terminalSession, bool, error) {
+	h.mu.Lock()
+	sess := h.sessions[id]
+	if sess != nil && sess.running() && sess.clientCount() > 0 {
+		launch, ok := h.floatingLaunches[id]
+		h.mu.Unlock()
+		if !ok {
+			return nil, false, fmt.Errorf("floating terminal not found: %s", id)
+		}
+		transient, err := h.startSessionLocked(launch, cols, rows)
+		if err != nil {
+			return nil, false, err
+		}
+		return transient, true, nil
+	}
+	h.mu.Unlock()
+	sess, err := h.attachFloating(id, cols, rows)
+	return sess, false, err
 }
 
 func (h *terminalHub) stop(slug string) {
@@ -1168,17 +1216,12 @@ func (s *Server) ensureSharedTerminalSession(launch terminalLaunch, cols, rows i
 		args = append(args, "-f", cfgPath)
 	}
 	args = append(args,
-		// Mouse OFF. The browser terminal (xterm.js) is the real UI: it owns
-		// scrolling (its own capture-pane-seeded scrollback) and text selection
-		// (native DOM selection → clipboard). With mouse ON, tmux grabs the wheel
-		// and — because the agent runs with mouse tracking disabled — a single
-		// scroll drops the pane into copy-mode, which freezes the view, paints a
-		// "[pos/total]" indicator, and garbles/duplicates the render. tmux is just
-		// invisible plumbing here, so it must never touch the mouse.
+		// Mouse ON for the shared tmux session. Each browser tab attaches as its own
+		// tmux client, so native wheel scroll and copy-mode stay owned by tmux.
 		"set-option",
 		"-g",
 		"mouse",
-		"off",
+		"on",
 		";",
 		// Size the pane to the latest (i.e. our browser) client rather than the
 		// smallest of all clients, so the grid tracks the browser on resize.
@@ -1196,8 +1239,8 @@ func (s *Server) ensureSharedTerminalSession(launch terminalLaunch, cols, rows i
 		"status",
 		"off",
 		";",
-		// Let inner-app OSC 52 reach the outer terminal (harmless with mouse off;
-		// the browser's own selection→clipboard handles drag-to-copy).
+		// Let tmux / inner apps emit OSC 52 to the browser terminal so native
+		// tmux copy-mode can reach the system clipboard.
 		"set-option",
 		"-g",
 		"set-clipboard",
@@ -1780,21 +1823,8 @@ func (s *terminalSession) captureReplay() []byte {
 	return nil
 }
 
-// sendHistory re-sends the full pane history to one client as a "history"
-// reseed. The browser requests this when the user scrolls to the top of a
-// repaint-style (Codex) session, then rebuilds its scrollback from it so the
-// first message becomes reachable. Claude appends inline and accumulates
-// scrollback naturally, so it never needs this.
-func (s *terminalSession) sendHistory(client *terminalClient) {
-	if data := s.captureReplay(); len(data) > 0 {
-		client.queue(terminalWSMessage{Type: "history-start"})
-		queueTerminalDataChunks(client, "history-chunk", data, 1)
-		client.queue(terminalWSMessage{Type: "history-end"})
-	}
-}
-
-func queueTerminalDataChunks(client *terminalClient, typ string, data []byte, reserveSlots int) {
-	chunkSize := adaptiveTerminalChunkBytes(client, len(data), reserveSlots)
+func queueTerminalDataChunks(client *terminalClient, typ string, data []byte) {
+	chunkSize := adaptiveTerminalChunkBytes(client, len(data))
 	for len(data) > 0 {
 		n := min(len(data), chunkSize)
 		client.queue(terminalWSMessage{Type: typ, Data: string(data[:n])})
@@ -1802,12 +1832,12 @@ func queueTerminalDataChunks(client *terminalClient, typ string, data []byte, re
 	}
 }
 
-func adaptiveTerminalChunkBytes(client *terminalClient, dataLen, reserveSlots int) int {
+func adaptiveTerminalChunkBytes(client *terminalClient, dataLen int) int {
 	chunkSize := terminalReplayChunkBytes()
 	if client == nil || client.send == nil || dataLen <= chunkSize {
 		return chunkSize
 	}
-	availableSlots := cap(client.send) - len(client.send) - max(0, reserveSlots)
+	availableSlots := cap(client.send) - len(client.send)
 	if availableSlots <= 0 {
 		return chunkSize
 	}
@@ -1856,7 +1886,7 @@ func (s *terminalSession) addClient(client *terminalClient, replay bool, cols, r
 	}
 	client.queue(terminalWSMessage{Type: "status", Message: message})
 	if len(replayData) > 0 {
-		queueTerminalDataChunks(client, "output", replayData, 0)
+		queueTerminalDataChunks(client, "output", replayData)
 	}
 	client.cols = cols
 	client.rows = rows
@@ -1873,6 +1903,15 @@ func (s *terminalSession) addClient(client *terminalClient, replay bool, cols, r
 	}
 }
 
+func (s *terminalSession) clientCount() int {
+	if s == nil {
+		return 0
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return len(s.clients)
+}
+
 func (s *terminalSession) removeClient(client *terminalClient) {
 	var resizeCols, resizeRows int
 	var shouldResize bool
@@ -1887,6 +1926,30 @@ func (s *terminalSession) removeClient(client *terminalClient) {
 		_ = s.resize(resizeCols, resizeRows)
 	}
 	client.close()
+}
+
+func (s *terminalSession) detachBrowserAttach() {
+	if s == nil {
+		return
+	}
+	if s.cmd != nil && s.cmd.Process != nil {
+		_ = s.cmd.Process.Signal(syscall.SIGTERM)
+	}
+	if s.tty != nil {
+		_ = s.tty.Close()
+	}
+	s.mu.Lock()
+	if !s.closed {
+		s.closed = true
+		s.exitStatus = "terminal detached"
+		if s.done != nil {
+			close(s.done)
+		}
+	}
+	s.mu.Unlock()
+	if s.hub != nil && s.hub.sharedRunningCache != nil {
+		s.hub.sharedRunningCache.invalidate(s.slug)
+	}
 }
 
 func (s *terminalSession) readPTY() {
@@ -2175,10 +2238,6 @@ func (c *terminalClient) readLoop(sess *terminalSession) {
 			}
 		case "resize":
 			_ = sess.resizeFrom(c, msg.Cols, msg.Rows)
-		case "history":
-			// Client scrolled to the top of a repaint-style session and wants
-			// the authoritative full history to rebuild its scrollback.
-			sess.sendHistory(c)
 		}
 	}
 }

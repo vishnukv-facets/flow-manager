@@ -12,26 +12,19 @@ import { uploadTerminalAttachments } from '../lib/api'
 // {type:"input"|"resize"}. Sessions run inside tmux, so on (re)attach the
 // server resizes the pane to our URL cols/rows and replays the full pane
 // history — which is why we FIT BEFORE CONNECTING: connecting at the real
-// measured size makes that replay render at the right width (no rewrap/overlap),
-// and xterm's large scrollback (TERMINAL_SCROLLBACK_LINES) keeps every replayed
-// line so you can scroll to the very start of the session.
+// measured size makes that replay render at the right width (no rewrap/overlap)
+// before native tmux mouse scroll/copy-mode takes over user navigation.
 //
-// NATIVE TERMINAL MODEL. tmux owns the pane and repaints it to our PTY; xterm.js
-// is the real UI and owns scrolling with its OWN scrollback, seeded once from
-// the server's replay on attach (see tmux_config.go: `set -g mouse off` for the
-// rationale). We never clear-and-rewrite the buffer mid-session: scrolling up
-// reads the seeded scrollback, scrolling back down re-attaches to the live tail
-// — exactly like iTerm. (An earlier "reseed full history on scroll-to-top"
-// experiment swapped the live screen for a frozen capture-pane snapshot, which
-// stranded repaint-style agents' live composer/footer behind blank rows until a
-// refresh or zoom; removing it is what makes the live view stay solid.)
+// NATIVE TERMINAL MODEL. tmux owns the pane and repaints it to our PTY. The
+// browser xterm is the terminal emulator attached to the same tmux session, so
+// mouse wheel and drag selection are passed through to tmux copy-mode instead
+// of being simulated with browser-local scrollback.
 //
-// This is a faithful port of flow's long-standing xterm integration (the one
-// the user described as "worked solid"): FitAddon + Unicode11Addon, OSC 52 →
-// system clipboard, auto-copy on selection, a copy scroll-guard, custom
-// wheel/key scrolling, and DA-response stripping on input.
+// This keeps the stable xterm pieces: FitAddon + Unicode11Addon, OSC 52 →
+// system clipboard, image paste/drop attachment support, and DA-response
+// stripping on input.
 
-const DEFAULT_TERMINAL_SCROLLBACK_LINES = 200_000
+const DEFAULT_TERMINAL_SCROLLBACK_LINES = 1_000_000
 const MAX_TERMINAL_SCROLLBACK_LINES = 1_000_000
 
 function terminalScrollbackLines(): number {
@@ -95,8 +88,7 @@ interface Props {
   kind?: 'task' | 'floating'
   restartKey?: number
   // Carried for callers (SessionDetail / FloatingTerminalWindow) and future use;
-  // the native scroll model treats every provider the same — xterm owns the
-  // scrollback, so no provider-specific reseed is needed.
+  // the native tmux model treats every provider the same.
   provider?: string
   onStatus?: (kind: 'status' | 'error' | 'closed' | 'open', message: string) => void
 }
@@ -111,6 +103,8 @@ function termWsURL(slug: string, cols: number, rows: number, kind: 'task' | 'flo
 export function TaskTerminal({ slug, kind = 'task', restartKey = 0, onStatus }: Props) {
   const hostRef = useRef<HTMLDivElement>(null)
   const jumpToBottomRef = useRef<(() => void) | null>(null)
+  const onStatusRef = useRef<Props['onStatus']>(onStatus)
+  onStatusRef.current = onStatus
   const terminalInstanceKey = `${kind}:${slug}:${restartKey}`
   const [bottomJumpState, setBottomJumpState] = useState({ key: terminalInstanceKey, visible: false })
   if (bottomJumpState.key !== terminalInstanceKey) {
@@ -178,6 +172,9 @@ export function TaskTerminal({ slug, kind = 'task', restartKey = 0, onStatus }: 
     const send = (obj: unknown) => {
       if (ws && ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify(obj))
     }
+    const notifyStatus = (nextKind: 'status' | 'error' | 'closed' | 'open', message: string) => {
+      onStatusRef.current?.(nextKind, message)
+    }
 
     // ---- scroll-to-bottom affordance -----------------------------------
     // A small button appears whenever the viewport is detached from the live
@@ -220,47 +217,7 @@ export function TaskTerminal({ slug, kind = 'task', restartKey = 0, onStatus }: 
     term.open(host)
     term.focus()
 
-    // ---- custom wheel scrolling ----------------------------------------
-    // When the inner TUI has mouse tracking on it owns the wheel (pass through);
-    // otherwise we scroll the scrollback ourselves, handling line/page/pixel
-    // delta modes and accumulating sub-line remainders for smooth scrolling.
-    let wheelRemainder = 0
-    const wheelLineHeight = (): number => {
-      // _core is private; the rendered cell height is the most accurate value.
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const cell = (term as any)._core?._renderService?.dimensions?.css?.cell
-      return (
-        cell?.height ||
-        Math.max(12, Math.round((term.options.fontSize || 13) * (term.options.lineHeight || 1.18))) ||
-        16
-      )
-    }
-    term.attachCustomWheelEventHandler((event) => {
-      if (event.ctrlKey) return true
-      const mouseMode = term.modes?.mouseTrackingMode ?? 'none'
-      if (mouseMode !== 'none') return true
-      const scale =
-        event.deltaMode === 1
-          ? 1
-          : event.deltaMode === 2
-            ? Math.max(1, term.rows - 2)
-            : 1 / wheelLineHeight()
-      wheelRemainder += event.deltaY * scale
-      const lines = wheelRemainder > 0 ? Math.floor(wheelRemainder) : Math.ceil(wheelRemainder)
-      if (lines !== 0) {
-        term.scrollLines(lines)
-        wheelRemainder -= lines
-        // Scrolling up to read history detaches from the tail; scrolling back to
-        // the bottom re-attaches so live output resumes auto-following.
-        follow = atBottom()
-        syncBottomJump()
-      }
-      event.preventDefault()
-      event.stopPropagation()
-      return false
-    })
-
-    // ---- Shift + PageUp/PageDown/Home/End → scrollback nav -------------
+    // ---- Shift + PageUp/PageDown/Home/End → xterm scrollback nav --------
     term.attachCustomKeyEventHandler((event) => {
       if (event.type !== 'keydown') return true
       if (!event.shiftKey || event.altKey || event.ctrlKey || event.metaKey) return true
@@ -285,60 +242,12 @@ export function TaskTerminal({ slug, kind = 'task', restartKey = 0, onStatus }: 
       return false
     })
 
-    // Keep the follow flag + bottom-jump button honest for any scroll source
-    // (drag-select snap, programmatic, etc.), not just wheel/key.
+    // Keep the follow flag + bottom-jump button honest for xterm-local scroll
+    // sources such as Shift+PageUp or the bottom jump button.
     const scrollDisposable = term.onScroll(() => {
       follow = atBottom()
       syncBottomJump()
     })
-
-    // ---- copy scroll-guard ---------------------------------------------
-    // When scrolled up reading old output, starting a drag-select snaps the
-    // viewport to the bottom (xterm's SelectionService resets _userScrolling on
-    // mousedown). Snapshot the logical viewport on mousedown and, if it snaps to
-    // the buffer base during the drag, restore it via scrollToLine (keeps
-    // xterm's internal scroll state consistent). Poll on rAF rather than DOM
-    // scroll events so it works regardless of the renderer's scroll path.
-    let copyGuardCleanup: (() => void) | null = null
-    const armCopyScrollGuard = () => {
-      copyGuardCleanup?.()
-      const buf = term.buffer.active
-      const savedViewportY = buf.viewportY
-      if (savedViewportY >= buf.baseY) return // already at the bottom — nothing to protect
-      let restored = false
-      let frameId = 0
-      let disposeTimer = 0 as unknown as ReturnType<typeof setTimeout> | 0
-      const tick = () => {
-        if (restored || destroyed) return
-        const b = term.buffer.active
-        if (b.viewportY >= b.baseY && b.viewportY > savedViewportY + 1) {
-          term.scrollToLine(savedViewportY)
-          syncBottomJump()
-          restored = true
-          return
-        }
-        frameId = requestAnimationFrame(tick)
-      }
-      frameId = requestAnimationFrame(tick)
-      const stop = () => {
-        if (frameId) cancelAnimationFrame(frameId)
-        if (disposeTimer) clearTimeout(disposeTimer as ReturnType<typeof setTimeout>)
-        window.removeEventListener('mouseup', onMouseUp, true)
-        copyGuardCleanup = null
-      }
-      // Keep the guard alive briefly past mouseup so post-drag clipboard / OSC 52
-      // effects are still covered.
-      const onMouseUp = () => {
-        disposeTimer = setTimeout(stop, 400)
-      }
-      window.addEventListener('mouseup', onMouseUp, true)
-      copyGuardCleanup = stop
-    }
-    const onHostMouseDown = (e: MouseEvent) => {
-      if (e.button !== 0 && e.button !== 2) return
-      armCopyScrollGuard()
-    }
-    host.addEventListener('mousedown', onHostMouseDown, true)
 
     // ---- image attach: drop / paste ------------------------------------
     // Drag, drop, or paste an image onto the terminal to attach it to the live
@@ -383,24 +292,6 @@ export function TaskTerminal({ slug, kind = 'task', restartKey = 0, onStatus }: 
     host.addEventListener('paste', onHostPaste, true) // capture: beat xterm's stopPropagation
     host.addEventListener('dragover', onHostDragOver)
     host.addEventListener('drop', onHostDrop)
-
-    // ---- auto-copy selection to clipboard ------------------------------
-    let selectionCopyTimer = 0 as unknown as ReturnType<typeof setTimeout> | 0
-    const flushSelectionCopy = () => {
-      selectionCopyTimer = 0
-      if (!term.hasSelection()) return
-      const text = term.getSelection()
-      if (!text || !text.trim()) return
-      if (!navigator.clipboard?.writeText) return
-      navigator.clipboard
-        .writeText(text)
-        .then(() => pushToast('ok', 'copied to clipboard'))
-        .catch(() => pushToast('error', 'clipboard copy failed'))
-    }
-    const selectionDisposable = term.onSelectionChange(() => {
-      if (selectionCopyTimer) clearTimeout(selectionCopyTimer as ReturnType<typeof setTimeout>)
-      selectionCopyTimer = setTimeout(flushSelectionCopy, 120)
-    })
 
     // ---- input → PTY ---------------------------------------------------
     const dataDisposable = term.onData((data) => {
@@ -466,7 +357,7 @@ export function TaskTerminal({ slug, kind = 'task', restartKey = 0, onStatus }: 
       if (destroyed || reconnectTimer) return
       const delay = reconnectBackoff
       reconnectBackoff = Math.min(Math.round(reconnectBackoff * 1.7), TERMINAL_RECONNECT_MAX_MS)
-      onStatus?.('status', `reconnecting in ${Math.max(1, Math.ceil(delay / 1000))}s`)
+      notifyStatus('status', `reconnecting in ${Math.max(1, Math.ceil(delay / 1000))}s`)
       reconnectTimer = setTimeout(() => {
         reconnectTimer = null
         openWS()
@@ -502,7 +393,7 @@ export function TaskTerminal({ slug, kind = 'task', restartKey = 0, onStatus }: 
       sock.onopen = () => {
         clearReconnect()
         reconnectBackoff = TERMINAL_RECONNECT_INITIAL_MS
-        onStatus?.('open', 'connected')
+        notifyStatus('open', 'connected')
         scheduleFits()
       }
       sock.onmessage = (ev) => {
@@ -526,19 +417,19 @@ export function TaskTerminal({ slug, kind = 'task', restartKey = 0, onStatus }: 
             if (follow) term.scrollToBottom()
             else syncBottomJump()
           })
-        } else if (m.type === 'status') onStatus?.('status', m.message ?? '')
-        else if (m.type === 'error') onStatus?.('error', m.message ?? 'terminal error')
+        } else if (m.type === 'status') notifyStatus('status', m.message ?? '')
+        else if (m.type === 'error') notifyStatus('error', m.message ?? 'terminal error')
       }
       sock.onclose = () => {
         if (ws === sock) ws = null
         if (!destroyed) {
-          onStatus?.('closed', 'terminal disconnected')
+          notifyStatus('closed', 'terminal disconnected')
           scheduleReconnect()
         }
       }
       sock.onerror = () => {
         if (!destroyed) {
-          onStatus?.('error', 'connection error')
+          notifyStatus('error', 'connection error')
           scheduleReconnect()
         }
       }
@@ -629,18 +520,14 @@ export function TaskTerminal({ slug, kind = 'task', restartKey = 0, onStatus }: 
       clearTimeout(focusTimer)
       fitTimers.forEach(clearTimeout)
       if (resizeFrame) cancelAnimationFrame(resizeFrame)
-      if (selectionCopyTimer) clearTimeout(selectionCopyTimer as ReturnType<typeof setTimeout>)
-      copyGuardCleanup?.()
       observer.disconnect()
       window.removeEventListener('resize', resize)
       document.removeEventListener('visibilitychange', onVisible)
-      host.removeEventListener('mousedown', onHostMouseDown, true)
       host.removeEventListener('paste', onHostPaste, true)
       host.removeEventListener('dragover', onHostDragOver)
       host.removeEventListener('drop', onHostDrop)
       dataDisposable.dispose()
       resizeDisposable.dispose()
-      selectionDisposable.dispose()
       scrollDisposable.dispose()
       osc52?.dispose()
       jumpToBottomRef.current = null
@@ -652,8 +539,7 @@ export function TaskTerminal({ slug, kind = 'task', restartKey = 0, onStatus }: 
       ws = null
       term.dispose()
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [slug, kind, restartKey])
+  }, [slug, kind, restartKey, terminalInstanceKey])
 
   return (
     <div className="flow-term">

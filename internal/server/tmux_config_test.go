@@ -37,10 +37,10 @@ func TestEnsureTmuxConfigWritesFileWhenAbsent(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, want := range []string{
-		"set -g mouse off",
+		"set -g mouse on",
 		"set -g window-size latest",
 		"set -g set-clipboard on",
-		"set -g history-limit 200000",
+		"set -g history-limit 2147483647",
 		"~/.tmux.conf",
 	} {
 		if !strings.Contains(string(contents), want) {
@@ -122,19 +122,20 @@ func TestEnsureSharedTerminalScrollOptionsAppliesPerSession(t *testing.T) {
 
 	got := strings.TrimSpace(commandLog(commands))
 	for _, want := range []string{
-		"set-option -t flow-build-ui mouse off",
+		"set-option -t flow-build-ui mouse on",
 		"set-option -t flow-build-ui window-size latest",
 		"set-option -t flow-build-ui set-clipboard on",
-		"set-window-option -t flow-build-ui: history-limit 200000",
+		"set-window-option -t flow-build-ui: history-limit 2147483647",
 		"send-keys -t flow-build-ui -X cancel",
 	} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("missing tmux command %q in:\n%s", want, got)
 		}
 	}
-	// Copy-mode bindings are gone with mouse off — make sure we don't re-add them.
+	// Native tmux mouse support should work through tmux defaults; do not add
+	// custom copy-mode bindings as another workaround.
 	if strings.Contains(got, "MouseDragEnd1Pane") {
-		t.Fatalf("unexpected copy-mode binding with mouse off:\n%s", got)
+		t.Fatalf("unexpected custom copy-mode binding:\n%s", got)
 	}
 }
 
@@ -154,14 +155,90 @@ func TestEnsureSharedTerminalDefaultScrollOptionsAppliesBeforeNewWindows(t *test
 
 	got := strings.TrimSpace(commandLog(commands))
 	for _, want := range []string{
-		"set-option -g mouse off",
+		"set-option -g mouse on",
 		"set-option -g window-size latest",
 		"set-option -g set-clipboard on",
-		"set-window-option -g history-limit 200000",
+		"set-window-option -g history-limit 2147483647",
 	} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("missing tmux command %q in:\n%s", want, got)
 		}
+	}
+}
+
+func TestStartSessionKeepsTmuxMouseOnForBrowserAttach(t *testing.T) {
+	oldSharedLookPath := sharedTerminalLookPath
+	oldSharedCommand := sharedTerminalCommand
+	sharedTerminalLookPath = func(name string) (string, error) {
+		if name == "tmux" {
+			return "/usr/bin/tmux", nil
+		}
+		return "", fmt.Errorf("not found")
+	}
+	resetSharedTerminalAvailable()
+	defer func() {
+		sharedTerminalLookPath = oldSharedLookPath
+		sharedTerminalCommand = oldSharedCommand
+		resetSharedTerminalAvailable()
+	}()
+
+	var commands [][]string
+	sessionExists := false
+	sharedTerminalCommand = func(args ...string) ([]byte, error) {
+		commands = append(commands, append([]string(nil), args...))
+		if len(args) > 0 && args[0] == "has-session" {
+			if sessionExists {
+				return nil, nil
+			}
+			return nil, fmt.Errorf("missing session")
+		}
+		if containsString(args, "new-session") {
+			sessionExists = true
+			return nil, nil
+		}
+		return nil, nil
+	}
+
+	binDir := t.TempDir()
+	for _, bin := range []string{"codex", "tmux"} {
+		path := filepath.Join(binDir, bin)
+		if err := os.WriteFile(path, []byte("#!/bin/sh\nsleep 2\n"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+
+	srv := &Server{cfg: Config{FlowRoot: t.TempDir()}}
+	hub := newTerminalHub(srv)
+	sess, err := hub.startSessionLocked(terminalLaunch{
+		Slug:     "build-ui",
+		Provider: "codex",
+		WorkDir:  t.TempDir(),
+		Args:     []string{"exec", "prompt"},
+	}, 120, 32)
+	if err != nil {
+		t.Fatalf("startSessionLocked: %v", err)
+	}
+	defer sess.terminate()
+
+	got := strings.TrimSpace(commandLog(commands))
+	wantOrder := []string{
+		"new-session",
+		"set-option -t flow-build-ui mouse on",
+	}
+	last := -1
+	for _, want := range wantOrder {
+		idx := strings.Index(got, want)
+		if idx < 0 {
+			t.Fatalf("missing %q in tmux command log:\n%s", want, got)
+		}
+		if idx <= last {
+			t.Fatalf("tmux command %q ran out of order in:\n%s", want, got)
+		}
+		last = idx
+	}
+	if strings.Contains(got, "set-option -t flow-build-ui mouse off") {
+		t.Fatalf("browser attach must keep tmux mouse enabled; got:\n%s", got)
 	}
 }
 
@@ -210,11 +287,17 @@ func TestEnsureSharedTerminalSessionSetsMaxHistoryBeforeNewWindow(t *testing.T) 
 	}
 
 	got := strings.TrimSpace(commandLog(commands))
-	want := "set-option -g mouse off ; set-option -g window-size latest ; set-option -g status off ; " +
+	want := "set-option -g mouse on ; set-option -g window-size latest ; set-option -g status off ; " +
 		"set-option -g set-clipboard on ; " +
-		"set-window-option -g history-limit 200000 ; new-session"
+		"set-window-option -g history-limit 2147483647 ; new-session"
 	if !strings.Contains(got, want) {
-		t.Fatalf("tmux creation command must apply mouse-off + window-size + status-off + OSC 52 clipboard + max history before new-session; missing %q in:\n%s", want, got)
+		t.Fatalf("tmux creation command must apply mouse-on + window-size + status-off + OSC 52 clipboard + max history before new-session; missing %q in:\n%s", want, got)
+	}
+}
+
+func TestSharedTerminalHistoryLimitDefaultsToPracticalMax(t *testing.T) {
+	if got := sharedTerminalHistoryLimit(); got != "2147483647" {
+		t.Fatalf("sharedTerminalHistoryLimit default = %q, want 2147483647", got)
 	}
 }
 

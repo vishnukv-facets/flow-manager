@@ -8,17 +8,19 @@ import (
 	"sync"
 )
 
-const defaultSharedTerminalHistoryLimit = 200000
+const defaultSharedTerminalHistoryLimit = 2147483647
 
 func sharedTerminalHistoryLimit() string {
 	return fmt.Sprintf("%d", positiveIntEnv("FLOW_TMUX_HISTORY_LIMIT", defaultSharedTerminalHistoryLimit, 1000, 2147483647))
 }
 
 // tmuxConfigBody is the tiny tmux config flow ships so that browser /
-// shared-terminal sessions have sensible defaults — most importantly
-// mouse scroll, which 99% of new tmux users get tripped up by. We avoid
-// stamping any opinion beyond "scroll should work" and let the user's
-// personal ~/.tmux.conf (sourced at the bottom) override anything.
+// shared-terminal sessions have sensible defaults — most importantly native
+// tmux mouse scroll, which 99% of new tmux users get tripped up by. The browser
+// uses the same tmux session with mouse enabled; tmux owns mouse scroll/copy
+// mode while xterm carries the attached PTY and OSC52 clipboard bridge. We avoid
+// stamping any opinion beyond "scroll should work" and let the user's personal
+// ~/.tmux.conf (sourced at the bottom) override anything.
 //
 // Why this lives here rather than in CLI app:
 //   - The terminal bridge is the only path that spawns tmux sessions.
@@ -37,21 +39,17 @@ func tmuxConfigBody() string {
 # Edit your personal ~/.tmux.conf for permanent customization — it is
 # sourced at the bottom of this file and wins on conflicts.
 
-# Mouse OFF. The browser terminal (xterm.js) is the real UI: it owns scrolling
-# (its own scrollback, seeded from tmux history on attach) and text selection
-# (native selection → clipboard). With mouse ON, tmux grabs the wheel — and
-# because flow runs the agent with mouse tracking disabled, a single scroll
-# drops the pane into copy-mode: the view freezes, a "[pos/total]" indicator
-# appears, and the render duplicates/garbles. tmux is invisible plumbing here,
-# so it must never touch the mouse.
-set -g mouse off
+# Mouse ON so native tmux panes scroll normally. The browser terminal attaches
+# to the same session with mouse left enabled, so wheel and drag selection go
+# through tmux copy-mode.
+set -g mouse on
 
 # Size each window to the latest (browser) client, not the smallest of all
 # clients, so the grid tracks the browser terminal on resize.
 set -g window-size latest
 
-# Let an inner app's own OSC 52 reach the outer terminal. Harmless with mouse
-# off; the browser terminal's native selection handles drag-to-copy.
+# Let tmux / inner apps emit OSC 52 to the browser terminal so native tmux copy
+# can reach the system clipboard.
 set -g set-clipboard on
 
 # Hide tmux's status bar. flow's web UI already shows the session name,
@@ -120,12 +118,10 @@ func ensureSharedTerminalScrollOptions(name string) error {
 	if name == "" {
 		return fmt.Errorf("tmux session name not set")
 	}
-	// Mouse OFF (session-scoped, so it wins over any global). The browser
-	// terminal owns scrolling and selection; tmux owning the wheel drops the
-	// pane into copy-mode on a single scroll and garbles the render. This also
-	// flips existing sessions on reattach, not just freshly-created ones.
-	if out, err := sharedTerminalCommand("set-option", "-t", name, "mouse", "off"); err != nil {
-		return fmt.Errorf("disable tmux mouse for %s: %w: %s", name, err, strings.TrimSpace(string(out)))
+	// Mouse ON restores native tmux wheel scroll for shared sessions. Browser
+	// attaches use the same tmux session and let tmux own mouse copy-mode.
+	if out, err := sharedTerminalCommand("set-option", "-t", name, "mouse", "on"); err != nil {
+		return fmt.Errorf("enable tmux mouse for %s: %w: %s", name, err, strings.TrimSpace(string(out)))
 	}
 	// Track the latest (browser) client's size so the pane matches the xterm grid.
 	if out, err := sharedTerminalCommand("set-option", "-t", name, "window-size", "latest"); err != nil {
@@ -151,10 +147,10 @@ func ensureSharedTerminalScrollOptions(name string) error {
 }
 
 func ensureSharedTerminalDefaultScrollOptions() error {
-	// Mouse off (see ensureSharedTerminalScrollOptions): the browser terminal
-	// owns scrolling/selection; tmux must not grab the wheel into copy-mode.
-	if out, err := sharedTerminalCommand("set-option", "-g", "mouse", "off"); err != nil {
-		return fmt.Errorf("disable tmux mouse globally: %w: %s", err, strings.TrimSpace(string(out)))
+	// Mouse on (see ensureSharedTerminalScrollOptions): native tmux panes should
+	// scroll normally, and browser attaches use the same tmux session.
+	if out, err := sharedTerminalCommand("set-option", "-g", "mouse", "on"); err != nil {
+		return fmt.Errorf("enable tmux mouse globally: %w: %s", err, strings.TrimSpace(string(out)))
 	}
 	if out, err := sharedTerminalCommand("set-option", "-g", "window-size", "latest"); err != nil {
 		return fmt.Errorf("set tmux window-size globally: %w: %s", err, strings.TrimSpace(string(out)))

@@ -1484,48 +1484,6 @@ func TestTerminalAddClientReplaysSanitizedScrollback(t *testing.T) {
 	}
 }
 
-func TestTerminalSessionSendHistoryReseedsFromCapturePane(t *testing.T) {
-	oldSharedCommand := sharedTerminalCommand
-	defer func() { sharedTerminalCommand = oldSharedCommand }()
-	// capture-pane is the authoritative full pane history — including the very
-	// first message. Repaint-style agents (Codex) repaint their UI in place, so
-	// the live stream never accumulates that history in the browser's scrollback;
-	// the client re-requests it on scroll-to-top and rebuilds from this reseed.
-	sharedTerminalCommand = func(args ...string) ([]byte, error) {
-		return []byte("first message line\nlater line\n"), nil
-	}
-
-	sess := &terminalSession{
-		provider:   "codex",
-		sharedName: "flow-codex-task",
-		clients:    map[*terminalClient]struct{}{},
-	}
-	client := &terminalClient{send: make(chan terminalWSMessage, 4), done: make(chan struct{})}
-
-	sess.sendHistory(client)
-
-	var got strings.Builder
-	for {
-		select {
-		case msg := <-client.send:
-			switch msg.Type {
-			case "history-start":
-			case "history-chunk":
-				got.WriteString(msg.Data)
-			case "history-end":
-				if !strings.Contains(got.String(), "first message line") {
-					t.Fatalf("reseed must carry full history incl first message; got %q", got.String())
-				}
-				return
-			default:
-				t.Fatalf("unexpected reseed message type = %q", msg.Type)
-			}
-		case <-time.After(time.Second):
-			t.Fatal("sendHistory queued no complete reseed")
-		}
-	}
-}
-
 func TestTerminalEnvForcesBrowserFriendlyClaudeRenderer(t *testing.T) {
 	t.Setenv("CLAUDE_CODE_NO_FLICKER", "1")
 	t.Setenv("CLAUDE_CODE_DISABLE_MOUSE", "0")
