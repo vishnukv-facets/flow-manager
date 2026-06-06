@@ -109,18 +109,18 @@ func captureTaskGitStartSnapshot(task *flowdb.Task, overwrite bool) error {
 	return writeJSONFile(path, snap)
 }
 
-func writeTaskGitCloseoutSnapshot(task *flowdb.Task) (string, error) {
+func writeTaskGitCloseoutSnapshot(task *flowdb.Task) (taskGitCloseoutSnapshot, string, error) {
 	if task == nil || strings.TrimSpace(task.WorkDir) == "" {
-		return "", nil
+		return taskGitCloseoutSnapshot{}, "", nil
 	}
 	root, err := flowRoot()
 	if err != nil {
-		return "", err
+		return taskGitCloseoutSnapshot{}, "", err
 	}
 	capturedAt := flowdb.NowISO()
 	repo, ok, err := collectGitRepositorySnapshot(task.WorkDir)
 	if err != nil || !ok {
-		return "", err
+		return taskGitCloseoutSnapshot{}, "", err
 	}
 
 	updatePath := filepath.Join(root, "tasks", task.Slug, "updates", isoDatePart(capturedAt)+"-git-closeout.md")
@@ -171,15 +171,41 @@ func writeTaskGitCloseoutSnapshot(task *flowdb.Task) (string, error) {
 	}
 
 	if err := writeJSONFile(metadataPath, closeout); err != nil {
-		return "", err
+		return taskGitCloseoutSnapshot{}, "", err
 	}
 	if err := os.MkdirAll(filepath.Dir(updatePath), 0o755); err != nil {
-		return "", err
+		return taskGitCloseoutSnapshot{}, "", err
 	}
 	if err := os.WriteFile(updatePath, []byte(formatGitCloseoutMarkdown(closeout)), 0o644); err != nil {
-		return "", err
+		return taskGitCloseoutSnapshot{}, "", err
 	}
-	return updatePath, nil
+	return closeout, updatePath, nil
+}
+
+// unpropagatedWorkWarnings returns the close-out warnings to print when a done
+// task's work may not reach downstream tasks: commits not in any PR (prTag
+// empty), and/or uncommitted changes. Empty when the work is PR-tracked or the
+// task produced no git changes. Pure for testability.
+func unpropagatedWorkWarnings(closeout taskGitCloseoutSnapshot, prTag string) []string {
+	var warnings []string
+	branch := closeout.Branch
+	if branch == "" {
+		branch = "(unknown branch)"
+	}
+	if prTag == "" {
+		if n := len(closeout.CommitsSinceStart); n > 0 {
+			warnings = append(warnings, fmt.Sprintf(
+				"⚠ %d commit(s) on branch %s are not in any PR. Dependent tasks won't see this work until it's pushed and a PR is opened.\n"+
+					"  → open a PR for this branch (or push it) so downstream tasks have the context.",
+				n, branch))
+		}
+	}
+	if n := len(closeout.WorkingTreeStatus); n > 0 {
+		warnings = append(warnings, fmt.Sprintf(
+			"⚠ %d uncommitted change(s) in the worktree were not captured. Commit them if they're part of this task's deliverable.",
+			n))
+	}
+	return warnings
 }
 
 func collectGitRepositorySnapshot(workDir string) (gitRepositorySnapshot, bool, error) {

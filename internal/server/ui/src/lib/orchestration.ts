@@ -15,8 +15,10 @@ import type { TaskSummary, TaskView } from './types'
 export interface OrchNode {
   task: TaskView
   children: OrchNode[]
-  /** Parents beyond the primary parent_slug — a DAG hint surfaced on the node. */
-  extraParents: number
+  /** Dependency parents beyond the tree's umbrella spine (task_dependencies
+   * minus parent_slug) — the tasks this one waits on. Rendered as named,
+   * clickable links under the row so the DAG is visible, not just counted. */
+  extraParentList: TaskSummary[]
 }
 
 /**
@@ -75,14 +77,34 @@ export function buildFamilyTree(tasks: TaskView[], focusSlug: string): OrchNode 
     const childTasks = (kids.get(t.slug) ?? [])
       .filter((c) => !seenDown.has(c.slug))
       .sort(byCreated)
-    const parentCount = t.parents?.length ?? (t.parent_slug ? 1 : 0)
+    // Dependency edges to surface = task_dependencies minus the umbrella parent
+    // already drawn as this node's tree position (blockingParents). These are
+    // exactly "the tasks this one depends on".
+    const extras = blockingParents(t)
     return {
       task: t,
-      extraParents: Math.max(0, parentCount - 1),
+      extraParentList: extras,
       children: childTasks.map(build),
     }
   }
   return build(root)
+}
+
+/** PR ref ("owner/repo#n") from a task's gh-pr: tag, or null when none is
+ * linked. flow tags a task `gh-pr:owner/repo#n` once its branch has an open PR
+ * (at `flow done` and via the live monitor). */
+export function prRefFromTags(tags: string[] | undefined): string | null {
+  if (!tags) return null
+  for (const t of tags) {
+    if (t.startsWith('gh-pr:')) return t.slice('gh-pr:'.length)
+  }
+  return null
+}
+
+/** GitHub PR URL for a `owner/repo#n` ref, or null if it doesn't parse. */
+export function prUrlFromRef(ref: string): string | null {
+  const m = ref.match(/^(.+)\/(.+)#(\d+)$/)
+  return m ? `https://github.com/${m[1]}/${m[2]}/pull/${m[3]}` : null
 }
 
 /** Total node count in a tree — for tab labels and modal titles. */

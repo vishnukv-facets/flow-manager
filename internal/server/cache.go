@@ -106,6 +106,7 @@ type uiCaches struct {
 	gitBranch   *ttlCache[string, string]
 	gitBranches *ttlCache[string, []string]
 	gitDiff     *ttlCache[string, gitDiffSnapshot]
+	flowDBDiag  *flowDBDiagCache
 }
 
 type gitDiffSnapshot struct {
@@ -129,6 +130,10 @@ func newUICaches() *uiCaches {
 		gitBranch:   newTTLCache[string, string](30 * time.Second),
 		gitBranches: newTTLCache[string, []string](30 * time.Second),
 		gitDiff:     newTTLCache[string, gitDiffSnapshot](30 * time.Second),
+		// flow.db diagnostics full-scan the database (quick_check, dbstat,
+		// search_docs). They cannot run per SSE tick; serve them stale and
+		// refresh in the background. See flowDBDiagCache.
+		flowDBDiag: newFlowDBDiagCache(flowDBDiagCacheTTL, defaultFlowDBQuickCheckTimeout, flowDBDiagQuickCheckTimeout),
 	}
 }
 
@@ -146,4 +151,101 @@ func (c *uiCaches) invalidateWorkdir(dir string) {
 		}
 	}
 	c.gitBranches.mu.Unlock()
+}
+
+// flowDBDiagCache serves flow.db storage diagnostics on the hot SSE path
+// without ever running their O(database size) scans there. A warm entry is
+// returned instantly (lock-free); a stale entry is served as-is while ONE
+// background goroutine refreshes it; only a cold cache computes synchronously
+// — that case (first paint, or just after compact invalidation) is exactly
+// when a caller needs authoritative numbers anyway. A generation counter
+// discards a refresh that a concurrent invalidate has obsoleted (e.g. a
+// pre-VACUUM scan landing after compact). quickShort/quickLong split the
+// integrity-check budget: short when blocking a synchronous caller, generous
+// in the background so a large database actually finishes verifying.
+type flowDBDiagCache struct {
+	ttl        time.Duration
+	quickShort time.Duration
+	quickLong  time.Duration
+
+	mu         sync.Mutex // guards gen + val writes; val reads are lock-free
+	gen        uint64
+	val        atomic.Pointer[flowDBDiagEntry]
+	refreshing atomic.Bool
+}
+
+type flowDBDiagEntry struct {
+	diag      flowDBDiag
+	path      string
+	expiresAt time.Time
+}
+
+func newFlowDBDiagCache(ttl, quickShort, quickLong time.Duration) *flowDBDiagCache {
+	return &flowDBDiagCache{ttl: ttl, quickShort: quickShort, quickLong: quickLong}
+}
+
+// load returns diagnostics for path. compute(quickTimeout) runs the actual
+// scans; the cache decides which integrity budget to pass.
+func (c *flowDBDiagCache) load(path string, now time.Time, compute func(time.Duration) flowDBDiag) flowDBDiag {
+	if e := c.val.Load(); e != nil && e.path == path {
+		if now.Before(e.expiresAt) {
+			return e.diag // warm — zero database work on the hot path
+		}
+		c.refreshAsync(path, compute) // stale — serve now, rescan off-path
+		return e.diag
+	}
+	// Cold: compute synchronously with the short integrity budget so we don't
+	// stall the first paint. If integrity didn't finish ("not checked"), kick a
+	// background refresh with the long budget so the badge self-heals to "ok".
+	gen := c.capturedGen()
+	diag := compute(c.quickShort)
+	c.store(path, diag, gen)
+	if diag.QuickCheck != "ok" {
+		c.refreshAsync(path, compute)
+	}
+	return diag
+}
+
+func (c *flowDBDiagCache) refreshAsync(path string, compute func(time.Duration) flowDBDiag) {
+	if c == nil || !c.refreshing.CompareAndSwap(false, true) {
+		return // a refresh is already in flight
+	}
+	gen := c.capturedGen()
+	go func() {
+		defer c.refreshing.Store(false)
+		c.store(path, compute(c.quickLong), gen)
+	}()
+}
+
+// computeFresh recomputes synchronously, bypassing any cached or in-flight
+// value, and primes the cache. Used by compact, which must publish post-VACUUM
+// numbers immediately.
+func (c *flowDBDiagCache) computeFresh(path string, compute func(time.Duration) flowDBDiag) flowDBDiag {
+	c.invalidate()
+	gen := c.capturedGen()
+	diag := compute(c.quickShort)
+	c.store(path, diag, gen)
+	return diag
+}
+
+func (c *flowDBDiagCache) capturedGen() uint64 {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.gen
+}
+
+func (c *flowDBDiagCache) store(path string, diag flowDBDiag, gen uint64) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.gen != gen {
+		return // invalidated mid-compute — drop this now-stale result
+	}
+	c.val.Store(&flowDBDiagEntry{diag: diag, path: path, expiresAt: time.Now().Add(c.ttl)})
+}
+
+func (c *flowDBDiagCache) invalidate() {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.gen++
+	c.val.Store(nil)
 }

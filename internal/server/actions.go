@@ -302,7 +302,10 @@ func (s *Server) runAction(req actionRequest) (actionResponse, int) {
 }
 
 func (s *Server) compactFlowDB() (actionResponse, int) {
-	before := s.uiFlowDB()
+	// uiFlowDBFresh bypasses the hot-path cache: the precheck below trusts
+	// before.ReclaimableBytes and before.PageSize, which a stale cache could
+	// under-report.
+	before := s.uiFlowDBFresh()
 	if !before.Exists {
 		return actionResponse{OK: false, Message: "flow database is missing"}, http.StatusNotFound
 	}
@@ -324,7 +327,8 @@ func (s *Server) compactFlowDB() (actionResponse, int) {
 	if _, err := s.cfg.DB.Exec(`VACUUM`); err != nil {
 		return actionResponse{OK: false, Message: "compact failed: " + err.Error()}, http.StatusInternalServerError
 	}
-	after := s.uiFlowDB()
+	// VACUUM rewrote the file; recompute fresh so after/sidebar see real numbers.
+	after := s.uiFlowDBFresh()
 	reclaimed := before.Bytes - after.Bytes
 	if reclaimed < 0 {
 		reclaimed = 0

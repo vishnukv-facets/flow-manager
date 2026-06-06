@@ -749,6 +749,51 @@ func TestToolCallActivitySeriesCodexShape(t *testing.T) {
 	}
 }
 
+// A done task is terminal: a lingering session process (or a stray session-id
+// match in `ps`) must not flip it to "live", or the orchestration tree shows
+// "LIVE" on a task that's actually done.
+func TestBuildTaskViewDoneTaskIsNotLive(t *testing.T) {
+	root, db := testRootDB(t)
+	now := flowdb.NowISO()
+	doneSID := "11111111-1111-4111-8111-111111111111"
+	wipSID := "22222222-2222-4222-8222-222222222222"
+	if _, err := db.Exec(
+		`INSERT INTO tasks (slug, name, status, kind, priority, work_dir, session_id, session_started, created_at, updated_at)
+		 VALUES ('done-task','Done task','done','regular','high',?,?,?,?,?),
+		        ('wip-task','WIP task','in-progress','regular','high',?,?,?,?,?)`,
+		root, doneSID, now, now, now,
+		root, wipSID, now, now, now,
+	); err != nil {
+		t.Fatal(err)
+	}
+	// Both tasks have a lingering matching process.
+	live := map[string]bool{doneSID: true, wipSID: true}
+
+	doneTask, err := flowdb.GetTask(db, "done-task")
+	if err != nil {
+		t.Fatal(err)
+	}
+	doneView, err := BuildTaskView(db, root, doneTask, live)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if doneView.Live {
+		t.Fatal("a done task must not be marked live even with a lingering session process")
+	}
+
+	wipTask, err := flowdb.GetTask(db, "wip-task")
+	if err != nil {
+		t.Fatal(err)
+	}
+	wipView, err := BuildTaskView(db, root, wipTask, live)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !wipView.Live {
+		t.Fatal("an in-progress task with a live session should still be live")
+	}
+}
+
 func TestActivityHeatmapUsesTaskAndUpdateDates(t *testing.T) {
 	now := time.Date(2026, 5, 15, 12, 0, 0, 0, time.Local)
 	days := buildActivityHeatmap([]TaskView{{
@@ -973,6 +1018,51 @@ func TestPrepareTerminalLaunchRefusesBlockedTask(t *testing.T) {
 	}
 	if task.Status != "backlog" || task.SessionID.Valid || task.SessionStarted.Valid {
 		t.Fatalf("blocked task should not be mutated: %+v", task)
+	}
+}
+
+// Revisiting a done session (the "Revisit session" button) resumes the prior
+// session, so prepareTerminalLaunch must NOT reject a done task — it should
+// flip it back to in-progress and resume the existing session id.
+func TestPrepareTerminalLaunchResumesDoneSession(t *testing.T) {
+	root, db := testRootDB(t)
+	insertProjectTask(t, db, root)
+	sessionID := "019e9cd9-255e-78c2-b277-42cb5f35da77"
+	if _, err := db.Exec(
+		`UPDATE tasks SET
+			status = 'done',
+			session_provider = 'codex',
+			session_id = ?,
+			session_started = '2026-05-12T10:01:00+05:30'
+		 WHERE slug = 'build-ui'`,
+		sessionID,
+	); err != nil {
+		t.Fatal(err)
+	}
+
+	srv := New(Config{DB: db, FlowRoot: root, CommandPath: "/bin/false"})
+	launch, err := srv.prepareTerminalLaunch("build-ui")
+	if err != nil {
+		t.Fatalf("revisiting a done session must succeed, got error: %v", err)
+	}
+	if launch.Created {
+		t.Fatalf("done session should be resumed, not created fresh: %+v", launch)
+	}
+	if launch.Provider != "codex" || launch.SessionID != sessionID {
+		t.Fatalf("launch should resume the codex session %q: %+v", sessionID, launch)
+	}
+	task, err := flowdb.GetTask(db, "build-ui")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if task.Status != "in-progress" {
+		t.Fatalf("revisited task should be in-progress, got %q", task.Status)
+	}
+	if !task.SessionLastResumed.Valid {
+		t.Fatalf("revisited task should record session_last_resumed: %+v", task)
+	}
+	if task.SessionID.String != sessionID {
+		t.Fatalf("session id must be preserved on resume, got %q", task.SessionID.String)
 	}
 }
 

@@ -109,13 +109,18 @@ func cmdDone(args []string) int {
 	}
 
 	gitSnapshotPath := ""
-	if path, err := writeTaskGitCloseoutSnapshot(task); err != nil {
+	var closeout taskGitCloseoutSnapshot
+	if snap, path, err := writeTaskGitCloseoutSnapshot(task); err != nil {
 		fmt.Fprintf(os.Stderr, "warning: git close-out snapshot failed: %v\n", err)
 	} else {
+		closeout = snap
 		gitSnapshotPath = path
 	}
-	if err := linkTaskToCurrentBranchPR(db, task); err != nil {
+	prTag := ""
+	if tag, err := linkTaskToCurrentBranchPR(db, task); err != nil {
 		fmt.Fprintf(os.Stderr, "warning: could not link current PR: %v\n", err)
+	} else {
+		prTag = tag
 	}
 
 	now := flowdb.NowISO()
@@ -134,6 +139,9 @@ func cmdDone(args []string) int {
 	fmt.Printf("Marked %s as done\n", task.Slug)
 	if gitSnapshotPath != "" {
 		fmt.Printf("Saved git snapshot %s\n", gitSnapshotPath)
+	}
+	for _, w := range unpropagatedWorkWarnings(closeout, prTag) {
+		fmt.Fprintln(os.Stderr, w)
 	}
 
 	if task.SessionID.Valid && task.SessionID.String != "" {

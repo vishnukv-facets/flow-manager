@@ -1209,14 +1209,19 @@ func (s *Server) prepareTerminalLaunch(slug string) (terminalLaunch, error) {
 		task.SessionStarted = sql.NullString{}
 		task.SessionLastResumed = sql.NullString{}
 	}
-	if task.Status == "done" {
-		return terminalLaunch{}, fmt.Errorf("task %s is done; move it back to in-progress before reopening", task.Slug)
-	}
 	if strings.TrimSpace(task.WorkDir) == "" {
 		return terminalLaunch{}, fmt.Errorf("task %s has no work_dir", task.Slug)
 	}
-	if err := flowdb.EnsureTaskStartable(s.cfg.DB, task); err != nil {
-		return terminalLaunch{}, err
+	// A done task only reaches here via revisit/resume: both bridge entry points
+	// (openBrowserTerminalBridge, openTaskBridge) gate startability for non-done
+	// and rely on this path to reload the prior session, flipping it back to
+	// in-progress below. So skip the startability gate for done — revisit must
+	// not be blocked by a now-unfinished dependency — while a fresh start of a
+	// non-done task still gets the full check.
+	if task.Status != "done" {
+		if err := flowdb.EnsureTaskStartable(s.cfg.DB, task); err != nil {
+			return terminalLaunch{}, err
+		}
 	}
 
 	now := flowdb.NowISO()
@@ -1597,7 +1602,7 @@ func (s *Server) rollbackPreparedTerminalLaunch(launch terminalLaunch) {
 
 func buildBrowserTerminalBootstrapPrompt(db *sql.DB, task *flowdb.Task) string {
 	if task.Kind != "playbook_run" {
-		return fmt.Sprintf(
+		prompt := fmt.Sprintf(
 			"You are the execution session for flow task %s. Do ALL of the following in order before touching code:\n"+
 				"1. Load the flow operating manual. If a Skill tool is available, invoke the flow skill via the Skill tool. Otherwise read ~/.codex/skills/flow/SKILL.md or ~/.claude/skills/flow/SKILL.md, whichever exists. This governs workflows, bootstrap contract, KB discipline, and scope-creep detection.\n"+
 				"2. Run: flow show task. Read the file at the brief: path AND every file listed under updates:. Files listed under other: are sidecar references; load on demand when relevant, not eagerly.\n"+
@@ -1606,6 +1611,11 @@ func buildBrowserTerminalBootstrapPrompt(db *sql.DB, task *flowdb.Task) string {
 				"5. Only then begin work. If any brief section is blank or unclear, ASK; do not infer.",
 			task.Slug,
 		)
+		// Brief the session on upstream dependency work that may be unmerged.
+		if note := flowdb.DependencyBootstrapNote(db, task.Slug); note != "" {
+			prompt += "\n\n" + note
+		}
+		return prompt
 	}
 	playbookSlug := ""
 	if task.PlaybookSlug.Valid {

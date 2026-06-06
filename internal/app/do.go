@@ -414,6 +414,13 @@ func cmdDo(args []string) int {
 		isFirstRun = runCount <= 1
 	}
 	prompt := buildBootstrapPromptForKindV2(task.Slug, task.Kind, playbookSlug, isFirstRun)
+	// Brief the session on upstream dependency work that may be unmerged, so it
+	// reviews those changes instead of assuming they're in its base branch.
+	if task.Kind != "playbook_run" {
+		if note := flowdb.DependencyBootstrapNote(db, task.Slug); note != "" {
+			prompt += "\n\n" + note
+		}
+	}
 	permissionMode := task.PermissionMode
 	if permissionMode == "" {
 		permissionMode = flowdb.DefaultPermissionMode

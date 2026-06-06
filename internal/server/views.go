@@ -58,7 +58,12 @@ func BuildTaskView(db *sql.DB, root string, t *flowdb.Task, live map[string]bool
 	}
 	view.TemporalSummary = temporalSummary(t, now)
 	if t.SessionID.Valid && t.SessionID.String != "" {
-		if live[strings.ToLower(t.SessionID.String)] {
+		// Done is terminal: a lingering session process (or a recycled
+		// session-id match in `ps`) must not flip a done task to "live", or the
+		// orchestration tree shows "LIVE" on a task that's actually done.
+		// Revisiting a done task flips it back to in-progress (see
+		// prepareTerminalLaunch), at which point its live session shows again.
+		if t.Status != "done" && live[strings.ToLower(t.SessionID.String)] {
 			view.Live = true
 		}
 		if _, err := sessionJSONLPath(db, t); err == nil {

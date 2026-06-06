@@ -23,27 +23,33 @@ var openPRURLForBranch = ghpr.OpenURLForBranch
 // checkout actually on the task branch. Using work_dir for a worktree task
 // would inspect the repo root, which usually sits on `main` with no PR, and
 // silently link nothing (the bug this guards against).
-func linkTaskToCurrentBranchPR(db *sql.DB, task *flowdb.Task) error {
+//
+// Returns the linked PR tag ("gh-pr:owner/repo#n"), or "" when no open PR was
+// found — so callers can warn when a done task's work isn't tracked by a PR.
+func linkTaskToCurrentBranchPR(db *sql.DB, task *flowdb.Task) (string, error) {
 	if db == nil || task == nil {
-		return nil
+		return "", nil
 	}
 	dir := strings.TrimSpace(task.WorktreePath.String)
 	if dir == "" {
 		dir = strings.TrimSpace(task.WorkDir)
 	}
 	if dir == "" {
-		return nil
+		return "", nil
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
 	defer cancel()
 
 	url, err := openPRURLForBranch(ctx, dir)
 	if err != nil || url == "" {
-		return err
+		return "", err
 	}
 	tag, ok := ghref.PRTagFromURL(url)
 	if !ok {
-		return nil
+		return "", nil
 	}
-	return flowdb.AddTaskTag(db, task.Slug, tag)
+	if err := flowdb.AddTaskTag(db, task.Slug, tag); err != nil {
+		return "", err
+	}
+	return tag, nil
 }

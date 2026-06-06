@@ -145,7 +145,37 @@ type uiFlowDBDocStat struct {
 const (
 	defaultFlowDBQuickCheckTimeout = time.Second
 	flowDBQuickCheckCacheTTL       = 30 * time.Minute
+	// flowDBDiagCacheTTL bounds how often the expensive flow.db diagnostics
+	// (PRAGMA quick_check, dbstat object sizing, search_docs content scan) run.
+	// Each is O(database size) — multi-second on a multi-hundred-MB flow.db —
+	// so they must never run on the per-tick SSE snapshot path. The numbers
+	// move slowly (free pages accrue over hours), so a few minutes of staleness
+	// is fine; the compact-db action invalidates explicitly for instant updates.
+	flowDBDiagCacheTTL = 5 * time.Minute
+	// flowDBDiagQuickCheckTimeout is the integrity-check budget for the
+	// background refresh. It runs off the hot path, so it can be generous
+	// enough to actually finish on a large database (where the short
+	// first-paint budget times out and shows "not checked").
+	flowDBDiagQuickCheckTimeout = 2 * time.Minute
 )
+
+// flowDBDiag is the cached, expensive portion of uiFlowDB. Computed at most
+// once per flowDBDiagCacheTTL and copied onto every snapshot so buildUIData
+// never re-scans the whole database on the hot SSE path.
+type flowDBDiag struct {
+	PageSize            int64
+	PageCount           int64
+	FreePageCount       int64
+	UsedBytes           int64
+	ReclaimableBytes    int64
+	QuickCheck          string
+	QuickCheckSource    string
+	QuickCheckCheckedAt string
+	QuickCheckNote      string
+	Objects             []uiFlowDBObject
+	Documents           []uiFlowDBDocStat
+	Error               string
+}
 
 type uiActivityDay struct {
 	Date  string   `json:"date"`
@@ -570,9 +600,32 @@ func (s *Server) floatingSessionList() []floatingSessionInfo {
 	return s.terminals.floatingSessions()
 }
 
-// uiFlowDB reports the on-disk size of flow.db. Missing-file is not an
-// error: the sidebar just shows "—" until `flow init` runs.
+// uiFlowDB reports the on-disk size of flow.db plus cached storage
+// diagnostics. Missing-file is not an error: the sidebar just shows "—" until
+// `flow init` runs. The expensive diagnostics come from the hot-path cache
+// (stale-while-revalidate), so this never full-scans the database on an SSE
+// tick — the property that keeps `flow ui serve` off the CPU.
 func (s *Server) uiFlowDB() uiFlowDB {
+	out := s.statFlowDB()
+	if out.Exists {
+		applyFlowDBDiag(&out, s.cachedFlowDBDiag(out.Path, out.Bytes))
+	}
+	return out
+}
+
+// uiFlowDBFresh is uiFlowDB with an authoritative, synchronous diagnostics
+// recompute that also primes the cache. Used by compact, which must read and
+// publish post-VACUUM numbers immediately even if a background refresh races.
+func (s *Server) uiFlowDBFresh() uiFlowDB {
+	out := s.statFlowDB()
+	if out.Exists {
+		applyFlowDBDiag(&out, s.freshFlowDBDiag(out.Path, out.Bytes))
+	}
+	return out
+}
+
+// statFlowDB fills the cheap, always-available fields (path + on-disk size).
+func (s *Server) statFlowDB() uiFlowDB {
 	root := strings.TrimSpace(s.cfg.FlowRoot)
 	if root == "" {
 		return uiFlowDB{HumanSize: "—"}
@@ -586,60 +639,129 @@ func (s *Server) uiFlowDB() uiFlowDB {
 	out.Exists = true
 	out.Bytes = info.Size()
 	out.HumanSize = humanByteSize(info.Size())
-	s.addFlowDBDiagnostics(&out)
 	return out
 }
 
-func (s *Server) addFlowDBDiagnostics(out *uiFlowDB) {
-	if out == nil || !out.Exists {
-		return
+// applyFlowDBDiag copies cached diagnostics onto a stat-only uiFlowDB.
+func applyFlowDBDiag(out *uiFlowDB, diag flowDBDiag) {
+	out.PageSize = diag.PageSize
+	out.PageCount = diag.PageCount
+	out.FreePageCount = diag.FreePageCount
+	out.ReclaimableBytes = diag.ReclaimableBytes
+	out.UsedBytes = diag.UsedBytes
+	out.UsedHumanSize = humanByteSize(diag.UsedBytes)
+	out.ReclaimableHumanSize = humanByteSize(diag.ReclaimableBytes)
+	out.CanCompact = diag.ReclaimableBytes > 0
+	out.QuickCheck = diag.QuickCheck
+	out.QuickCheckSource = diag.QuickCheckSource
+	out.QuickCheckCheckedAt = diag.QuickCheckCheckedAt
+	out.QuickCheckNote = diag.QuickCheckNote
+	out.Objects = diag.Objects
+	out.Documents = diag.Documents
+	out.Error = diag.Error
+	if diag.Error == "" {
+		out.Explanation = "SQLite keeps deleted content as free pages inside flow.db until compaction; transcript full-text search can dominate storage because it stores searchable session text."
 	}
-	db, err := openFlowDBDiagnostic(out.Path)
+}
+
+// cachedFlowDBDiag serves diagnostics from the hot-path cache. A warm entry is
+// returned with zero database work (a lock-free atomic read); a stale entry is
+// served as-is while a single background goroutine rescans; only a cold cache
+// computes synchronously. That is what keeps the SSE tick scan-free.
+func (s *Server) cachedFlowDBDiag(path string, totalBytes int64) flowDBDiag {
+	compute := func(quick time.Duration) flowDBDiag {
+		return s.computeFlowDBDiag(path, totalBytes, quick)
+	}
+	if s == nil || s.caches == nil || path == "" {
+		return compute(defaultFlowDBQuickCheckTimeout)
+	}
+	return s.caches.flowDBDiag.load(path, time.Now(), compute)
+}
+
+// freshFlowDBDiag recomputes diagnostics synchronously, bypassing any cached or
+// in-flight value, and primes the cache with the result. Used by compact.
+func (s *Server) freshFlowDBDiag(path string, totalBytes int64) flowDBDiag {
+	compute := func(quick time.Duration) flowDBDiag {
+		return s.computeFlowDBDiag(path, totalBytes, quick)
+	}
+	if s == nil || s.caches == nil || path == "" {
+		return compute(defaultFlowDBQuickCheckTimeout)
+	}
+	return s.caches.flowDBDiag.computeFresh(path, compute)
+}
+
+// computeFlowDBDiag runs the O(database size) scans. Never call this on the hot
+// path — go through cachedFlowDBDiag. quickTimeout bounds the integrity check:
+// short on the synchronous first paint (don't stall the UI), generous on the
+// background refresh so a large database actually finishes verifying.
+func (s *Server) computeFlowDBDiag(path string, totalBytes int64, quickTimeout time.Duration) flowDBDiag {
+	var diag flowDBDiag
+	db, err := openFlowDBDiagnostic(path)
 	if err != nil {
-		out.Error = err.Error()
-		return
+		diag.Error = err.Error()
+		return diag
 	}
 	defer db.Close()
 	pageSize, err := sqlitePragmaInt64(db, "page_size", 500*time.Millisecond)
 	if err != nil {
-		out.Error = err.Error()
-		return
+		diag.Error = err.Error()
+		return diag
 	}
 	pageCount, err := sqlitePragmaInt64(db, "page_count", 500*time.Millisecond)
 	if err != nil {
-		out.Error = err.Error()
-		return
+		diag.Error = err.Error()
+		return diag
 	}
 	freePageCount, err := sqlitePragmaInt64(db, "freelist_count", 500*time.Millisecond)
 	if err != nil {
-		out.Error = err.Error()
-		return
+		diag.Error = err.Error()
+		return diag
 	}
-	out.PageSize = pageSize
-	out.PageCount = pageCount
-	out.FreePageCount = freePageCount
-	out.ReclaimableBytes = pageSize * freePageCount
-	out.UsedBytes = pageSize * (pageCount - freePageCount)
-	if out.UsedBytes < 0 {
-		out.UsedBytes = 0
+	diag.PageSize = pageSize
+	diag.PageCount = pageCount
+	diag.FreePageCount = freePageCount
+	diag.ReclaimableBytes = pageSize * freePageCount
+	diag.UsedBytes = pageSize * (pageCount - freePageCount)
+	if diag.UsedBytes < 0 {
+		diag.UsedBytes = 0
 	}
-	out.UsedHumanSize = humanByteSize(out.UsedBytes)
-	out.ReclaimableHumanSize = humanByteSize(out.ReclaimableBytes)
-	out.CanCompact = out.ReclaimableBytes > 0
-	s.addFlowDBQuickCheck(out, db)
-	out.Objects = sqliteTopObjects(db, out.Bytes, 12, 2*time.Second)
-	out.Documents = sqliteSearchDocStats(db, time.Second)
-	out.Explanation = "SQLite keeps deleted content as free pages inside flow.db until compaction; transcript full-text search can dominate storage because it stores searchable session text."
+	// addFlowDBQuickCheck writes onto a uiFlowDB; use a scratch value and lift
+	// the four quick-check fields out so its reuse logic stays intact.
+	scratch := uiFlowDB{Path: path}
+	s.addFlowDBQuickCheck(&scratch, db, quickTimeout)
+	diag.QuickCheck = scratch.QuickCheck
+	diag.QuickCheckSource = scratch.QuickCheckSource
+	diag.QuickCheckCheckedAt = scratch.QuickCheckCheckedAt
+	diag.QuickCheckNote = scratch.QuickCheckNote
+	diag.Objects = sqliteTopObjects(db, totalBytes, 12, 2*time.Second)
+	diag.Documents = sqliteSearchDocStats(db, time.Second)
+	return diag
 }
 
-func (s *Server) addFlowDBQuickCheck(out *uiFlowDB, db *sql.DB) {
-	timeout := s.flowDBQuickCheckTimeout
+// addFlowDBQuickCheck fills the integrity fields. Integrity rarely changes, so
+// a recent verified result is reused without rescanning the whole database;
+// otherwise PRAGMA quick_check runs within quickTimeout. A "not checked" result
+// means the scan didn't finish in budget — the background refresh re-runs it
+// with the generous flowDBDiagQuickCheckTimeout, so the badge self-heals to a
+// verified status without the user doing anything.
+func (s *Server) addFlowDBQuickCheck(out *uiFlowDB, db *sql.DB, quickTimeout time.Duration) {
+	now := time.Now()
+	if cached, ok := s.recentFlowDBQuickCheck(out.Path, now); ok {
+		out.QuickCheck = cached.Result
+		out.QuickCheckSource = cached.Source
+		out.QuickCheckCheckedAt = cached.CheckedAt.Format(time.RFC3339)
+		out.QuickCheckNote = recentQuickCheckNote(cached.Source)
+		return
+	}
+	timeout := quickTimeout
+	if s.flowDBQuickCheckTimeout != 0 {
+		timeout = s.flowDBQuickCheckTimeout
+	}
 	if timeout == 0 {
 		timeout = defaultFlowDBQuickCheckTimeout
 	}
 	result := sqliteQuickCheck(db, timeout)
 	out.QuickCheck = result
-	now := time.Now()
 	switch result {
 	case "ok":
 		out.QuickCheckSource = "live"
@@ -647,11 +769,8 @@ func (s *Server) addFlowDBQuickCheck(out *uiFlowDB, db *sql.DB) {
 		out.QuickCheckNote = "Live integrity check completed."
 		s.rememberFlowDBQuickCheck(out.Path, result, "live", now)
 	case "not checked":
-		if s.applyCachedFlowDBQuickCheck(out, now) {
-			return
-		}
-		out.QuickCheckSource = "live-timeout"
-		out.QuickCheckNote = "Live integrity check timed out; compact uses a longer safety check before VACUUM."
+		out.QuickCheckSource = "pending"
+		out.QuickCheckNote = "Integrity check is running in the background; this refreshes to a verified result shortly."
 	default:
 		out.QuickCheckSource = "live"
 		out.QuickCheckNote = "Live integrity check returned an error."
@@ -672,28 +791,29 @@ func (s *Server) rememberFlowDBQuickCheck(path, result, source string, checkedAt
 	}
 }
 
-func (s *Server) applyCachedFlowDBQuickCheck(out *uiFlowDB, now time.Time) bool {
+// recentFlowDBQuickCheck returns the last verified integrity result if it is
+// still within flowDBQuickCheckCacheTTL, so callers can skip a fresh full-DB
+// scan. Only "ok" results are ever remembered (see rememberFlowDBQuickCheck).
+func (s *Server) recentFlowDBQuickCheck(path string, now time.Time) (cachedFlowDBQuickCheck, bool) {
 	s.flowDBQuickCheckMu.Lock()
 	cached := s.flowDBQuickCheck
 	s.flowDBQuickCheckMu.Unlock()
-	if cached.Path != out.Path || cached.Result == "" || cached.CheckedAt.IsZero() {
-		return false
+	if cached.Path != path || cached.Result == "" || cached.CheckedAt.IsZero() {
+		return cachedFlowDBQuickCheck{}, false
 	}
 	if now.Sub(cached.CheckedAt) > flowDBQuickCheckCacheTTL {
-		return false
+		return cachedFlowDBQuickCheck{}, false
 	}
-	out.QuickCheck = cached.Result
-	out.QuickCheckSource = cached.Source
-	out.QuickCheckCheckedAt = cached.CheckedAt.Format(time.RFC3339)
-	switch cached.Source {
+	return cached, true
+}
+
+func recentQuickCheckNote(source string) string {
+	switch source {
 	case "compact-precheck":
-		out.QuickCheckNote = "Integrity was checked before compact; the live sidebar check timed out."
-	case "live":
-		out.QuickCheckNote = "Recent live integrity check completed; the latest sidebar check timed out."
+		return "Integrity was checked before compact; reused here without rescanning."
 	default:
-		out.QuickCheckNote = "Recent integrity check completed; the latest sidebar check timed out."
+		return "Reusing a recent verified integrity check."
 	}
-	return true
 }
 
 func openFlowDBDiagnostic(path string) (*sql.DB, error) {

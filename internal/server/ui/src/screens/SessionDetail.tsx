@@ -48,7 +48,14 @@ import { useDocumentTitle } from '../lib/useDocumentTitle'
 import { pushToast } from '../lib/toast'
 import { confirmAction } from '../lib/confirm'
 import type { DiffFile, TranscriptEntry, UiAgent } from '../lib/types'
-import { buildFamilyTree, countNodes, nodeStatus, type OrchNode } from '../lib/orchestration'
+import {
+  buildFamilyTree,
+  countNodes,
+  nodeStatus,
+  prRefFromTags,
+  prUrlFromRef,
+  type OrchNode,
+} from '../lib/orchestration'
 import { changedSinceLook, commitLook } from '../lib/difflook'
 import { TaskTerminal } from '../components/Terminal'
 import { Md } from '../components/Markdown'
@@ -1189,6 +1196,12 @@ function OrchRow({
   // unless it's the last child ("└─ "). The root draws no branch glyph.
   const prefix = ancestorLines.map((last) => (last ? '   ' : '│  ')).join('')
   const branch = isRoot ? '' : isLast ? '└─ ' : '├─ '
+  // The dependency line(s) sit in the same column flow as this node's children
+  // (one extra level deep), so they read as belonging to the node. The trailing
+  // segment is the node's own │/space, continuing the sibling line if any.
+  const depPrefix = (isRoot ? [] : [...ancestorLines, isLast])
+    .map((last) => (last ? '   ' : '│  '))
+    .join('')
   return (
     <>
       <div
@@ -1201,16 +1214,29 @@ function OrchRow({
         <span className="orch-name clip">{t.name}</span>
         <span className="orch-slug mono faint clip">{t.slug}</span>
         <ProviderIcon provider={t.session_provider} size={12} />
-        {node.extraParents > 0 && (
-          <span
-            className="orch-multi mono"
-            title={`Also a child of ${node.extraParents} other parent task${node.extraParents === 1 ? '' : 's'}`}
-          >
-            +{node.extraParents} parent{node.extraParents === 1 ? '' : 's'}
-          </span>
-        )}
+        {t.status === 'done' && <IntegrationBadge tags={t.tags} />}
         {t.live && <span className="orch-live mono">live</span>}
       </div>
+      {node.extraParentList.length > 0 && (
+        <div className="orch-deps" title="Tasks this one depends on (must finish before it can start)">
+          <span className="orch-branch mono">{depPrefix}{'↳ '}</span>
+          <span className="orch-deps-label mono">depends on</span>
+          {node.extraParentList.map((p) => (
+            <button
+              key={p.slug}
+              type="button"
+              className={`orch-dep mono${p.status === 'done' ? ' is-done' : ''}`}
+              onClick={(e) => {
+                e.stopPropagation()
+                onOpen(p.slug)
+              }}
+              title={`${p.status === 'done' ? 'Done' : 'Open'} — open ${p.slug}`}
+            >
+              {p.name}
+            </button>
+          ))}
+        </div>
+      )}
       {node.children.map((c, i) => (
         <OrchRow
           key={c.task.slug}
@@ -1223,5 +1249,41 @@ function OrchRow({
         />
       ))}
     </>
+  )
+}
+
+// IntegrationBadge surfaces whether a DONE task's work landed in a PR. A linked
+// PR shows as a clickable chip; a done task with no PR is flagged amber — its
+// commits aren't propagated, so tasks that depend on it may lack the context.
+function IntegrationBadge({ tags }: { tags: string[] }) {
+  const prRef = prRefFromTags(tags)
+  if (prRef) {
+    const url = prUrlFromRef(prRef)
+    const num = prRef.slice(prRef.indexOf('#'))
+    const label = `PR ${num}`
+    return url ? (
+      <a
+        className="orch-pr mono"
+        href={url}
+        target="_blank"
+        rel="noreferrer"
+        onClick={(e) => e.stopPropagation()}
+        title={`Open PR ${prRef}`}
+      >
+        {label}
+      </a>
+    ) : (
+      <span className="orch-pr mono" title={`PR ${prRef}`}>
+        {label}
+      </span>
+    )
+  }
+  return (
+    <span
+      className="orch-nopr mono"
+      title="Done, but its commits aren't in any PR — tasks that depend on this may lack the context"
+    >
+      no PR
+    </span>
   )
 }
