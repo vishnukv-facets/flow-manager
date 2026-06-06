@@ -136,6 +136,7 @@ func (s *Server) registerAPIRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/kb/", s.handleKBFile)
 	mux.HandleFunc("/api/memory", s.handleMemoryWrite)
 	mux.HandleFunc("/api/search", s.handleSearch)
+	mux.HandleFunc("/api/ask-flow", s.handleAskFlow)
 	mux.HandleFunc("/api/quote", s.handleQuote)
 	// Connect-Slack wizard. The OAuth callback itself is NOT here — it lives
 	// on a separate ephemeral HTTPS listener (Slack requires an https

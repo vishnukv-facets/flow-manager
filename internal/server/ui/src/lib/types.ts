@@ -498,6 +498,22 @@ export interface SearchResponse {
   memories?: SearchResult[]
 }
 
+export interface AskFlowCitation {
+  type: string
+  id?: string
+  slug?: string
+  title: string
+  url?: string
+  source_path?: string
+  snippet?: string
+}
+export interface AskFlowResponse {
+  query: string
+  intent: string
+  answer: string
+  citations: AskFlowCitation[]
+}
+
 export interface InboxConversationMessage {
   source: string
   kind: string

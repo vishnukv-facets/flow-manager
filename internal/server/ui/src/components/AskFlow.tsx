@@ -1,8 +1,9 @@
 import { useEffect, useRef, useState } from 'react'
-import { Loader2, SendHorizontal, Sparkles } from 'lucide-react'
-import { useAction, useUiData } from '../lib/query'
+import { ExternalLink, Loader2, MessageSquareText, SendHorizontal, Sparkles } from 'lucide-react'
+import { useAction, useAskFlow, useUiData } from '../lib/query'
 import { useFloatingTerminals } from '../lib/floatingTerminals'
 import { AgentPicker } from './pickers'
+import type { AskFlowResponse } from '../lib/types'
 
 // Ask Flow — a global, icon-only entry point that lives in the topbar beside
 // "New task". Clicking it opens an anchored popover with a prompt input, the
@@ -18,9 +19,11 @@ export function AskFlow() {
   const [open, setOpen] = useState(false)
   const [prompt, setPrompt] = useState('')
   const [provider, setProvider] = useState('claude')
+  const [answer, setAnswer] = useState<AskFlowResponse | null>(null)
   const { data: ui } = useUiData()
   const { open: openFloatingTerminal } = useFloatingTerminals()
   const action = useAction()
+  const ask = useAskFlow()
   const wrapRef = useRef<HTMLDivElement>(null)
   const inputRef = useRef<HTMLInputElement>(null)
 
@@ -51,7 +54,17 @@ export function AskFlow() {
     }
   }, [open])
 
-  const submit = () => {
+  const submitAsk = () => {
+    const text = prompt.trim()
+    if (!text || ask.isPending) return
+    ask.mutate(text, {
+      onSuccess: (resp) => {
+        setAnswer(resp)
+      },
+    })
+  }
+
+  const openSession = () => {
     const text = prompt.trim()
     if (!text || action.isPending) return
     action.mutate(
@@ -59,6 +72,7 @@ export function AskFlow() {
       {
         onSuccess: (resp) => {
           setPrompt('')
+          setAnswer(null)
           setOpen(false)
           if (resp.floating_terminal) openFloatingTerminal(resp.floating_terminal)
         },
@@ -93,17 +107,59 @@ export function AskFlow() {
             onKeyDown={(e) => {
               if (e.key === 'Enter') {
                 e.preventDefault()
-                submit()
+                submitAsk()
               }
             }}
           />
+          {ask.error && <div className="ask-flow-error">{ask.error.message}</div>}
+          {answer && <AskFlowAnswer answer={answer} />}
           <div className="ask-flow-pop-actions">
             <AgentPicker value={effectiveProvider} onChange={setProvider} providers={providers} />
-            <button type="button" className="btn primary" disabled={!prompt.trim() || action.isPending} onClick={submit}>
+            <button type="button" className="btn ghost" disabled={!prompt.trim() || ask.isPending} onClick={submitAsk}>
+              {ask.isPending ? <Loader2 size={15} className="spin" /> : <MessageSquareText size={15} />}
+              Ask
+            </button>
+            <button type="button" className="btn primary" disabled={!prompt.trim() || action.isPending} onClick={openSession}>
               {action.isPending ? <Loader2 size={15} className="spin" /> : <SendHorizontal size={15} />}
-              Open
+              Open session
             </button>
           </div>
+        </div>
+      )}
+    </div>
+  )
+}
+
+function AskFlowAnswer({ answer }: { answer: AskFlowResponse }) {
+  return (
+    <div className="ask-flow-answer">
+      <div className="ask-flow-answer-top">
+        <span>Grounded answer</span>
+        <span className="ask-flow-intent">{answer.intent.replace(/_/g, ' ')}</span>
+      </div>
+      <div className="ask-flow-answer-text">{answer.answer}</div>
+      {answer.citations.length > 0 && (
+        <div className="ask-flow-cites" aria-label="Ask Flow citations">
+          {answer.citations.map((c, idx) => {
+            const key = `${c.type}:${c.id || c.slug || c.source_path || idx}`
+            const body = (
+              <>
+                <span className="ask-flow-cite-type">{c.type}</span>
+                <span className="ask-flow-cite-title">{c.title}</span>
+                {c.url && <ExternalLink size={12} />}
+                {c.snippet && <span className="ask-flow-cite-snippet">{c.snippet}</span>}
+              </>
+            )
+            return c.url ? (
+              <a key={key} className="ask-flow-cite" href={c.url}>
+                {body}
+              </a>
+            ) : (
+              <div key={key} className="ask-flow-cite">
+                {body}
+              </div>
+            )
+          })}
         </div>
       )}
     </div>
