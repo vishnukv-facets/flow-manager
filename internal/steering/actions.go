@@ -41,6 +41,22 @@ var taskTeller = func(ctx context.Context, slug, message string) error {
 	return nil
 }
 
+// taskHandoffRequester sends a confirmed-handoff request into a task inbox with
+// an explicit sender label. Kept separate from taskTeller so the ordinary
+// forward/reply paths do not change their CLI shape.
+var taskHandoffRequester = func(ctx context.Context, slug, message, sender string) error {
+	args := []string{"tell", slug, message}
+	if from := strings.TrimSpace(sender); from != "" {
+		args = append(args, "--from", from)
+	}
+	cmd := exec.CommandContext(ctx, "flow", args...)
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("steering: flow tell handoff %s: %w (output: %s)", slug, err, strings.TrimSpace(string(out)))
+	}
+	return nil
+}
+
 // taskTagger shells out to `flow update task <slug> --tag <tag>` (mirrors
 // monitor.tagFlowTask). Mockable in tests.
 var taskTagger = func(ctx context.Context, slug, tag string) error {
@@ -139,6 +155,66 @@ func ForwardFeed(ctx context.Context, db *sql.DB, item flowdb.FeedItem) error {
 		return err
 	}
 	return recordActionFeedback(db, item, string(ActionForward), "approved", "")
+}
+
+// RequestHandoff asks the matched task's owning agent to confirm whether this
+// attention item belongs to it. The feed item remains open until a later
+// RespondHandoff call accepts or declines the request.
+func RequestHandoff(ctx context.Context, db *sql.DB, item flowdb.FeedItem, sender string) (flowdb.AttentionHandoff, error) {
+	target := strings.TrimSpace(item.MatchedTask)
+	if target == "" {
+		return flowdb.AttentionHandoff{}, fmt.Errorf("steering: handoff requires a matched_task on feed item %q", item.ID)
+	}
+	sender = strings.TrimSpace(sender)
+	if sender == "" {
+		sender = "attention-router"
+	}
+	now := time.Now().UTC()
+	h, err := flowdb.CreateAttentionHandoff(db, flowdb.AttentionHandoff{
+		FeedItemID:       item.ID,
+		Sender:           sender,
+		Receiver:         target,
+		Context:          feedHandoffContext(item),
+		RequestedVerdict: "accept_or_decline",
+		RequestedAt:      now.Format(time.RFC3339),
+		ExpiresAt:        now.Add(24 * time.Hour).Format(time.RFC3339),
+	})
+	if err != nil {
+		return flowdb.AttentionHandoff{}, err
+	}
+	if err := taskHandoffRequester(ctx, target, feedHandoffMessage(h), sender); err != nil {
+		if cleanupErr := flowdb.DeleteAttentionHandoff(db, h.ID); cleanupErr != nil {
+			return flowdb.AttentionHandoff{}, fmt.Errorf("%w; also failed to remove undelivered handoff %s: %v", err, h.ID, cleanupErr)
+		}
+		return flowdb.AttentionHandoff{}, err
+	}
+	return h, nil
+}
+
+// RespondHandoff records the receiving task's verdict. Accepting resolves the
+// feed card as acted/linked to the receiver; declining keeps the card open so
+// the operator can escalate or choose another route.
+func RespondHandoff(ctx context.Context, db *sql.DB, id, verdict, reason string) (flowdb.AttentionHandoff, error) {
+	_ = ctx // reserved for a future inbox acknowledgement path; keeps API shape parallel to request.
+	h, err := flowdb.RespondAttentionHandoff(db, id, verdict, reason, nowRFC3339())
+	if err != nil {
+		return flowdb.AttentionHandoff{}, err
+	}
+	item, err := flowdb.GetFeedItem(db, h.FeedItemID)
+	if err != nil {
+		return flowdb.AttentionHandoff{}, err
+	}
+	switch h.Status {
+	case "accepted":
+		if err := flowdb.SetFeedItemActed(db, item.ID, h.Receiver, h.RespondedAt); err != nil {
+			return flowdb.AttentionHandoff{}, err
+		}
+		return h, recordActionFeedback(db, item, "confirm_handoff", "approved", "")
+	case "declined":
+		return h, recordActionFeedback(db, item, "confirm_handoff", "declined", "")
+	default:
+		return flowdb.AttentionHandoff{}, fmt.Errorf("steering: unsupported handoff response status %q", h.Status)
+	}
 }
 
 // DismissFeed marks a feed row 'dismissed' (no external effect).
@@ -342,6 +418,40 @@ func feedForwardMessage(item flowdb.FeedItem) string {
 	if r := strings.TrimSpace(item.Reason); r != "" {
 		fmt.Fprintf(&b, "Why it may relate: %s\n", r)
 	}
+	return b.String()
+}
+
+func feedHandoffContext(item flowdb.FeedItem) string {
+	var b strings.Builder
+	if s := strings.TrimSpace(item.Summary); s != "" {
+		fmt.Fprintf(&b, "Summary: %s\n", s)
+	}
+	fmt.Fprintf(&b, "Source thread: %s (%s)\n", item.ThreadKey, item.Source)
+	if r := strings.TrimSpace(item.Reason); r != "" {
+		fmt.Fprintf(&b, "Why it may relate: %s\n", r)
+	}
+	if d := strings.TrimSpace(item.Draft); d != "" {
+		fmt.Fprintf(&b, "Draft reply: %s\n", d)
+	}
+	if ctx := strings.TrimSpace(item.ContextJSON); ctx != "" {
+		fmt.Fprintf(&b, "Context JSON: %s\n", ctx)
+	}
+	return strings.TrimSpace(b.String())
+}
+
+func feedHandoffMessage(h flowdb.AttentionHandoff) string {
+	var b strings.Builder
+	b.WriteString("Confirmed handoff request from the attention router.\n\n")
+	fmt.Fprintf(&b, "Correlation ID: %s\n", h.ID)
+	fmt.Fprintf(&b, "Sender: %s\n", h.Sender)
+	fmt.Fprintf(&b, "Receiver: %s\n", h.Receiver)
+	b.WriteString("Requested verdict: accept or decline with reason\n")
+	fmt.Fprintf(&b, "Timeout: %s\n\n", h.ExpiresAt)
+	b.WriteString("Context:\n")
+	b.WriteString(h.Context)
+	b.WriteString("\n\nRespond from this task session after checking your brief/updates/transcript:\n")
+	fmt.Fprintf(&b, "flow attention handoff accept %s --reason \"<why this belongs here>\"\n", h.ID)
+	fmt.Fprintf(&b, "flow attention handoff decline %s --reason \"<why this should route elsewhere>\"\n", h.ID)
 	return b.String()
 }
 

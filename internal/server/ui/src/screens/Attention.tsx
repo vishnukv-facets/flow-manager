@@ -1,6 +1,6 @@
 import { useEffect, useState, type ReactNode } from 'react'
 import { useLocation } from 'wouter'
-import { AlertTriangle, ArrowRight, AtSign, BellOff, Check, ChevronDown, ExternalLink, Filter, Github, Hash, Inbox, Info, ListPlus, Lock, MessageSquare, Play, RefreshCw, Send, Share2 } from 'lucide-react'
+import { AlertTriangle, ArrowRight, AtSign, BellOff, Check, ChevronDown, ExternalLink, Filter, Github, Handshake, Hash, Inbox, Info, ListPlus, Lock, MessageSquare, Play, RefreshCw, Send, Share2 } from 'lucide-react'
 import { useAction, useAttention, useAttentionDecision, useAttentionTrace } from '../lib/query'
 import { useDocumentTitle } from '../lib/useDocumentTitle'
 import { EmptyState, ErrorNote, Loading, SourceIcon } from '../components/ui'
@@ -187,6 +187,7 @@ function AttentionCard({
       <div className="att-head row gap">
         <SourceIcon source={item.source} />
         <span className="badge accent">{item.suggested_action.replace(/_/g, ' ')}</span>
+        {item.handoff ? <span className={`badge ${handoffTone(item.handoff.status)}`}>handoff {item.handoff.status}</span> : null}
         {item.urgency ? <span className={`badge ${urgent ? 'warn' : ''}`}>{item.urgency}</span> : null}
         {item.is_vip ? <span className="badge info">vip</span> : null}
         <span className="spacer" />
@@ -216,6 +217,7 @@ function AttentionCard({
 
       <div className="att-summary">{item.summary || <span className="faint">(no summary)</span>}</div>
       <WhyThis item={item} compact onNavigate={(slug) => navigate(`/session/${slug}`)} />
+      <HandoffStatus item={item} />
 
       {item.draft ? (
         <div className="att-draft">
@@ -233,9 +235,19 @@ function AttentionCard({
             <Play size={13} /> Make task & start
           </button>
           {item.matched_task ? (
-            <button type="button" className="btn sm" disabled={disabled} onClick={() => onAct(item, 'forward')}>
-              <Share2 size={13} /> Forward
-            </button>
+            <>
+              <button
+                type="button"
+                className="btn sm"
+                disabled={disabled || item.handoff?.status === 'pending'}
+                onClick={() => onAct(item, 'confirm-handoff')}
+              >
+                <Handshake size={13} /> Ask owner
+              </button>
+              <button type="button" className="btn sm" disabled={disabled} onClick={() => onAct(item, 'forward')}>
+                <Share2 size={13} /> Forward
+              </button>
+            </>
           ) : null}
           {item.draft ? (
             // Opens the detail modal (review/edit before sending) rather than
@@ -281,6 +293,39 @@ function AttentionCard({
           ) : null}
         </div>
       )}
+    </div>
+  )
+}
+
+function handoffTone(status?: string): string {
+  switch (status) {
+    case 'accepted':
+      return 'accent'
+    case 'declined':
+    case 'timeout':
+      return 'warn'
+    default:
+      return ''
+  }
+}
+
+function HandoffStatus({ item }: { item: AttentionItem }) {
+  const h = item.handoff
+  if (!h) return null
+  const target = item.why?.matched_task?.name || h.receiver
+  const when =
+    h.status === 'pending'
+      ? `expires ${dateTimeSec(h.expires_at)}`
+      : h.responded_at
+        ? dateTimeSec(h.responded_at)
+        : dateTimeSec(h.requested_at)
+  return (
+    <div className="att-evidence-meta row gap faint" style={{ marginTop: 8 }}>
+      <Handshake size={13} />
+      <span>handoff {h.status}</span>
+      <span>{target}</span>
+      <span>{when}</span>
+      {h.reason ? <span className="clip">reason: {h.reason}</span> : null}
     </div>
   )
 }
@@ -467,6 +512,7 @@ function actionPreviewTarget(item: AttentionItem, p: NonNullable<AttentionItem['
     case 'mute_sender':
       return item.author_name || p.target || ''
     case 'forward':
+    case 'confirm_handoff':
       return item.why?.matched_task?.name || item.why?.matched_task?.slug || p.target || ''
     default:
       return p.target || ''

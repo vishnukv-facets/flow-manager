@@ -256,3 +256,84 @@ func TestGetFeedItem(t *testing.T) {
 		t.Error("GetFeedItem on a missing id must return an error")
 	}
 }
+
+func TestAttentionHandoffCreateExpireAndLatest(t *testing.T) {
+	db := openTempDB(t)
+	defer db.Close()
+
+	if _, err := UpsertFeedItem(db, FeedItem{
+		ID: "hf1", Source: "slack", ThreadKey: "C1:1.1", SuggestedAction: "forward",
+		MatchedTask: "owner-task", Status: "new", CreatedAt: "2026-06-05T10:00:00Z",
+	}); err != nil {
+		t.Fatalf("seed feed: %v", err)
+	}
+
+	h, err := CreateAttentionHandoff(db, AttentionHandoff{
+		FeedItemID:       "hf1",
+		Sender:           "attention-router",
+		Receiver:         "owner-task",
+		Context:          "Summary: rollout question",
+		RequestedVerdict: "accept_or_decline",
+		RequestedAt:      "2026-06-05T10:01:00Z",
+		ExpiresAt:        "2026-06-05T10:31:00Z",
+	})
+	if err != nil {
+		t.Fatalf("CreateAttentionHandoff: %v", err)
+	}
+	if h.ID == "" {
+		t.Fatal("handoff id should be generated")
+	}
+	if h.Status != "pending" {
+		t.Fatalf("Status = %q, want pending", h.Status)
+	}
+	got, ok, err := LatestAttentionHandoffForFeed(db, "hf1")
+	if err != nil {
+		t.Fatalf("LatestAttentionHandoffForFeed: %v", err)
+	}
+	if !ok || got.ID != h.ID || got.Receiver != "owner-task" || got.Context == "" {
+		t.Fatalf("latest handoff mismatch: ok=%v got=%+v want id %s", ok, got, h.ID)
+	}
+
+	expired, err := ExpireAttentionHandoffs(db, "2026-06-05T10:31:01Z")
+	if err != nil {
+		t.Fatalf("ExpireAttentionHandoffs: %v", err)
+	}
+	if expired != 1 {
+		t.Fatalf("expired = %d, want 1", expired)
+	}
+	got, err = GetAttentionHandoff(db, h.ID)
+	if err != nil {
+		t.Fatalf("GetAttentionHandoff: %v", err)
+	}
+	if got.Status != "timeout" || got.RespondedAt == "" {
+		t.Fatalf("expired handoff = %+v, want timeout with responded_at", got)
+	}
+	item, _ := GetFeedItem(db, "hf1")
+	if item.Status != "new" {
+		t.Fatalf("timed-out handoff must not mark feed acted, got status %q", item.Status)
+	}
+}
+
+func TestRespondAttentionHandoffRejectsMalformedVerdict(t *testing.T) {
+	db := openTempDB(t)
+	defer db.Close()
+
+	h, err := CreateAttentionHandoff(db, AttentionHandoff{
+		FeedItemID: "hf2", Sender: "attention-router", Receiver: "owner-task",
+		Context: "context", RequestedVerdict: "accept_or_decline",
+		RequestedAt: "2026-06-05T10:00:00Z", ExpiresAt: "2026-06-05T11:00:00Z",
+	})
+	if err != nil {
+		t.Fatalf("CreateAttentionHandoff: %v", err)
+	}
+	if _, err := RespondAttentionHandoff(db, h.ID, "maybe", "ambiguous", "2026-06-05T10:05:00Z"); err == nil {
+		t.Fatal("malformed verdict should error")
+	}
+	got, err := GetAttentionHandoff(db, h.ID)
+	if err != nil {
+		t.Fatalf("GetAttentionHandoff: %v", err)
+	}
+	if got.Status != "pending" || got.Reason != "" || got.RespondedAt != "" {
+		t.Fatalf("malformed response should leave handoff pending, got %+v", got)
+	}
+}

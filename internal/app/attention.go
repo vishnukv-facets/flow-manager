@@ -26,6 +26,8 @@ func cmdAttention(args []string) int {
 		return cmdAttentionList(rest)
 	case "act":
 		return cmdAttentionAct(rest)
+	case "handoff":
+		return cmdAttentionHandoff(rest)
 	case "sent":
 		return cmdAttentionSent(rest)
 	case "trace":
@@ -33,7 +35,7 @@ func cmdAttention(args []string) int {
 	case "feedback":
 		return cmdAttentionFeedback(rest)
 	default:
-		fmt.Fprintf(os.Stderr, "error: unknown attention subcommand %q (want list|act|sent|trace|feedback)\n", sub)
+		fmt.Fprintf(os.Stderr, "error: unknown attention subcommand %q (want list|act|handoff|sent|trace|feedback)\n", sub)
 		printAttentionUsage()
 		return 2
 	}
@@ -43,7 +45,9 @@ func printAttentionUsage() {
 	fmt.Println(`flow attention — review and act on the attention feed
 
   flow attention list [--status new|acted|dismissed|snoozed|all]   (default: new)
-  flow attention act <id> <make-task|forward|dismiss>
+  flow attention act <id> <make-task|forward|confirm-handoff|dismiss>
+  flow attention handoff accept <correlation-id> --reason "<why>"
+  flow attention handoff decline <correlation-id> --reason "<why>"
   flow attention sent <id> [--close-floating <floating-id>]
   flow attention trace [--since 24h] [--disposition dropped|surfaced|error|all] [--limit 50]
   flow attention feedback [--group source|channel|author|thread-type|suggested-action|confidence-band]`)
@@ -65,6 +69,10 @@ func cmdAttentionList(args []string) int {
 	if filter == "all" {
 		filter = ""
 	}
+	if _, err := flowdb.ExpireAttentionHandoffs(db, time.Now().UTC().Format(time.RFC3339)); err != nil {
+		fmt.Fprintf(os.Stderr, "error: %v\n", err)
+		return 1
+	}
 	items, err := flowdb.ListFeedItems(db, filter)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
@@ -80,7 +88,7 @@ func cmdAttentionAct(args []string) int {
 		return 0
 	}
 	if len(args) < 2 {
-		fmt.Fprintln(os.Stderr, "error: act requires <id> and <make-task|forward|dismiss>")
+		fmt.Fprintln(os.Stderr, "error: act requires <id> and <make-task|forward|confirm-handoff|dismiss>")
 		return 2
 	}
 	id, actionArg := args[0], strings.ToLower(strings.TrimSpace(args[1]))
@@ -109,10 +117,68 @@ func cmdAttentionAct(args []string) int {
 		return runAttentionAction(db, item, steering.ActionMakeTask, "made task from")
 	case "forward":
 		return runAttentionAction(db, item, steering.ActionForward, "forwarded")
+	case "confirm-handoff", "confirm_handoff", "handoff":
+		h, err := steering.RequestHandoff(context.Background(), db, item, "attention-router")
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "error: %v\n", err)
+			return 1
+		}
+		fmt.Printf("requested handoff %s from %s\n", h.ID, h.Receiver)
+		return 0
 	default:
-		fmt.Fprintf(os.Stderr, "error: unknown action %q (want make-task|forward|dismiss)\n", actionArg)
+		fmt.Fprintf(os.Stderr, "error: unknown action %q (want make-task|forward|confirm-handoff|dismiss)\n", actionArg)
 		return 2
 	}
+}
+
+func cmdAttentionHandoff(args []string) int {
+	if leadingHelpArg(args) || len(args) == 0 {
+		fmt.Fprintln(os.Stderr, "usage: flow attention handoff <accept|decline|respond> <correlation-id> [verdict] --reason <why>")
+		return 2
+	}
+	verb := strings.ReplaceAll(strings.ToLower(strings.TrimSpace(args[0])), "-", "_")
+	rest := args[1:]
+	if len(rest) == 0 {
+		fmt.Fprintln(os.Stderr, "error: handoff requires a correlation id")
+		return 2
+	}
+	id := rest[0]
+	rest = rest[1:]
+	verdict := verb
+	if verb == "respond" {
+		if len(rest) == 0 {
+			fmt.Fprintln(os.Stderr, "error: handoff respond requires accept|decline")
+			return 2
+		}
+		verdict = strings.ReplaceAll(strings.ToLower(strings.TrimSpace(rest[0])), "-", "_")
+		rest = rest[1:]
+	}
+	if verdict != "accept" && verdict != "decline" {
+		fmt.Fprintf(os.Stderr, "error: unknown handoff verdict %q (want accept|decline)\n", verdict)
+		return 2
+	}
+	fs := flagSet("attention handoff")
+	reason := fs.String("reason", "", "reason for accepting or declining")
+	if handled, rc := parseFlagSet(fs, rest); handled {
+		return rc
+	}
+	if strings.TrimSpace(*reason) == "" {
+		fmt.Fprintln(os.Stderr, "error: handoff response requires --reason")
+		return 2
+	}
+
+	db, rc := openAttentionDB()
+	if rc != 0 {
+		return rc
+	}
+	defer db.Close()
+	h, err := steering.RespondHandoff(context.Background(), db, id, verdict, *reason)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "error: %v\n", err)
+		return 1
+	}
+	fmt.Printf("%s %s (%s)\n", h.Status, h.ID, h.Receiver)
+	return 0
 }
 
 // cmdAttentionSent marks a feed item 'acted' (sent) — the bookkeeping step an

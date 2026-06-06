@@ -176,10 +176,13 @@ func TestHandleAttentionIncludesActionPreviews(t *testing.T) {
 			byAction[action] = p
 		}
 	}
-	for _, action := range []string{"make_task", "make_task_start", "forward", "send_reply", "dismiss", "retriage", "mute_channel", "mute_sender", "mute_thread"} {
+	for _, action := range []string{"make_task", "make_task_start", "confirm_handoff", "forward", "send_reply", "dismiss", "retriage", "mute_channel", "mute_sender", "mute_thread"} {
 		if byAction[action] == nil {
 			t.Fatalf("missing action preview %q in %#v", action, previews)
 		}
+	}
+	if byAction["confirm_handoff"]["target"] != "deploy-followup" {
+		t.Errorf("confirm_handoff target = %#v, want deploy-followup", byAction["confirm_handoff"])
 	}
 	if byAction["forward"]["target"] != "deploy-followup" {
 		t.Errorf("forward target = %#v, want deploy-followup", byAction["forward"])
@@ -189,6 +192,71 @@ func TestHandleAttentionIncludesActionPreviews(t *testing.T) {
 	}
 	if desc, _ := byAction["make_task"]["description"].(string); desc == "" {
 		t.Errorf("make_task preview should explain the effect: %#v", byAction["make_task"])
+	}
+}
+
+func TestAttentionItemViewIncludesLatestHandoff(t *testing.T) {
+	s, db := attentionTestServer(t)
+	if _, err := flowdb.UpsertFeedItem(db, flowdb.FeedItem{
+		ID: "hv1", Source: "slack", ThreadKey: "C1:hv1", Summary: "Needs owner check",
+		SuggestedAction: "forward", MatchedTask: "deploy-followup", Confidence: 0.75,
+		Status: "new", CreatedAt: "2026-06-05T10:00:00Z",
+	}); err != nil {
+		t.Fatalf("seed feed: %v", err)
+	}
+	h, err := flowdb.CreateAttentionHandoff(db, flowdb.AttentionHandoff{
+		FeedItemID: "hv1", Sender: "attention-router", Receiver: "deploy-followup",
+		Context: "context", RequestedVerdict: "accept_or_decline",
+		RequestedAt: "2099-06-05T10:01:00Z", ExpiresAt: "2099-06-05T10:31:00Z",
+	})
+	if err != nil {
+		t.Fatalf("CreateAttentionHandoff: %v", err)
+	}
+
+	rec := httptest.NewRecorder()
+	s.handleAttention(rec, httptest.NewRequest(http.MethodGet, "/api/attention?status=new", nil))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body: %s", rec.Code, rec.Body.String())
+	}
+	var rows []map[string]any
+	if err := json.Unmarshal(rec.Body.Bytes(), &rows); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	hv, ok := rows[0]["handoff"].(map[string]any)
+	if !ok {
+		t.Fatalf("handoff missing from attention response: %#v", rows[0])
+	}
+	if hv["id"] != h.ID || hv["status"] != "pending" || hv["receiver"] != "deploy-followup" {
+		t.Fatalf("handoff view mismatch: %#v", hv)
+	}
+}
+
+func TestAttentionActConfirmHandoff(t *testing.T) {
+	s, db := attentionTestServer(t)
+	if _, err := flowdb.UpsertFeedItem(db, flowdb.FeedItem{
+		ID: "ch1", Source: "slack", ThreadKey: "C1:ch1", Summary: "Needs owner check",
+		SuggestedAction: "forward", MatchedTask: "deploy-followup", Confidence: 0.75,
+		Status: "new", CreatedAt: "2026-06-05T10:00:00Z",
+	}); err != nil {
+		t.Fatalf("seed feed: %v", err)
+	}
+	old := attentionRequestHandoff
+	attentionRequestHandoff = func(_ *Server, item flowdb.FeedItem) (flowdb.AttentionHandoff, error) {
+		return flowdb.CreateAttentionHandoff(db, flowdb.AttentionHandoff{
+			FeedItemID: item.ID, Sender: "attention-router", Receiver: item.MatchedTask,
+			Context: "context", RequestedVerdict: "accept_or_decline",
+			RequestedAt: "2026-06-05T10:01:00Z", ExpiresAt: "2026-06-05T10:31:00Z",
+		})
+	}
+	t.Cleanup(func() { attentionRequestHandoff = old })
+
+	resp, status := s.runAction(actionRequest{Kind: "attention-act", Target: "ch1", AttentionAction: "confirm-handoff"})
+	if status != 200 || !resp.OK {
+		t.Fatalf("confirm-handoff = (%+v, %d), want OK 200", resp, status)
+	}
+	item, _ := flowdb.GetFeedItem(db, "ch1")
+	if item.Status != "new" {
+		t.Fatalf("confirm-handoff request must leave card open, got %+v", item)
 	}
 }
 

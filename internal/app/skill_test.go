@@ -698,6 +698,22 @@ func TestSkillDocumentsSameSessionInboxMonitor(t *testing.T) {
 	}
 }
 
+func TestSkillDocumentsAttentionConfirmedHandoff(t *testing.T) {
+	got := string(embeddedSkill)
+	for _, want := range []string{
+		"Respond to Attention confirmed handoffs",
+		"Confirmed handoff request from the attention router",
+		"Correlation ID",
+		"flow attention handoff accept <correlation-id> --reason",
+		"flow attention handoff decline <correlation-id> --reason",
+		"Pending handoffs time out explicitly",
+	} {
+		if !strings.Contains(got, want) {
+			t.Errorf("skill missing Attention confirmed handoff content %q", want)
+		}
+	}
+}
+
 func TestReadmeDocumentsSameSessionProviderCapability(t *testing.T) {
 	data, err := os.ReadFile(filepath.Join("..", "..", "README.md"))
 	if err != nil {

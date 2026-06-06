@@ -213,6 +213,10 @@ Read
   flow transcript   [<ref>] [--compact]    (readable transcript from session jsonl)
   flow attention feedback [--group source|channel|author|thread-type|suggested-action|confidence-band]
                      report Attention feedback approval/dismiss rates by one dimension
+  flow attention handoff accept <correlation-id> --reason "<why>"
+                     accept an Attention confirmed handoff from this task's inbox
+  flow attention handoff decline <correlation-id> --reason "<why>"
+                     decline an Attention confirmed handoff and keep the feed card open
   flow list tasks    [--status backlog|in-progress|done] [--project <slug>]
                      [--priority high|medium|low] [--since today|monday|7d|YYYY-MM-DD]
                      [--include-archived] [--include-deleted|--deleted]
@@ -1011,6 +1015,41 @@ This does **not** replace the execution-session bootstrap contract in
 §9. Still read the current task brief, updates, parent project context,
 and repo conventions first. Use search after bootstrap when the work
 requires cross-task or cross-memory context.
+
+### 4.9b Respond to Attention confirmed handoffs
+
+**When to use:** If this task's inbox contains a "Confirmed handoff request from the attention router" with a `Correlation ID`, the steerer is asking this task to verify whether the source thread belongs here before the card is marked handled.
+
+**Recipe:**
+
+1. Read the handoff context block, then compare it against this task's brief,
+   updates, and current transcript context. Do not accept just because the
+   steerer guessed this task; the point of confirmed handoff is that the owning
+   task has better context than the steerer.
+2. If it belongs here, run:
+   ```
+   flow attention handoff accept <correlation-id> --reason "<why this belongs here>"
+   ```
+   Accepting marks the Attention card acted and links it to this task. The
+   context block already landed in this inbox, so continue from it normally.
+3. If it does not belong here, run:
+   ```
+   flow attention handoff decline <correlation-id> --reason "<why this should route elsewhere>"
+   ```
+   Declining keeps the Attention card open so the steerer/operator can escalate,
+   re-triage, make a new task, or choose another candidate. If you know the
+   better owner, name it in the reason.
+4. If the context is insufficient, decline with that reason instead of staying
+   silent. Pending handoffs time out explicitly and do not mark the card acted.
+
+**Anti-patterns:**
+
+- Do not run ordinary `flow tell` as a substitute for accepting; it bypasses the
+  correlation id and leaves the feed card unresolved.
+- Do not accept without a reason. The reason is the audit trail the operator
+  sees when reviewing why the route was confirmed.
+- Do not keep a handoff pending while you investigate unrelated work; accept or
+  decline once you have enough task-local evidence.
 
 ### 4.10 Listening for knowledge-base facts (scoop mode)
 
