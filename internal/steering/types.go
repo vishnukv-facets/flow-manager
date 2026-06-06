@@ -81,18 +81,26 @@ type OperatorIdentity struct {
 
 // ContextMessage is one message inside a fetched thread.
 type ContextMessage struct {
-	Author string `json:"author"`
-	Text   string `json:"text"`
-	TS     string `json:"ts"`
+	Kind      string `json:"kind,omitempty"`
+	Author    string `json:"author"`
+	Text      string `json:"text"`
+	TS        string `json:"ts"`
+	Permalink string `json:"permalink,omitempty"`
 }
 
 // ThreadContext is a normalized bundle of richer context a connector fetches
 // on demand for the deep triage stage.
 type ThreadContext struct {
+	Source       string           `json:"source,omitempty"`
+	ThreadKey    string           `json:"thread_key,omitempty"`
 	Summary      string           `json:"summary,omitempty"`
 	Participants []string         `json:"participants,omitempty"`
+	Timestamps   []string         `json:"timestamps,omitempty"`
+	Parent       *ContextMessage  `json:"parent,omitempty"`
 	Messages     []ContextMessage `json:"messages,omitempty"`
 	Permalink    string           `json:"permalink,omitempty"`
+	FetchStatus  string           `json:"fetch_status,omitempty"`
+	FetchError   string           `json:"fetch_error,omitempty"`
 }
 
 // Connector abstracts a monitored source (slack, github, gmail). The cascade,

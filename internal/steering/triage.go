@@ -22,37 +22,38 @@ var deepTriageRunner = func(ctx context.Context, prompt string) (string, error) 
 	return string(out), nil
 }
 
-// DeepTriage runs Stage 3 on a single survivor: a capable headless agent that
-// gathers full context and emits the final Verdict (including a drafted reply
-// when appropriate). The draft is SURFACED only — P1 never auto-sends it.
+// DeepTriage runs Stage 3 on a single survivor. Callers that already fetched a
+// deterministic thread context should use DeepTriageWithContext; this wrapper is
+// kept for narrow tests and older call sites and passes an event-only fallback
+// pack rather than asking the model to fetch context itself.
 func DeepTriage(ctx context.Context, in ClassifyInput, taskIndex string) (Verdict, error) {
-	raw, err := deepTriageRunner(ctx, deepTriagePrompt(in, taskIndex))
+	return DeepTriageWithContext(ctx, in, taskIndex, contextFromClassifyInput(in))
+}
+
+// DeepTriageWithContext runs Stage 3 with the explicit context pack assembled
+// by Go. The draft is SURFACED only — P1 never auto-sends it.
+func DeepTriageWithContext(ctx context.Context, in ClassifyInput, taskIndex string, pack ThreadContext) (Verdict, error) {
+	raw, err := deepTriageRunner(ctx, deepTriagePromptWithContext(in, taskIndex, pack))
 	if err != nil {
 		return Verdict{}, err
 	}
 	return parseVerdict(raw, in.Source, in.ThreadKey)
 }
 
-// contextHintFor returns the connector-specific instruction for how the deep
-// triage step should read the full surrounding context. Adding a connector
-// means adding a case here (plus its connectorOf discriminator and Stage 0
-// policy). Unknown sources fall back to the Slack hint (default connector).
-func contextHintFor(source string) string {
-	switch source {
-	case "github":
-		return "For GitHub, use the `gh` CLI or the GitHub MCP to read the full PR/issue and its comments. The thread_key encodes owner/repo plus gh-pr/gh-issue#<number>; the item URL is the canonical link."
-	default:
-		return "For Slack, use the Slack MCP tools to read the thread (channel + thread_ts are encoded in thread_key as \"<channel>:<thread_ts>\")."
-	}
+func deepTriagePrompt(in ClassifyInput, taskIndex string) string {
+	return deepTriagePromptWithContext(in, taskIndex, contextFromClassifyInput(in))
 }
 
-func deepTriagePrompt(in ClassifyInput, taskIndex string) string {
+func deepTriagePromptWithContext(in ClassifyInput, taskIndex string, pack ThreadContext) string {
 	payload, _ := json.Marshal(in)
+	contextPayload, _ := json.Marshal(pack)
 	return `MODE: stage3-deep
 
-You are the deep-triage step of an operator's attention router. A cheap gate has already decided this message is worth a closer look. Do the following, then emit a single verdict:
+You are the deep-triage step of an operator's attention router. A cheap gate has already decided this message is worth a closer look. Go has already fetched the surrounding source context into the context pack below. Treat that context pack as the primary source of truth; do not rely on fetching Slack/GitHub context yourself. If fetch_status is "error" or "unavailable", proceed from the fallback event context and lower confidence when the missing context matters.
 
-1. Read the full surrounding context. ` + contextHintFor(in.Source) + `
+Do the following, then emit a single verdict:
+
+1. Read the context pack's source permalink, parent message, replies/comments, participants, timestamps, and pre-summary.
 2. Decide whether this message belongs to an EXISTING task (set matched_task) or warrants a new one. Do NOT decide from the task name alone — for any plausibly related task (especially ones in the project this message seems to belong to), use your file tools to READ that task's brief.md AND the progress notes in its updates/ directory (paths are given in the index below) before judging. A message belongs to an existing task when it continues, follows up on, or is the next step of the work that task covers — even if it arrives in a different Slack thread/DM. Prefer matched_task to an existing active task in such cases; only treat it as net-new when, after reading, no active task actually covers it.
 3. If a reply from the operator is appropriate, draft it in the operator's voice. DO NOT SEND ANYTHING — the draft is surfaced for the operator's approval only.
 
@@ -64,6 +65,24 @@ Respond with ONLY a minified JSON object (no prose, fences allowed but optional)
 Operator task/project index:
 ` + taskIndex + `
 
+Context pack (JSON):
+` + string(contextPayload) + `
+
 Message (JSON):
 ` + string(payload)
+}
+
+func contextFromClassifyInput(in ClassifyInput) ThreadContext {
+	pack := ThreadContext{
+		Source:      in.Source,
+		ThreadKey:   in.ThreadKey,
+		FetchStatus: "unavailable",
+		FetchError:  "deterministic context pack was not provided",
+	}
+	if in.Text != "" || in.Author != "" {
+		pack.Parent = &ContextMessage{Kind: "event", Author: in.Author, Text: in.Text}
+	}
+	pack.Participants, pack.Timestamps = deriveContextMeta(pack.Parent, pack.Messages)
+	pack.Summary = summarizeThreadContext(pack.Source, pack.Parent, pack.Messages)
+	return pack
 }

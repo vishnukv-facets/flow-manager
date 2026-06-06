@@ -6,6 +6,7 @@ import (
 	"crypto/rand"
 	"database/sql"
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"os"
 	"strconv"
@@ -55,18 +56,23 @@ type Cascade struct {
 	// defaults it to a writer that inserts into the steering_trace table; tests
 	// swap it to capture rows in memory.
 	trace func(flowdb.SteeringTrace)
+
+	// FetchContext deterministically loads connector context for Stage 3. Nil
+	// means context fetching is unavailable; the cascade writes an explicit
+	// event-only fallback pack rather than asking the model to fetch context.
+	FetchContext func(context.Context, monitor.InboundEvent) (ThreadContext, error)
 }
 
 // NewCascade builds a Cascade with production defaults (real clock, random IDs,
 // a 10-minute verdict TTL, and an env-configurable hourly deep-triage budget).
 func NewCascade(db *sql.DB, cfg WatchConfig) *Cascade {
 	return &Cascade{
-		DB:     db,
-		Config: cfg,
-		now:    time.Now,
-		newID:  randomID,
-		cache:  newVerdictCache(10 * time.Minute),
-		budget: newBudgetGuard(deepBudgetPerHour()),
+		DB:       db,
+		Config:   cfg,
+		now:      time.Now,
+		newID:    randomID,
+		cache:    newVerdictCache(10 * time.Minute),
+		budget:   newBudgetGuard(deepBudgetPerHour()),
 		log:      func(f string, a ...any) { fmt.Fprintf(os.Stderr, "[steering] "+f+"\n", a...) },
 		trace:    func(t flowdb.SteeringTrace) { _ = flowdb.InsertSteeringTrace(db, t) },
 		Autonomy: DefaultAutonomy(),
@@ -220,6 +226,7 @@ func (c *Cascade) finishItem(ctx context.Context, in ClassifyInput, tr *flowdb.S
 		c.emitTrace(tr, start)
 		return nil
 	}
+	pack := c.contextPack(ctx, ev)
 
 	// Backpressure: when the deep-triage budget is exhausted, surface the cheap
 	// Stage-2 verdict rather than silently deferring. Nothing is lost.
@@ -227,7 +234,7 @@ func (c *Cascade) finishItem(ctx context.Context, in ClassifyInput, tr *flowdb.S
 		c.log("deep-triage budget exhausted; surfacing stage2 verdict for %s", in.ThreadKey)
 		c.cache.mark(in.ThreadKey, c.now())
 		c.applyExistingTaskMatch(&v2, ev)
-		id, werr := c.writeFeed(v2, ev)
+		id, werr := c.writeFeed(v2, ev, pack)
 		tr.Disposition, tr.StageReached = "surfaced", "stage2"
 		tr.DropReason = "deep budget exhausted; surfaced stage2 verdict"
 		tr.FinalAction, tr.FinalConfidence, tr.FeedItemID = string(v2.SuggestedAction), v2.Confidence, id
@@ -236,7 +243,7 @@ func (c *Cascade) finishItem(ctx context.Context, in ClassifyInput, tr *flowdb.S
 		return werr
 	}
 
-	v3, err := DeepTriage(ctx, in, taskIndex)
+	v3, err := DeepTriageWithContext(ctx, in, taskIndex, pack)
 	if err != nil {
 		c.log("deep triage failed for %s: %v; falling back to stage2 verdict", in.ThreadKey, err)
 		tr.Error = "deep triage failed: " + err.Error() + "; fell back to stage2"
@@ -259,7 +266,7 @@ func (c *Cascade) finishItem(ctx context.Context, in ClassifyInput, tr *flowdb.S
 		c.emitTrace(tr, start)
 		return nil
 	}
-	id, werr := c.writeFeed(v3, ev)
+	id, werr := c.writeFeed(v3, ev, pack)
 	tr.Disposition = "surfaced"
 	tr.FinalAction, tr.FinalConfidence, tr.FeedItemID = string(v3.SuggestedAction), v3.Confidence, id
 	c.emitTrace(tr, start)
@@ -434,7 +441,7 @@ func preview(s string) string {
 
 // writeFeed maps a Verdict to a surface-only ('new') Attention feed row and
 // returns the upserted item's id.
-func (c *Cascade) writeFeed(v Verdict, ev monitor.InboundEvent) (string, error) {
+func (c *Cascade) writeFeed(v Verdict, ev monitor.InboundEvent, pack ThreadContext) (string, error) {
 	item := flowdb.FeedItem{
 		ID:                c.newID(),
 		Source:            v.Source,
@@ -449,6 +456,7 @@ func (c *Cascade) writeFeed(v Verdict, ev monitor.InboundEvent) (string, error) 
 		Confidence:        v.Confidence,
 		Draft:             v.Draft,
 		Reason:            v.Reason,
+		ContextJSON:       contextJSON(pack),
 		Channel:           ev.Channel,
 		ChannelType:       ev.ChannelType,
 		Author:            ev.UserID,
@@ -466,6 +474,25 @@ func (c *Cascade) writeFeed(v Verdict, ev monitor.InboundEvent) (string, error) 
 		return "", fmt.Errorf("steering: write feed item: %w", err)
 	}
 	return id, nil
+}
+
+func (c *Cascade) contextPack(ctx context.Context, ev monitor.InboundEvent) ThreadContext {
+	if c.FetchContext == nil {
+		return fallbackThreadContext(ev, "unavailable", "context fetcher unavailable", c.cleanText(ctx, ev.Text))
+	}
+	pack, err := c.FetchContext(ctx, ev)
+	if err != nil {
+		return fallbackThreadContext(ev, "error", err.Error(), c.cleanText(ctx, ev.Text))
+	}
+	return normalizeThreadContext(pack, ev)
+}
+
+func contextJSON(pack ThreadContext) string {
+	b, err := json.Marshal(pack)
+	if err != nil {
+		return ""
+	}
+	return string(b)
 }
 
 // ---------- verdict cache ----------
