@@ -4661,8 +4661,8 @@ a.orch-pr:hover {
   top: calc(100% + 8px);
   right: 0;
   z-index: 60;
-  width: 380px;
-  max-width: min(380px, calc(100vw - 48px));
+  width: 520px;
+  max-width: min(520px, calc(100vw - 48px));
   display: flex;
   flex-direction: column;
   gap: 10px;
@@ -4676,14 +4676,97 @@ a.orch-pr:hover {
 .ask-flow-input {
   font-size: 14px;
 }
-.ask-flow-pop-actions {
+.ask-flow-error {
+  color: var(--danger);
+  font-size: 12.5px;
+  line-height: 1.35;
+}
+.ask-flow-answer {
+  display: flex;
+  flex-direction: column;
+  gap: 9px;
+  max-height: min(46vh, 460px);
+  overflow: auto;
+  padding: 11px;
+  border: 1px solid var(--border);
+  border-radius: var(--r-sm);
+  background: color-mix(in srgb, var(--bg-2) 84%, transparent);
+}
+.ask-flow-answer-top {
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 10px;
+  font-size: 12.5px;
+  font-weight: 700;
+}
+.ask-flow-intent {
+  flex: none;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  text-transform: uppercase;
+  color: var(--text-3);
+}
+.ask-flow-answer-text {
+  white-space: pre-wrap;
+  line-height: 1.45;
+  font-size: 13px;
+  color: var(--text-2);
+}
+.ask-flow-cites {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.ask-flow-cite {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 8px;
+  min-height: 30px;
+  padding: 6px 7px;
+  border: 1px solid var(--border);
+  border-radius: var(--r-xs);
+  color: var(--text-2);
+  background: var(--bg-1);
+}
+.ask-flow-cite:hover {
+  border-color: var(--border-strong);
+  color: var(--text);
+}
+.ask-flow-cite-type {
+  font-family: var(--font-mono);
+  font-size: 9.5px;
+  text-transform: uppercase;
+  color: var(--accent-hi);
+}
+.ask-flow-cite-title {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 12.5px;
+  font-weight: 600;
+}
+.ask-flow-cite-snippet {
+  grid-column: 2 / -1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 11.5px;
+  color: var(--text-3);
+}
+.ask-flow-pop-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  flex-wrap: wrap;
+  gap: 10px;
 }
 .ask-flow-pop-actions .agent-seg {
   min-width: 0;
+  margin-right: auto;
 }
 .env-pill {
   display: inline-flex;

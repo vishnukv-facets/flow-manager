@@ -276,6 +276,81 @@ func TestSearchReadsMemoryBodies(t *testing.T) {
 	}
 }
 
+func TestAskFlowLookNowUsesAttentionAndTasks(t *testing.T) {
+	root, db := testRootDB(t)
+	insertProjectTask(t, db, root)
+	if _, err := flowdb.UpsertFeedItem(db, flowdb.FeedItem{
+		ID:              "card-1",
+		Source:          "slack",
+		ThreadKey:       "C1:1710000000.000100",
+		Summary:         "Prod deploy thread needs a reply",
+		SuggestedAction: "reply",
+		Confidence:      0.92,
+		Reason:          "matched a live release thread",
+		Status:          "new",
+		CreatedAt:       "2026-05-12T10:03:00+05:30",
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	res := askFlowTest(t, db, root, "What should I look at now?")
+	if res.Intent != "look_now" {
+		t.Fatalf("intent = %q", res.Intent)
+	}
+	if !strings.Contains(res.Answer, "Prod deploy thread needs a reply") {
+		t.Fatalf("answer did not include attention summary: %s", res.Answer)
+	}
+	if !strings.Contains(res.Answer, "Build dashboard UI") {
+		t.Fatalf("answer did not include high-priority backlog: %s", res.Answer)
+	}
+	if !hasAskFlowCitation(res.Citations, "attention", "card-1") {
+		t.Fatalf("missing attention citation: %#v", res.Citations)
+	}
+	if !hasAskFlowCitation(res.Citations, "task", "build-ui") {
+		t.Fatalf("missing task citation: %#v", res.Citations)
+	}
+}
+
+func TestAskFlowBlockersCitesWaitingTasks(t *testing.T) {
+	root, db := testRootDB(t)
+	insertProjectTask(t, db, root)
+	now := "2026-05-12T10:07:00+05:30"
+	if _, err := db.Exec(
+		`INSERT INTO tasks (slug, name, status, kind, priority, work_dir, waiting_on, session_provider, session_id, created_at, updated_at)
+		 VALUES ('deploy-fix', 'Fix production deploy', 'in-progress', 'regular', 'high', ?, 'release approval from Omendra', 'claude', '00000000-0000-4000-8000-000000000001', ?, ?)`,
+		root, now, now,
+	); err != nil {
+		t.Fatal(err)
+	}
+
+	res := askFlowTest(t, db, root, "Summarize open blockers")
+	if res.Intent != "blockers" {
+		t.Fatalf("intent = %q", res.Intent)
+	}
+	if !strings.Contains(res.Answer, "Fix production deploy") || !strings.Contains(res.Answer, "release approval from Omendra") {
+		t.Fatalf("answer did not include waiting task: %s", res.Answer)
+	}
+	if !hasAskFlowCitation(res.Citations, "task", "deploy-fix") {
+		t.Fatalf("missing waiting task citation: %#v", res.Citations)
+	}
+}
+
+func TestAskFlowRelatedQuestionUsesSearchCitations(t *testing.T) {
+	root, db := testRootDB(t)
+	insertProjectTask(t, db, root)
+
+	res := askFlowTest(t, db, root, "Which tasks are related to current-data-marker?")
+	if res.Intent != "related" {
+		t.Fatalf("intent = %q", res.Intent)
+	}
+	if !strings.Contains(res.Answer, "Build dashboard UI") {
+		t.Fatalf("answer did not include related task: %s", res.Answer)
+	}
+	if !hasAskFlowCitation(res.Citations, "update", "build-ui") {
+		t.Fatalf("missing update citation: %#v", res.Citations)
+	}
+}
+
 func TestKBFileSaveRejectsStaleMTime(t *testing.T) {
 	root, db := testRootDB(t)
 	path := filepath.Join(root, "kb", "user.md")
@@ -3463,6 +3538,65 @@ func insertSearchDoc(t *testing.T, db *sql.DB, key, scope, entityType, entitySlu
 	); err != nil {
 		t.Fatal(err)
 	}
+}
+
+func askFlowTest(t *testing.T, db *sql.DB, root, query string) struct {
+	Query     string `json:"query"`
+	Intent    string `json:"intent"`
+	Answer    string `json:"answer"`
+	Citations []struct {
+		Type       string `json:"type"`
+		ID         string `json:"id"`
+		Slug       string `json:"slug"`
+		Title      string `json:"title"`
+		URL        string `json:"url"`
+		SourcePath string `json:"source_path"`
+		Snippet    string `json:"snippet"`
+	} `json:"citations"`
+} {
+	t.Helper()
+	srv := New(Config{DB: db, FlowRoot: root, Version: "test"}).Handler()
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/api/ask-flow", strings.NewReader(fmt.Sprintf(`{"query":%q}`, query)))
+	srv.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, body = %s", rec.Code, rec.Body.String())
+	}
+	var res struct {
+		Query     string `json:"query"`
+		Intent    string `json:"intent"`
+		Answer    string `json:"answer"`
+		Citations []struct {
+			Type       string `json:"type"`
+			ID         string `json:"id"`
+			Slug       string `json:"slug"`
+			Title      string `json:"title"`
+			URL        string `json:"url"`
+			SourcePath string `json:"source_path"`
+			Snippet    string `json:"snippet"`
+		} `json:"citations"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &res); err != nil {
+		t.Fatal(err)
+	}
+	return res
+}
+
+func hasAskFlowCitation(citations []struct {
+	Type       string `json:"type"`
+	ID         string `json:"id"`
+	Slug       string `json:"slug"`
+	Title      string `json:"title"`
+	URL        string `json:"url"`
+	SourcePath string `json:"source_path"`
+	Snippet    string `json:"snippet"`
+}, typ, ref string) bool {
+	for _, c := range citations {
+		if c.Type == typ && (c.ID == ref || c.Slug == ref) {
+			return true
+		}
+	}
+	return false
 }
 
 func pragmaInt64(t *testing.T, db *sql.DB, name string) int64 {

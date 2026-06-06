@@ -1,10 +1,11 @@
 import { QueryClient, keepPreviousData, useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { apiAction, apiGet, apiGetText } from './api'
+import { apiAction, apiGet, apiGetText, apiPost } from './api'
 import { rpc } from './rpc'
 import { events } from './events'
 import { pushToast } from './toast'
 import type {
   ActionRequest,
+  AskFlowResponse,
   AttentionItem,
   AttentionTraceResponse,
   HealthView,
@@ -292,6 +293,12 @@ export function useSearch(query: string, scope = 'all') {
         // entity-type names like "tasks" are invalid and 400.
         `/api/search?q=${encodeURIComponent(q)}&in=${inScopes}&limit=8`,
       ),
+  })
+}
+
+export function useAskFlow() {
+  return useMutation({
+    mutationFn: (query: string) => apiPost<AskFlowResponse>('/api/ask-flow', { query }),
   })
 }
 

@@ -551,6 +551,27 @@ type SearchResult struct {
 	SourcePath string `json:"source_path,omitempty"`
 }
 
+type AskFlowRequest struct {
+	Query string `json:"query"`
+}
+
+type AskFlowCitation struct {
+	Type       string `json:"type"`
+	ID         string `json:"id,omitempty"`
+	Slug       string `json:"slug,omitempty"`
+	Title      string `json:"title"`
+	URL        string `json:"url,omitempty"`
+	SourcePath string `json:"source_path,omitempty"`
+	Snippet    string `json:"snippet,omitempty"`
+}
+
+type AskFlowResponse struct {
+	Query     string            `json:"query"`
+	Intent    string            `json:"intent"`
+	Answer    string            `json:"answer"`
+	Citations []AskFlowCitation `json:"citations"`
+}
+
 type TranscriptResponse struct {
 	Available bool              `json:"available"`
 	Message   string            `json:"message,omitempty"`
