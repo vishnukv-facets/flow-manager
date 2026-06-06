@@ -2,6 +2,7 @@ package steering
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -439,6 +440,38 @@ func TestRequestHandoffSendsCorrelationAndLeavesFeedNew(t *testing.T) {
 	got, _ := flowdb.GetFeedItem(db, "hr1")
 	if got.Status != "new" || got.LinkedTask != "" {
 		t.Fatalf("request must leave feed item open, got %+v", got)
+	}
+}
+
+func TestRequestHandoffDeliveryFailureRemovesPendingHandoff(t *testing.T) {
+	db, err := flowdb.OpenDB(filepath.Join(t.TempDir(), "flow.db"))
+	if err != nil {
+		t.Fatalf("OpenDB: %v", err)
+	}
+	defer db.Close()
+	stubActionIO(t)
+	taskHandoffRequester = func(_ context.Context, _, _, _ string) error {
+		return errors.New("tell failed")
+	}
+
+	item := flowdb.FeedItem{
+		ID: "hf1", Source: "slack", ThreadKey: "C1:handoff-fail", Summary: "needs owner confirmation",
+		SuggestedAction: "forward", MatchedTask: "rollout-task", Status: "new",
+		CreatedAt: "2026-06-05T10:00:00Z",
+	}
+	if _, err := flowdb.UpsertFeedItem(db, item); err != nil {
+		t.Fatalf("seed feed: %v", err)
+	}
+
+	if _, err := RequestHandoff(context.Background(), db, item, "attention-router"); err == nil {
+		t.Fatal("RequestHandoff should report delivery failure")
+	}
+	if _, ok, err := flowdb.LatestAttentionHandoffForFeed(db, item.ID); err != nil || ok {
+		t.Fatalf("failed delivery should remove pending handoff, ok=%v err=%v", ok, err)
+	}
+	got, _ := flowdb.GetFeedItem(db, item.ID)
+	if got.Status != "new" || got.LinkedTask != "" {
+		t.Fatalf("failed delivery must leave feed retryable, got %+v", got)
 	}
 }
 

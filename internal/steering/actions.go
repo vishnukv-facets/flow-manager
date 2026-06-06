@@ -183,6 +183,9 @@ func RequestHandoff(ctx context.Context, db *sql.DB, item flowdb.FeedItem, sende
 		return flowdb.AttentionHandoff{}, err
 	}
 	if err := taskHandoffRequester(ctx, target, feedHandoffMessage(h), sender); err != nil {
+		if cleanupErr := flowdb.DeleteAttentionHandoff(db, h.ID); cleanupErr != nil {
+			return flowdb.AttentionHandoff{}, fmt.Errorf("%w; also failed to remove undelivered handoff %s: %v", err, h.ID, cleanupErr)
+		}
 		return flowdb.AttentionHandoff{}, err
 	}
 	return h, nil

@@ -116,6 +116,20 @@ func LatestAttentionHandoffForFeed(db *sql.DB, feedItemID string) (AttentionHand
 	return h, true, nil
 }
 
+func DeleteAttentionHandoff(db *sql.DB, id string) error {
+	if db == nil {
+		return fmt.Errorf("flowdb: delete attention handoff requires db")
+	}
+	id = strings.TrimSpace(id)
+	if id == "" {
+		return fmt.Errorf("flowdb: delete attention handoff requires id")
+	}
+	if _, err := db.Exec(`DELETE FROM attention_handoffs WHERE id = ?`, id); err != nil {
+		return fmt.Errorf("flowdb: delete attention handoff %q: %w", id, err)
+	}
+	return nil
+}
+
 func RespondAttentionHandoff(db *sql.DB, id, verdict, reason, at string) (AttentionHandoff, error) {
 	if db == nil {
 		return AttentionHandoff{}, fmt.Errorf("flowdb: respond attention handoff requires db")
