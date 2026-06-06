@@ -52,9 +52,6 @@ const PRIOS = [
 ]
 const PRIO_RANK: Record<string, number> = { high: 0, medium: 1, low: 2 }
 
-// Pixels of indent per tree depth level.
-const INDENT = 16
-
 type SortField = 'name' | 'project' | 'priority' | 'due' | 'updated' | 'created'
 type SortDir = 'asc' | 'desc'
 // Default direction when a column is first clicked: names/projects read better
@@ -523,18 +520,38 @@ function SortableTh({
   )
 }
 
-// The expand caret + indentation column for a tree row. A leaf reserves the
-// caret's width so names stay aligned with their expandable siblings.
+// Box-drawing connectors for a tree row, mirroring the SessionDetail orch tree.
+// The root level is dropped (`.slice(1)`): roots draw no connector, so the line
+// context resets under each top-level row instead of implying a forest-wide
+// spine. Each remaining ancestor contributes "│  " (more siblings below) or
+// "   " (was the last child); the node's own elbow is "├─ " / "└─ ".
+function treeConnectors(tree: FlatRow): { prefix: string; branch: string } {
+  const prefix = tree.ancestorLines.slice(1).map((last) => (last ? '   ' : '│  ')).join('')
+  const branch = tree.depth === 0 ? '' : tree.isLast ? '└─ ' : '├─ '
+  return { prefix, branch }
+}
+
+// The connector glyphs + expand caret for a tree row. Rendered twice per row:
+// visible on the task-name line, and as an invisible spacer on the slug line so
+// the slug stays aligned under the name (identical glyphs ⇒ identical width).
 function TreeGutter({
   tree,
+  hidden,
   onToggleExpand,
 }: {
   tree: FlatRow
+  hidden?: boolean
   onToggleExpand?: () => void
 }) {
+  const { prefix, branch } = treeConnectors(tree)
+  const showCaret = tree.hasChildren && !hidden
+  // Leaves (and the ghost copies of parents) reserve the caret's width so names
+  // line up with their expandable siblings.
+  const showSpacer = hidden ? tree.hasChildren || tree.depth > 0 : tree.depth > 0
   return (
-    <span className="tree-gutter" style={{ paddingLeft: tree.depth * INDENT }} aria-hidden={!tree.hasChildren}>
-      {tree.hasChildren ? (
+    <span className="tree-gutter" aria-hidden={hidden || !tree.hasChildren || undefined} data-ghost={hidden || undefined}>
+      {(prefix || branch) && <span className="tree-branch mono">{prefix}{branch}</span>}
+      {showCaret ? (
         <button
           className="tree-caret"
           title={tree.collapsed ? 'Expand subtasks' : 'Collapse subtasks'}
@@ -547,9 +564,9 @@ function TreeGutter({
         >
           {tree.collapsed ? <ChevronRight size={13} /> : <ChevronDown size={13} />}
         </button>
-      ) : (
+      ) : showSpacer ? (
         <span className="tree-caret-spacer" />
-      )}
+      ) : null}
     </span>
   )
 }
@@ -686,8 +703,6 @@ function TaskRow({
   ]
     .filter(Boolean)
     .join(' ')
-  // Slug line aligns under the task name: depth indent + caret width + flex gap.
-  const slugIndent = tree ? { paddingLeft: tree.depth * INDENT + 24 } : undefined
 
   return (
     <tr className={rowCls} {...clickable(onOpen, { disabled: editing })} aria-label={`Open ${task.name}`}>
@@ -745,8 +760,11 @@ function TaskRow({
             </button>
           </div>
         )}
-        <div className="mono faint clip" style={{ fontSize: 11, ...slugIndent }}>
-          {task.slug}{task.assignee ? ` · @${task.assignee}` : ''}
+        <div className={`mono faint clip${tree ? ' tree-slug' : ''}`} style={{ fontSize: 11 }}>
+          {tree && <TreeGutter tree={tree} hidden />}
+          <span className="clip">
+            {task.slug}{task.assignee ? ` · @${task.assignee}` : ''}
+          </span>
         </div>
       </td>
       <td>

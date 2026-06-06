@@ -3854,12 +3854,32 @@ summary.detail-branch.as-button:hover {
 }
 
 /* ---- Tasks screen: tree / startability mode ------------------------------ */
-/* The expand caret + per-depth indent live inside the Task name cell, so the
+/* The connector glyphs + expand caret live inside the Task name cell, so the
  * table column layout is untouched between flat and tree modes. */
 .tree-gutter {
   display: inline-flex;
   align-items: center;
   flex: none;
+}
+/* Box-drawing connectors (│ ├─ └─). Fixed font-size so the visible copy on the
+ * name line and the invisible copy on the slug line are exactly the same width
+ * and stay aligned. white-space:pre preserves the connector spacing runs. */
+.tree-branch {
+  font-size: 12px;
+  line-height: 1;
+  white-space: pre;
+  color: var(--text-3);
+  flex: none;
+}
+/* Slug line under the task name: mirror the name line's flex gap so the ghost
+ * gutter lines the slug up under the name text. */
+.tree-slug {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.tree-slug > .clip {
+  min-width: 0;
 }
 .tree-caret {
   display: inline-flex;
