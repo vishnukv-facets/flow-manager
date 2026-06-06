@@ -520,53 +520,39 @@ function SortableTh({
   )
 }
 
-// Box-drawing connectors for a tree row, mirroring the SessionDetail orch tree.
-// The root level is dropped (`.slice(1)`): roots draw no connector, so the line
-// context resets under each top-level row instead of implying a forest-wide
-// spine. Each remaining ancestor contributes "│  " (more siblings below) or
-// "   " (was the last child); the node's own elbow is "├─ " / "└─ ".
-function treeConnectors(tree: FlatRow): { prefix: string; branch: string } {
-  const prefix = tree.ancestorLines.slice(1).map((last) => (last ? '   ' : '│  ')).join('')
-  const branch = tree.depth === 0 ? '' : tree.isLast ? '└─ ' : '├─ '
-  return { prefix, branch }
-}
+// Width of one indent level / guide column, in px.
+const RAIL_W = 22
 
-// The connector glyphs + expand caret for a tree row. Rendered twice per row:
-// visible on the task-name line, and as an invisible spacer on the slug line so
-// the slug stays aligned under the name (identical glyphs ⇒ identical width).
-function TreeGutter({
-  tree,
-  hidden,
-  onToggleExpand,
-}: {
-  tree: FlatRow
-  hidden?: boolean
-  onToggleExpand?: () => void
-}) {
-  const { prefix, branch } = treeConnectors(tree)
-  const showCaret = tree.hasChildren && !hidden
-  // Leaves (and the ghost copies of parents) reserve the caret's width so names
-  // line up with their expandable siblings.
-  const showSpacer = hidden ? tree.hasChildren || tree.depth > 0 : tree.depth > 0
+// CSS guide rails for a tree row, drawn as an absolute layer that spans the full
+// cell height (so consecutive rows' rails join into continuous lines — glyphs
+// can't, because these rows are two lines tall). For a node at depth d:
+//   • columns 0..d-2  → a vertical rail where that ancestor has more siblings
+//     below (root level is skipped, so there's no misleading forest-wide spine);
+//   • column d-1      → the elbow connecting this row up to its parent (a full
+//     rail for a middle child, a half rail "└" for the last child) plus a short
+//     tick reaching the task name;
+//   • column d        → on an expanded parent, a descender dropping to its first
+//     child, aligned under the caret.
+function TreeGuides({ tree }: { tree: FlatRow }) {
+  const d = tree.depth
+  const cols = []
+  for (let c = 0; c <= d - 2; c++) {
+    // column c mirrors ancestorLines[c+1] (index 0 is the skipped root)
+    if (!tree.ancestorLines[c + 1]) {
+      cols.push(<span key={`a${c}`} className="tg-rail" style={{ left: c * RAIL_W }} />)
+    }
+  }
+  if (d >= 1) {
+    cols.push(
+      <span key="elbow" className={`tg-elbow${tree.isLast ? ' last' : ''}`} style={{ left: (d - 1) * RAIL_W }} />,
+    )
+  }
+  if (tree.hasChildren && !tree.collapsed) {
+    cols.push(<span key="desc" className="tg-desc" style={{ left: d * RAIL_W }} />)
+  }
   return (
-    <span className="tree-gutter" aria-hidden={hidden || !tree.hasChildren || undefined} data-ghost={hidden || undefined}>
-      {(prefix || branch) && <span className="tree-branch mono">{prefix}{branch}</span>}
-      {showCaret ? (
-        <button
-          className="tree-caret"
-          title={tree.collapsed ? 'Expand subtasks' : 'Collapse subtasks'}
-          aria-label={tree.collapsed ? 'Expand subtasks' : 'Collapse subtasks'}
-          aria-expanded={!tree.collapsed}
-          onClick={(e) => {
-            e.stopPropagation()
-            onToggleExpand?.()
-          }}
-        >
-          {tree.collapsed ? <ChevronRight size={13} /> : <ChevronDown size={13} />}
-        </button>
-      ) : showSpacer ? (
-        <span className="tree-caret-spacer" />
-      ) : null}
+    <span className="tree-guides" aria-hidden>
+      {cols}
     </span>
   )
 }
@@ -718,53 +704,71 @@ function TaskRow({
       <td>
         <StatusDot status={task.live ? 'running' : task.waiting_on ? 'waiting' : task.status} />
       </td>
-      <td>
-        {editing ? (
-          <input
-            className="input inline-rename"
-            autoFocus
-            value={name}
-            onClick={(e) => e.stopPropagation()}
-            onChange={(e) => setName(e.target.value)}
-            onKeyDown={(e) => {
-              if (e.key === 'Enter') {
-                e.preventDefault()
-                save()
-              } else if (e.key === 'Escape') {
-                e.preventDefault()
-                cancel()
-              }
-            }}
-            onBlur={save}
-          />
-        ) : (
-          <div className="cell-name">
-            {tree && <TreeGutter tree={tree} onToggleExpand={onToggleExpand} />}
-            <span className="clip" style={{ fontWeight: 500 }}>{task.name}</span>
-            {isStartHead && (
-              <span className="ready-pill" title="Startable now — nothing blocks it">
-                ready
-              </span>
-            )}
+      <td className={tree ? 'tree-name-cell' : undefined}>
+        {tree && <TreeGuides tree={tree} />}
+        <div
+          className={tree ? 'tree-content' : undefined}
+          style={tree ? { paddingLeft: tree.depth * RAIL_W } : undefined}
+        >
+          {tree && tree.hasChildren && (
             <button
-              className="btn icon ghost sm rename-btn"
-              title="Rename task"
-              aria-label="Rename task"
+              className="tree-caret"
+              title={tree.collapsed ? 'Expand subtasks' : 'Collapse subtasks'}
+              aria-label={tree.collapsed ? 'Expand subtasks' : 'Collapse subtasks'}
+              aria-expanded={!tree.collapsed}
               onClick={(e) => {
                 e.stopPropagation()
-                setName(task.name)
-                setEditing(true)
+                onToggleExpand?.()
               }}
             >
-              {action.isPending ? <Loader2 size={12} className="spin" /> : <Pencil size={12} />}
+              {tree.collapsed ? <ChevronRight size={14} /> : <ChevronDown size={14} />}
             </button>
+          )}
+          <div className={tree ? 'tree-text' : undefined}>
+            {editing ? (
+              <input
+                className="input inline-rename"
+                autoFocus
+                value={name}
+                onClick={(e) => e.stopPropagation()}
+                onChange={(e) => setName(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter') {
+                    e.preventDefault()
+                    save()
+                  } else if (e.key === 'Escape') {
+                    e.preventDefault()
+                    cancel()
+                  }
+                }}
+                onBlur={save}
+              />
+            ) : (
+              <div className="cell-name">
+                <span className="clip" style={{ fontWeight: 500 }}>{task.name}</span>
+                {isStartHead && (
+                  <span className="ready-pill" title="Startable now — nothing blocks it">
+                    ready
+                  </span>
+                )}
+                <button
+                  className="btn icon ghost sm rename-btn"
+                  title="Rename task"
+                  aria-label="Rename task"
+                  onClick={(e) => {
+                    e.stopPropagation()
+                    setName(task.name)
+                    setEditing(true)
+                  }}
+                >
+                  {action.isPending ? <Loader2 size={12} className="spin" /> : <Pencil size={12} />}
+                </button>
+              </div>
+            )}
+            <div className="mono faint clip" style={{ fontSize: 11 }}>
+              {task.slug}{task.assignee ? ` · @${task.assignee}` : ''}
+            </div>
           </div>
-        )}
-        <div className={`mono faint clip${tree ? ' tree-slug' : ''}`} style={{ fontSize: 11 }}>
-          {tree && <TreeGutter tree={tree} hidden />}
-          <span className="clip">
-            {task.slug}{task.assignee ? ` · @${task.assignee}` : ''}
-          </span>
         </div>
       </td>
       <td>
