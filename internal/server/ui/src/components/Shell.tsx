@@ -30,6 +30,7 @@ import { ago } from '../lib/format'
 import { pushToast } from '../lib/toast'
 import { SourceIcon } from './ui'
 import { CommandPalette } from './CommandPalette'
+import { AskFlow } from './AskFlow'
 import { CreateTaskModal } from './modals'
 import { Toaster } from './Toaster'
 import { ConfirmHost } from './ConfirmHost'
@@ -275,6 +276,7 @@ export function Shell({ children }: { children: ReactNode }) {
             <span className="conn-label">{connLabel}</span>
           </div>
           <NotificationsBell />
+          <AskFlow />
           <button type="button" className="btn primary" onClick={() => setCreateOpen(true)}>
             <Plus size={16} /> New task
           </button>

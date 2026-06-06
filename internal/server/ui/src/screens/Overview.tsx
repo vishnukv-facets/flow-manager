@@ -1,16 +1,14 @@
 import { useEffect, useMemo, useState, type ReactNode } from 'react'
 import { Link, useLocation } from 'wouter'
-import { ArrowRight, Activity, BarChart3, CalendarClock, Coins, Repeat, AlertTriangle, Snowflake, TerminalSquare, TrendingUp, Flame, Inbox as InboxIcon, Loader2, SendHorizontal, Sparkles } from 'lucide-react'
-import { useAction, useInbox, useOverview, useQuote, useTasks, useUiData } from '../lib/query'
+import { ArrowRight, Activity, BarChart3, CalendarClock, Coins, Repeat, AlertTriangle, Snowflake, TerminalSquare, TrendingUp, Flame, Inbox as InboxIcon } from 'lucide-react'
+import { useInbox, useOverview, useQuote, useTasks, useUiData } from '../lib/query'
 import { useDocumentTitle } from '../lib/useDocumentTitle'
 import { AgentCard } from '../components/AgentCard'
-import { AgentPicker } from '../components/pickers'
-import { useFloatingTerminals } from '../lib/floatingTerminals'
 import { EmptyState, ErrorNote, Loading, ProviderIcon, SourceIcon, Sparkline, Stat } from '../components/ui'
 import { useFloatTip } from '../components/FloatTip'
 import { ago, compact, compactTokens, dueTone } from '../lib/format'
 import { agendaCount, bucketByDue, type DueBuckets } from '../lib/agenda'
-import { throughputByWeek, timeToDone, tokensByWeek } from '../lib/analytics'
+import { throughputByWeek, timeToDone, tokensByWeek, type WeekPoint } from '../lib/analytics'
 import { clickable } from '../lib/a11y'
 import type { ActivityDay, InboxFeedEntry, PlaybookRun, ProjectMC, TaskView, TokenDay, UiStats } from '../lib/types'
 
@@ -388,6 +386,62 @@ function fmtDays(d: number): string {
   return `${d < 10 ? d.toFixed(1) : Math.round(d)}d`
 }
 
+// "May 4 – 10" / "Apr 27 – May 3" from a Sunday week-start (the week spans
+// Sun…Sat). Built from local date parts so the bare YYYY-MM-DD isn't parsed as
+// UTC midnight (which would shift the day backwards in negative-offset zones).
+function weekRangeLabel(weekStart: string): string {
+  const [y, m, d] = weekStart.split('-').map(Number)
+  const start = new Date(y, m - 1, d)
+  const end = new Date(y, m - 1, d + 6)
+  const startLabel = `${MONTHS[start.getMonth()]} ${start.getDate()}`
+  const endLabel =
+    start.getMonth() === end.getMonth()
+      ? `${end.getDate()}`
+      : `${MONTHS[end.getMonth()]} ${end.getDate()}`
+  return `${startLabel} – ${endLabel}`
+}
+
+// Themed tip bodies for the Trends sparkbars — same .ftip-head shape as the
+// heatmap/activity tips so the trends tooltips read identically.
+function throughputWeekTip(w: WeekPoint): ReactNode {
+  return (
+    <div className="ftip-head">
+      <span className="ftip-count">{w.value ? `${w.value} task${w.value === 1 ? '' : 's'} done` : 'No tasks done'}</span>
+      <span className="ftip-date">{weekRangeLabel(w.weekStart)}</span>
+    </div>
+  )
+}
+function tokenWeekTip(w: WeekPoint): ReactNode {
+  return (
+    <div className="ftip-head">
+      <span className="ftip-count">{w.value ? `${compactTokens(w.value)} tokens` : 'No tokens'}</span>
+      <span className="ftip-date">{weekRangeLabel(w.weekStart)}</span>
+    </div>
+  )
+}
+
+// Weekly sparkbars with per-bar hover tooltips — same bar geometry as
+// <Sparkline> but driven by WeekPoint[] so each bar can surface its week range
+// and total. Mirrors the FloatTip wiring used by ActivityBars / MiniCalendar.
+function TrendSparkbars({ points, tip }: { points: WeekPoint[]; tip: (w: WeekPoint) => ReactNode }) {
+  const { show, hide, portal } = useFloatTip()
+  const peak = Math.max(1, ...points.map((p) => p.value))
+  return (
+    <span className="spark flex">
+      {portal}
+      {points.map((p, i) => (
+        <i
+          key={i}
+          className={p.value > 0 ? 'on' : ''}
+          style={{ height: `${Math.max(2, Math.round((p.value / peak) * 22))}px` }}
+          onMouseEnter={(e) => show(e.currentTarget, tip(p))}
+          onMouseLeave={hide}
+        />
+      ))}
+    </span>
+  )
+}
+
 // Mission Control trends: throughput (tasks done/week) and token cost
 // (fresh work tokens/week) as 12-week sparklines, plus median/avg time-to-done.
 // All derived client-side from the task list + server TOKEN_SERIES.
@@ -409,7 +463,7 @@ function TrendsCard({ doneTasks, tokenSeries }: { doneTasks: TaskView[]; tokenSe
           <span className="eyebrow">Throughput</span>
           <span className="faint mono">{doneTotal} done</span>
         </div>
-        <Sparkline data={throughput.map((w) => w.value)} flex />
+        <TrendSparkbars points={throughput} tip={throughputWeekTip} />
       </div>
       <div className="hairline" style={{ margin: '12px 0' }} />
       <div className="trend-row">
@@ -417,7 +471,7 @@ function TrendsCard({ doneTasks, tokenSeries }: { doneTasks: TaskView[]; tokenSe
           <span className="eyebrow"><Coins size={11} /> Token cost</span>
           <span className="faint mono">{compactTokens(tokenTotal)} fresh</span>
         </div>
-        <Sparkline data={tokens.map((w) => w.value)} flex />
+        <TrendSparkbars points={tokens} tip={tokenWeekTip} />
       </div>
       <div className="hairline" style={{ margin: '12px 0' }} />
       <div className="row" style={{ gap: 0 }}>
@@ -467,13 +521,9 @@ function ProjectProgressCard({ projects, onOpen }: { projects: ProjectMC[]; onOp
 export function Overview() {
   useDocumentTitle('Mission Control')
   const [, navigate] = useLocation()
-  const [askFlow, setAskFlow] = useState('')
-  const [askProvider, setAskProvider] = useState('claude')
-  const { open: openFloatingTerminal } = useFloatingTerminals()
   const { data: ui, isLoading, error } = useUiData()
   const { data: overview } = useOverview()
   const { data: inbox } = useInbox()
-  const action = useAction()
   // One task fetch (incl. done) feeds both the agenda lens and the analytics
   // trends: open tasks drive the due buckets, done tasks drive throughput and
   // time-to-done. A done task with a past due date must NOT show as "overdue",
@@ -486,26 +536,6 @@ export function Overview() {
   )
   const { text: greeting, hourKey } = useGreeting()
   const { data: quote } = useQuote(hourKey)
-  const providerOptions = useMemo(() => ui?.CAPABILITIES.providers ?? [], [ui?.CAPABILITIES.providers])
-  const effectiveAskProvider = useMemo(() => {
-    const available = providerOptions.filter((p) => p.available !== false)
-    if (!available.length) return askProvider
-    return available.some((p) => p.id === askProvider) ? askProvider : available[0].id
-  }, [askProvider, providerOptions])
-
-  const submitAskFlow = () => {
-    const prompt = askFlow.trim()
-    if (!prompt || action.isPending) return
-    action.mutate(
-      { kind: 'overview-chat', prompt, provider: effectiveAskProvider },
-      {
-        onSuccess: (resp) => {
-          setAskFlow('')
-          if (resp.floating_terminal) openFloatingTerminal(resp.floating_terminal)
-        },
-      },
-    )
-  }
 
   // High-priority backlog, sourced from /api/overview so the rows carry
   // due_info / assignee / stale_days (the UiData BACKLOG bucket drops them).
@@ -570,7 +600,7 @@ export function Overview() {
     <div className="page">
       <div className="page-head mc-head">
         <div>
-          <h1 className="h-xl">{greeting}, {ui.USER?.name || 'there'}</h1>
+          <h1 className="h-xl">{greeting}, <span className="mc-name">{ui.USER?.name || 'there'}</span></h1>
           {quote?.quote ? (
             <div className="mc-quote">
               <span className="mc-quote-text">“{quote.quote}”</span>
@@ -599,41 +629,6 @@ export function Overview() {
           ))}
         </div>
       </div>
-
-      <section className="ask-flow">
-        <div className="ask-flow-mark">
-          <Sparkles size={18} />
-        </div>
-        <div className="ask-flow-main">
-          <div className="eyebrow">Ask Flow</div>
-          <input
-            className="ask-flow-input"
-            aria-label="Ask Flow"
-            value={askFlow}
-            disabled={action.isPending}
-            placeholder="Triage my day, inspect stalled sessions, or route work into tasks…"
-            onChange={(e) => setAskFlow(e.target.value)}
-            onKeyDown={(e) => {
-              if (e.key === 'Enter') {
-                e.preventDefault()
-                submitAskFlow()
-              }
-            }}
-          />
-        </div>
-        <div className="ask-flow-actions">
-          <AgentPicker value={effectiveAskProvider} onChange={setAskProvider} providers={providerOptions} />
-        </div>
-        <button
-          type="button"
-          className="btn primary"
-          disabled={!askFlow.trim() || action.isPending}
-          onClick={submitAskFlow}
-        >
-          {action.isPending ? <Loader2 size={15} className="spin" /> : <SendHorizontal size={15} />}
-          Open
-        </button>
-      </section>
 
       <div className="card pulse" style={{ marginBottom: 18 }}>
         {stats.map((s) => (
