@@ -93,7 +93,10 @@ func MakeTaskFromFeed(ctx context.Context, db *sql.DB, item flowdb.FeedItem) err
 		}
 	}
 	tagSourceThread(ctx, slug, item)
-	return flowdb.SetFeedItemActed(db, item.ID, slug, nowRFC3339())
+	if err := flowdb.SetFeedItemActed(db, item.ID, slug, nowRFC3339()); err != nil {
+		return err
+	}
+	return recordActionFeedback(db, item, string(ActionMakeTask), "approved", "")
 }
 
 // taskSlugExists reports whether a task row already holds this slug — in ANY
@@ -132,12 +135,22 @@ func ForwardFeed(ctx context.Context, db *sql.DB, item flowdb.FeedItem) error {
 	if err := taskTeller(ctx, target, feedForwardMessage(item)); err != nil {
 		return err
 	}
-	return flowdb.SetFeedItemActed(db, item.ID, target, nowRFC3339())
+	if err := flowdb.SetFeedItemActed(db, item.ID, target, nowRFC3339()); err != nil {
+		return err
+	}
+	return recordActionFeedback(db, item, string(ActionForward), "approved", "")
 }
 
 // DismissFeed marks a feed row 'dismissed' (no external effect).
 func DismissFeed(db *sql.DB, id string) error {
-	return flowdb.SetFeedItemStatus(db, id, "dismissed", nowRFC3339())
+	item, err := flowdb.GetFeedItem(db, id)
+	if err != nil {
+		return err
+	}
+	if err := flowdb.SetFeedItemStatus(db, id, "dismissed", nowRFC3339()); err != nil {
+		return err
+	}
+	return recordActionFeedback(db, item, "dismiss", "dismissed", "")
 }
 
 // InjectReplyToTask injects a "send this reply" instruction into an existing
@@ -156,7 +169,10 @@ func InjectReplyToTask(ctx context.Context, db *sql.DB, item flowdb.FeedItem, te
 	if err := recordReplyUpdate(targetSlug, item, text, instructions); err != nil {
 		fmt.Fprintf(os.Stderr, "steering: record reply update on %s: %v\n", targetSlug, err)
 	}
-	return flowdb.SetFeedItemActed(db, item.ID, targetSlug, nowRFC3339())
+	if err := flowdb.SetFeedItemActed(db, item.ID, targetSlug, nowRFC3339()); err != nil {
+		return err
+	}
+	return recordActionFeedback(db, item, "send_reply", "approved", text)
 }
 
 // recordReplyUpdate writes a date-stamped progress note into the task's updates/
@@ -204,6 +220,9 @@ func MakeReplyTaskFromFeed(ctx context.Context, db *sql.DB, item flowdb.FeedItem
 		if err := flowdb.SetFeedItemActed(db, item.ID, slug, nowRFC3339()); err != nil {
 			return slug, err
 		}
+		if err := recordActionFeedback(db, item, "send_reply", "approved", text); err != nil {
+			return slug, err
+		}
 		return slug, nil
 	}
 	if err := taskSpawner(ctx, feedTaskName(item), slug, feedReplyTaskBrief(item, text), item.SuggestedProject); err != nil {
@@ -211,6 +230,9 @@ func MakeReplyTaskFromFeed(ctx context.Context, db *sql.DB, item flowdb.FeedItem
 	}
 	tagSourceThread(ctx, slug, item)
 	if err := flowdb.SetFeedItemActed(db, item.ID, slug, nowRFC3339()); err != nil {
+		return slug, err
+	}
+	if err := recordActionFeedback(db, item, "send_reply", "approved", text); err != nil {
 		return slug, err
 	}
 	return slug, nil
@@ -248,6 +270,10 @@ func feedReplyTaskBrief(item flowdb.FeedItem, text string) string {
 }
 
 func nowRFC3339() string { return time.Now().UTC().Format(time.RFC3339) }
+
+func recordActionFeedback(db *sql.DB, item flowdb.FeedItem, finalAction, outcome, draftAfter string) error {
+	return flowdb.RecordAttentionFeedback(db, flowdb.AttentionFeedbackFromFeed(item, finalAction, outcome, draftAfter, nowRFC3339()))
+}
 
 // feedTaskName is a short task title derived from the summary (or the thread
 // key when there's no summary).

@@ -120,8 +120,9 @@ Read:
   flow list tasks    [--status ...] [--project ...] [--priority ...] [--tag <t>] [--since ...] [--include-archived] [--include-deleted|--deleted]
   flow list projects [--status ...] [--include-archived] [--include-deleted|--deleted]
   flow list tags                                            (every tag in use, with per-tag task counts)
-  flow attention list  [--status new|acted|dismissed|all]   (review the attention-router feed)
-  flow attention act   <id> <make-task|forward|dismiss>
+  flow attention list      [--status new|acted|dismissed|all]   (review the attention-router feed)
+  flow attention act       <id> <make-task|forward|dismiss>
+  flow attention feedback  [--group source|channel|author|thread-type|suggested-action|confidence-band]
 
 Edit / mutate:
   flow edit        <ref>

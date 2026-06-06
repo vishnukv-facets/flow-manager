@@ -203,6 +203,13 @@ func TestAttentionActDismiss(t *testing.T) {
 	if items, _ := flowdb.ListFeedItems(db, "dismissed"); len(items) != 1 {
 		t.Errorf("item should be dismissed, got %d dismissed", len(items))
 	}
+	fb, err := flowdb.ListAttentionFeedback(db, flowdb.AttentionFeedbackFilter{FeedItemID: "d1"})
+	if err != nil {
+		t.Fatalf("ListAttentionFeedback: %v", err)
+	}
+	if len(fb) != 1 || fb[0].FinalAction != "dismiss" || fb[0].Outcome != "dismissed" {
+		t.Errorf("dismiss feedback mismatch: %+v", fb)
+	}
 }
 
 func TestAttentionActMakeTaskStart(t *testing.T) {
@@ -352,6 +359,69 @@ func TestAttentionActErrors(t *testing.T) {
 	}
 	if _, status := s.runAction(actionRequest{Kind: "attention-act", Target: "e1", AttentionAction: "frobnicate"}); status != 400 {
 		t.Errorf("unknown action → %d, want 400", status)
+	}
+}
+
+func TestAttentionActMuteRecordsFeedback(t *testing.T) {
+	s, db := attentionTestServer(t)
+	if _, err := flowdb.UpsertFeedItem(db, flowdb.FeedItem{
+		ID: "mute1", Source: "slack", ThreadKey: "C_MUTED:1.1", Summary: "noise",
+		SuggestedAction: "reply", Confidence: 0.8, Status: "new", Channel: "C_MUTED",
+		ChannelType: "channel", Author: "U_NOISE", CreatedAt: "2026-06-05T10:00:00Z",
+	}); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+
+	resp, status := s.runAction(actionRequest{Kind: "attention-act", Target: "mute1", AttentionAction: "mute-channel"})
+	if status != 200 || !resp.OK {
+		t.Fatalf("runAction = (%+v, %d), want OK 200", resp, status)
+	}
+	fb, err := flowdb.ListAttentionFeedback(db, flowdb.AttentionFeedbackFilter{FeedItemID: "mute1"})
+	if err != nil {
+		t.Fatalf("ListAttentionFeedback: %v", err)
+	}
+	if len(fb) != 1 || fb[0].FinalAction != "mute_channel" || fb[0].Outcome != "muted" {
+		t.Errorf("mute feedback mismatch: %+v", fb)
+	}
+}
+
+func TestAttentionActRetriageAndOpenSignalsRecordFeedback(t *testing.T) {
+	s, db := attentionTestServer(t)
+	seedFeedItem(t, db, "sig1", "new")
+	s.cascade = steering.NewCascade(db, steering.WatchConfig{})
+	oldLaunch := launchAttentionRetriage
+	launched := false
+	launchAttentionRetriage = func(s *Server, item flowdb.FeedItem) {
+		launched = true
+		_ = flowdb.SetFeedRetriaging(s.cfg.DB, item.ID, "")
+	}
+	t.Cleanup(func() { launchAttentionRetriage = oldLaunch })
+
+	resp, status := s.runAction(actionRequest{Kind: "attention-act", Target: "sig1", AttentionAction: "retriage"})
+	if status != 200 || !resp.OK {
+		t.Fatalf("retriage = (%+v, %d), want OK 200", resp, status)
+	}
+	if !launched {
+		t.Fatal("retriage launcher was not called")
+	}
+	resp, status = s.runAction(actionRequest{Kind: "attention-act", Target: "sig1", AttentionAction: "open-source"})
+	if status != 200 || !resp.OK {
+		t.Fatalf("open-source = (%+v, %d), want OK 200", resp, status)
+	}
+
+	fb, err := flowdb.ListAttentionFeedback(db, flowdb.AttentionFeedbackFilter{FeedItemID: "sig1"})
+	if err != nil {
+		t.Fatalf("ListAttentionFeedback: %v", err)
+	}
+	if len(fb) != 2 {
+		t.Fatalf("feedback rows = %d, want 2: %+v", len(fb), fb)
+	}
+	seen := map[string]string{}
+	for _, row := range fb {
+		seen[row.FinalAction] = row.Outcome
+	}
+	if seen["retriage"] != "retriaged" || seen["open_source"] != "opened" {
+		t.Errorf("feedback signals mismatch: %+v", fb)
 	}
 }
 

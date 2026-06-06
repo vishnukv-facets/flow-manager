@@ -1,9 +1,13 @@
 package steering
 
 import (
+	"database/sql"
 	"encoding/json"
+	"math"
 	"os"
 	"strings"
+
+	"flow/internal/flowdb"
 )
 
 // ActionPolicy is the operator's autonomy setting for one action: whether the
@@ -71,4 +75,51 @@ func AutonomyFromEnv() AutonomyPolicy {
 		pol[a] = v
 	}
 	return pol
+}
+
+// AutonomyFnWithFeedback wraps a base live-policy source with learned threshold
+// adjustments derived from operator feedback. It never enables an action; it
+// only nudges thresholds for actions the base policy already knows about.
+func AutonomyFnWithFeedback(db *sql.DB, base func() AutonomyPolicy) func() AutonomyPolicy {
+	return func() AutonomyPolicy {
+		pol := DefaultAutonomy()
+		if base != nil {
+			pol = cloneAutonomyPolicy(base())
+		}
+		learned, err := flowdb.LearnedAttentionPolicyFromFeedback(db, flowdb.LearnedAttentionPolicyOptions{})
+		if err != nil {
+			return pol
+		}
+		for raw, adj := range learned.ThresholdAdjustments {
+			action, ok := ParseAction(raw)
+			if !ok {
+				continue
+			}
+			p, ok := pol[action]
+			if !ok {
+				continue
+			}
+			p.Threshold = clampThreshold(p.Threshold + adj)
+			pol[action] = p
+		}
+		return pol
+	}
+}
+
+func cloneAutonomyPolicy(in AutonomyPolicy) AutonomyPolicy {
+	out := AutonomyPolicy{}
+	for k, v := range in {
+		out[k] = v
+	}
+	return out
+}
+
+func clampThreshold(v float64) float64 {
+	if v < 0 {
+		return 0
+	}
+	if v > 1 {
+		return 1
+	}
+	return math.Round(v*100) / 100
 }

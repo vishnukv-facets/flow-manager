@@ -368,6 +368,18 @@ func splitThreadKey(threadKey string) (channel, ts string) {
 	return "", ""
 }
 
+var launchAttentionRetriage = func(s *Server, item flowdb.FeedItem) {
+	go func(it flowdb.FeedItem) {
+		bctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+		defer cancel()
+		if err := s.cascade.Retriage(bctx, it); err != nil {
+			fmt.Fprintf(os.Stderr, "attention: retriage %s: %v\n", it.ID, err)
+		}
+		_ = flowdb.SetFeedRetriaging(s.cfg.DB, it.ID, "")
+		s.publishUIChange("attention")
+	}(item)
+}
+
 // attentionAct handles the attention-act action: make-task | forward | dismiss
 // on a feed item (Target = feed id). Operator-initiated → manual=true bypasses
 // the autonomy gate.
@@ -395,19 +407,12 @@ func (s *Server) attentionAct(req actionRequest) (actionResponse, int) {
 		if s.cascade == nil {
 			return actionResponse{OK: false, Message: "steering cascade is not running"}, http.StatusServiceUnavailable
 		}
+		_ = s.recordAttentionFeedback(item, "retriage", "retriaged", "")
 		// Mark in-flight server-side so the spinner + disabled state survive a page
 		// refresh and can't be double-fired; clear it when the async run finishes.
 		_ = flowdb.SetFeedRetriaging(s.cfg.DB, id, time.Now().UTC().Format(time.RFC3339))
 		s.publishUIChange("attention")
-		go func(it flowdb.FeedItem) {
-			bctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
-			defer cancel()
-			if err := s.cascade.Retriage(bctx, it); err != nil {
-				fmt.Fprintf(os.Stderr, "attention: retriage %s: %v\n", it.ID, err)
-			}
-			_ = flowdb.SetFeedRetriaging(s.cfg.DB, it.ID, "")
-			s.publishUIChange("attention")
-		}(item)
+		launchAttentionRetriage(s, item)
 		return actionResponse{OK: true, Message: "re-running triage — the card will update with the fresh decision"}, http.StatusOK
 	case "make-task", "make_task":
 		if err := steering.ApplyAction(context.Background(), s.cfg.DB, item, steering.ActionMakeTask, steering.DefaultAutonomy(), true); err != nil {
@@ -488,10 +493,21 @@ func (s *Server) attentionAct(req actionRequest) (actionResponse, int) {
 			s.terminals.stopFloating(ft.ID)
 			return actionResponse{OK: false, Message: err.Error()}, http.StatusInternalServerError
 		}
+		_ = s.recordAttentionFeedback(item, "send_reply", "approved", text)
 		return actionResponse{OK: true, Message: "posting your reply in the background — open the Send reply terminal from the tray to watch", FloatingTerminal: &ft}, http.StatusOK
+	case "open-source", "open_source", "open-session", "open_session":
+		action := strings.ToLower(strings.TrimSpace(req.AttentionAction))
+		if err := s.recordAttentionFeedback(item, action, "opened", ""); err != nil {
+			return actionResponse{OK: false, Message: err.Error()}, http.StatusInternalServerError
+		}
+		return actionResponse{OK: true, Message: "recorded " + action + " for " + id}, http.StatusOK
 	default:
 		return actionResponse{OK: false, Message: "unknown attention action: " + req.AttentionAction}, http.StatusBadRequest
 	}
+}
+
+func (s *Server) recordAttentionFeedback(item flowdb.FeedItem, finalAction, outcome, draftAfter string) error {
+	return flowdb.RecordAttentionFeedback(s.cfg.DB, flowdb.AttentionFeedbackFromFeed(item, finalAction, outcome, draftAfter, time.Now().UTC().Format(time.RFC3339)))
 }
 
 // attentionMute records a permanent suppression from a feed card and sweeps any
@@ -518,6 +534,7 @@ func (s *Server) attentionMute(verb string, item flowdb.FeedItem) (actionRespons
 	if err != nil {
 		return actionResponse{OK: false, Message: err.Error()}, http.StatusInternalServerError
 	}
+	_ = s.recordAttentionFeedback(item, verb, "muted", "")
 	return actionResponse{OK: true, Message: fmt.Sprintf("muted %s — %d card(s) cleared; future ones won't surface", what, swept)}, http.StatusOK
 }
 

@@ -1,6 +1,11 @@
 package steering
 
-import "testing"
+import (
+	"path/filepath"
+	"testing"
+
+	"flow/internal/flowdb"
+)
 
 func TestWatchConfigFromEnv(t *testing.T) {
 	t.Setenv("FLOW_SLACK_SELF_USER_IDS", "U_me, U_alt")
@@ -35,5 +40,32 @@ func TestWatchConfigFromEnvEmpty(t *testing.T) {
 	cfg := WatchConfigFromEnv()
 	if len(cfg.WatchedChannels) != 0 || len(cfg.Identity.UserIDs) != 0 {
 		t.Errorf("empty env should yield empty config, got %+v", cfg)
+	}
+}
+
+func TestWatchConfigFnWithMutesOverlaysLearnedSuppressions(t *testing.T) {
+	db, err := flowdb.OpenDB(filepath.Join(t.TempDir(), "flow.db"))
+	if err != nil {
+		t.Fatalf("OpenDB: %v", err)
+	}
+	defer db.Close()
+
+	for i := 0; i < 3; i++ {
+		if err := flowdb.RecordAttentionFeedback(db, flowdb.AttentionFeedback{
+			ID: "learned-config-" + string(rune('a'+i)), FeedItemID: "feed", Source: "slack",
+			Channel: "C_NOISE", Author: "U_NOISE", ThreadType: "channel", ThreadKey: "C_NOISE:1",
+			SuggestedAction: "reply", FinalAction: "dismiss", Outcome: "dismissed",
+			Confidence: 0.85, ConfidenceBand: "0.80-0.89", CreatedAt: "2026-06-05T10:00:00Z",
+		}); err != nil {
+			t.Fatalf("record feedback %d: %v", i, err)
+		}
+	}
+
+	cfg := WatchConfigFnWithMutes(db)()
+	if !cfg.MutedChannels["C_NOISE"] {
+		t.Errorf("learned dismissed channel not overlaid into MutedChannels: %+v", cfg.MutedChannels)
+	}
+	if !cfg.MutedAuthors["U_NOISE"] {
+		t.Errorf("learned dismissed author not overlaid into MutedAuthors: %+v", cfg.MutedAuthors)
 	}
 }

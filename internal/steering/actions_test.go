@@ -133,6 +133,72 @@ func TestMakeTaskFromFeedTagsSourceThread(t *testing.T) {
 	}
 }
 
+func TestMakeTaskFromFeedRecordsFeedback(t *testing.T) {
+	db, err := flowdb.OpenDB(filepath.Join(t.TempDir(), "flow.db"))
+	if err != nil {
+		t.Fatalf("OpenDB: %v", err)
+	}
+	defer db.Close()
+	stubActionIO(t)
+
+	item := flowdb.FeedItem{
+		ID: "fb-make", Source: "slack", ThreadKey: "C_eng:1700000000.000300", Channel: "C_eng",
+		ChannelType: "channel", Author: "U_OWNER", Summary: "create task", SuggestedAction: "make_task",
+		Confidence: 0.88, Draft: "Possible reply text.", Status: "new", CreatedAt: "2026-06-05T10:00:00Z",
+	}
+	if _, err := flowdb.UpsertFeedItem(db, item); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+
+	if err := MakeTaskFromFeed(context.Background(), db, item); err != nil {
+		t.Fatalf("MakeTaskFromFeed: %v", err)
+	}
+	got, err := flowdb.ListAttentionFeedback(db, flowdb.AttentionFeedbackFilter{FeedItemID: item.ID})
+	if err != nil {
+		t.Fatalf("ListAttentionFeedback: %v", err)
+	}
+	if len(got) != 1 {
+		t.Fatalf("feedback rows = %d, want 1", len(got))
+	}
+	if got[0].SuggestedAction != "make_task" || got[0].FinalAction != "make_task" || got[0].Outcome != "approved" {
+		t.Errorf("feedback action mismatch: %+v", got[0])
+	}
+	if got[0].DraftEditDelta != "" {
+		t.Errorf("make-task feedback should not record draft delta, got %q", got[0].DraftEditDelta)
+	}
+}
+
+func TestDismissFeedRecordsFeedback(t *testing.T) {
+	db, err := flowdb.OpenDB(filepath.Join(t.TempDir(), "flow.db"))
+	if err != nil {
+		t.Fatalf("OpenDB: %v", err)
+	}
+	defer db.Close()
+
+	item := flowdb.FeedItem{
+		ID: "fb-dismiss", Source: "slack", ThreadKey: "C_noise:1.1", Channel: "C_noise",
+		ChannelType: "channel", Author: "U_BOT", SuggestedAction: "reply",
+		Confidence: 0.82, Status: "new", CreatedAt: "2026-06-05T10:00:00Z",
+	}
+	if _, err := flowdb.UpsertFeedItem(db, item); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+
+	if err := DismissFeed(db, item.ID); err != nil {
+		t.Fatalf("DismissFeed: %v", err)
+	}
+	got, err := flowdb.ListAttentionFeedback(db, flowdb.AttentionFeedbackFilter{FeedItemID: item.ID})
+	if err != nil {
+		t.Fatalf("ListAttentionFeedback: %v", err)
+	}
+	if len(got) != 1 {
+		t.Fatalf("feedback rows = %d, want 1", len(got))
+	}
+	if got[0].FinalAction != "dismiss" || got[0].Outcome != "dismissed" || got[0].Channel != "C_noise" {
+		t.Errorf("dismiss feedback mismatch: %+v", got[0])
+	}
+}
+
 // Regression: retrying Send reply when the task already exists must NOT spawn a
 // duplicate (which fails on UNIQUE tasks.slug) — it injects into the existing task.
 func TestInjectReplyToTaskRecordsUpdate(t *testing.T) {
@@ -179,6 +245,16 @@ func TestInjectReplyToTaskRecordsUpdate(t *testing.T) {
 	}
 	if fi, _ := flowdb.GetFeedItem(db, "r1"); fi.Status != "acted" || fi.LinkedTask != "rollout-task" {
 		t.Errorf("feed row = status %q linked %q, want acted/rollout-task", fi.Status, fi.LinkedTask)
+	}
+	fb, err := flowdb.ListAttentionFeedback(db, flowdb.AttentionFeedbackFilter{FeedItemID: "r1"})
+	if err != nil {
+		t.Fatalf("ListAttentionFeedback: %v", err)
+	}
+	if len(fb) != 1 {
+		t.Fatalf("feedback rows = %d, want 1", len(fb))
+	}
+	if fb[0].FinalAction != "send_reply" || fb[0].Outcome != "approved" || fb[0].DraftEditDelta == "" {
+		t.Errorf("reply feedback mismatch: %+v", fb[0])
 	}
 }
 

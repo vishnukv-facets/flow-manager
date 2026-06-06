@@ -1,6 +1,11 @@
 package steering
 
-import "testing"
+import (
+	"path/filepath"
+	"testing"
+
+	"flow/internal/flowdb"
+)
 
 func TestAutonomyFromEnv(t *testing.T) {
 	t.Run("empty → all off defaults", func(t *testing.T) {
@@ -72,5 +77,50 @@ func TestAutonomyAllow(t *testing.T) {
 		if got := p.Allow(c.action, c.confidence); got != c.want {
 			t.Errorf("Allow(%q, %.2f) = %v, want %v", c.action, c.confidence, got, c.want)
 		}
+	}
+}
+
+func TestAutonomyFnWithFeedbackAdjustsThresholdsWithoutEnablingActions(t *testing.T) {
+	db, err := flowdb.OpenDB(filepath.Join(t.TempDir(), "flow.db"))
+	if err != nil {
+		t.Fatalf("OpenDB: %v", err)
+	}
+	defer db.Close()
+
+	for i := 0; i < 3; i++ {
+		if err := flowdb.RecordAttentionFeedback(db, flowdb.AttentionFeedback{
+			ID: "approved-forward-" + string(rune('a'+i)), FeedItemID: "fa", Source: "slack",
+			Channel: "C_SIGNAL", Author: "U_OK", ThreadType: "channel", ThreadKey: "C_SIGNAL:1",
+			SuggestedAction: "forward", FinalAction: "forward", Outcome: "approved",
+			Confidence: 0.76, ConfidenceBand: "0.70-0.79", CreatedAt: "2026-06-05T10:00:00Z",
+		}); err != nil {
+			t.Fatalf("record approval %d: %v", i, err)
+		}
+		if err := flowdb.RecordAttentionFeedback(db, flowdb.AttentionFeedback{
+			ID: "dismiss-reply-" + string(rune('a'+i)), FeedItemID: "fd", Source: "slack",
+			Channel: "C_NOISE", Author: "U_NO", ThreadType: "channel", ThreadKey: "C_NOISE:1",
+			SuggestedAction: "reply", FinalAction: "dismiss", Outcome: "dismissed",
+			Confidence: 0.86, ConfidenceBand: "0.80-0.89", CreatedAt: "2026-06-05T11:00:00Z",
+		}); err != nil {
+			t.Fatalf("record dismiss %d: %v", i, err)
+		}
+	}
+
+	base := func() AutonomyPolicy {
+		return AutonomyPolicy{
+			ActionForward:  {Enabled: true, Threshold: 0.85},
+			ActionReply:    {Enabled: true, Threshold: 0.90},
+			ActionMakeTask: {Enabled: false, Threshold: 0.80},
+		}
+	}
+	pol := AutonomyFnWithFeedback(db, base)()
+	if got := pol[ActionForward].Threshold; got != 0.80 {
+		t.Errorf("forward threshold = %.2f, want 0.80 after approvals", got)
+	}
+	if got := pol[ActionReply].Threshold; got != 0.95 {
+		t.Errorf("reply threshold = %.2f, want 0.95 after dismissals", got)
+	}
+	if pol[ActionMakeTask].Enabled {
+		t.Error("feedback overlay must not enable a disabled action")
 	}
 }

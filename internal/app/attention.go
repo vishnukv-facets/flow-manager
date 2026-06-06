@@ -30,8 +30,10 @@ func cmdAttention(args []string) int {
 		return cmdAttentionSent(rest)
 	case "trace":
 		return cmdAttentionTrace(rest)
+	case "feedback":
+		return cmdAttentionFeedback(rest)
 	default:
-		fmt.Fprintf(os.Stderr, "error: unknown attention subcommand %q (want list|act|sent|trace)\n", sub)
+		fmt.Fprintf(os.Stderr, "error: unknown attention subcommand %q (want list|act|sent|trace|feedback)\n", sub)
 		printAttentionUsage()
 		return 2
 	}
@@ -43,7 +45,8 @@ func printAttentionUsage() {
   flow attention list [--status new|acted|dismissed|snoozed|all]   (default: new)
   flow attention act <id> <make-task|forward|dismiss>
   flow attention sent <id> [--close-floating <floating-id>]
-  flow attention trace [--since 24h] [--disposition dropped|surfaced|error|all] [--limit 50]`)
+  flow attention trace [--since 24h] [--disposition dropped|surfaced|error|all] [--limit 50]
+  flow attention feedback [--group source|channel|author|thread-type|suggested-action|confidence-band]`)
 }
 
 func cmdAttentionList(args []string) int {
@@ -153,11 +156,28 @@ func cmdAttentionSent(args []string) int {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
 		return 1
 	}
+	if err := recordAttentionSentFeedback(db, item); err != nil {
+		fmt.Fprintf(os.Stderr, "error: %v\n", err)
+		return 1
+	}
 	if cf := strings.TrimSpace(*closeFloating); cf != "" {
 		closeFloatingTerminalBestEffort(cf)
 	}
 	fmt.Printf("marked %s sent\n", id)
 	return 0
+}
+
+func recordAttentionSentFeedback(db *sql.DB, item flowdb.FeedItem) error {
+	existing, err := flowdb.ListAttentionFeedback(db, flowdb.AttentionFeedbackFilter{FeedItemID: item.ID, Limit: 50})
+	if err != nil {
+		return err
+	}
+	for _, row := range existing {
+		if row.FinalAction == "send_reply" && (row.Outcome == "approved" || row.Outcome == "sent") {
+			return nil
+		}
+	}
+	return flowdb.RecordAttentionFeedback(db, flowdb.AttentionFeedbackFromFeed(item, "send_reply", "sent", item.Draft, time.Now().UTC().Format(time.RFC3339)))
 }
 
 // closeFloatingTerminalBestEffort asks the running flow server to close a
@@ -291,6 +311,61 @@ func cmdAttentionTrace(args []string) int {
 	}
 	fmt.Print(renderTrace(funnel, items))
 	return 0
+}
+
+func cmdAttentionFeedback(args []string) int {
+	fs := flagSet("attention feedback")
+	group := fs.String("group", "suggested-action", "group: source|channel|author|thread-type|suggested-action|confidence-band")
+	if handled, rc := parseFlagSet(fs, args); handled {
+		return rc
+	}
+	groupKey, err := attentionFeedbackGroupKey(*group)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "error: %v\n", err)
+		return 2
+	}
+	db, rc := openAttentionDB()
+	if rc != 0 {
+		return rc
+	}
+	defer db.Close()
+
+	rows, err := flowdb.AttentionFeedbackReport(db, groupKey)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "error: %v\n", err)
+		return 1
+	}
+	fmt.Print(renderAttentionFeedbackReport(rows))
+	return 0
+}
+
+func attentionFeedbackGroupKey(s string) (string, error) {
+	key := strings.ReplaceAll(strings.ToLower(strings.TrimSpace(s)), "-", "_")
+	switch key {
+	case "source", "channel", "author", "thread_type", "suggested_action", "confidence_band":
+		return key, nil
+	default:
+		return "", fmt.Errorf("unsupported feedback group %q", s)
+	}
+}
+
+func renderAttentionFeedbackReport(rows []flowdb.AttentionFeedbackAggregate) string {
+	if len(rows) == 0 {
+		return "No attention feedback rows.\n"
+	}
+	var b strings.Builder
+	fmt.Fprintf(&b, "%-18s  %-5s  %-8s  %-9s  %-5s  %-8s  %-8s\n",
+		"GROUP", "TOTAL", "approved", "dismissed", "muted", "approve%", "dismiss%")
+	for _, row := range rows {
+		fmt.Fprintf(&b, "%-18s  %-5d  %-8d  %-9d  %-5d  %-8s  %-8s\n",
+			clipStr(row.Group, 18), row.Total, row.Approved, row.Dismissed, row.Muted,
+			percent(row.ApprovalRate), percent(row.DismissRate))
+	}
+	return b.String()
+}
+
+func percent(v float64) string {
+	return fmt.Sprintf("%.0f%%", v*100)
 }
 
 // sinceToRFC3339 converts a Go duration string (e.g. "24h") into an RFC3339

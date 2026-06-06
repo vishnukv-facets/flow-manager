@@ -53,7 +53,10 @@ func SendReplyViaAgent(ctx context.Context, db *sql.DB, item flowdb.FeedItem, te
 		return fmt.Errorf("steering: send-reply not confirmed posted (agent said: %s)", truncate(trimmed, 200))
 	}
 	// No linked task — the hidden agent posted directly.
-	return flowdb.SetFeedItemActed(db, item.ID, "", nowRFC3339())
+	if err := flowdb.SetFeedItemActed(db, item.ID, "", nowRFC3339()); err != nil {
+		return err
+	}
+	return recordActionFeedback(db, item, "send_reply", "approved", text)
 }
 
 // postConfirmed reports whether the agent's reply is an explicit posting
