@@ -4085,78 +4085,111 @@ summary.detail-branch.as-button:hover {
   justify-content: flex-end;
   max-width: 460px;
 }
-.ask-flow {
-  display: grid;
-  grid-template-columns: auto minmax(0, 1fr) auto auto;
-  align-items: center;
-  gap: 13px;
-  margin: 0 0 18px;
-  padding: 13px 14px;
-  background:
-    linear-gradient(135deg, color-mix(in srgb, var(--accent-soft) 55%, transparent), transparent 72%),
-    var(--bg-1);
+
+/* greeting name — JetBrains Mono in the flow accent, echoing the flow. wordmark
+   so the name reads as a crafted brand detail against the sans greeting. */
+.mc-name {
+  font-family: var(--font-mono);
+  font-weight: 500;
+  letter-spacing: -0.01em;
+  color: var(--accent-hi);
+}
+
+/* Ask Flow — a global, icon-only topbar entry beside "New task". A "liquid
+   glass" chip (translucent accent tint + blur + a glossy top sheen) with a calm
+   flow-accent pulse, so it reads as an ambient assistant trigger rather than a
+   second solid primary button. Click opens the anchored popover below. */
+.ask-flow-menu {
+  position: relative;
+  display: inline-flex;
+}
+.ask-flow-trigger {
+  position: relative;
+  display: inline-grid;
+  place-items: center;
+  width: 32px;
+  height: 32px;
+  border-radius: var(--r-sm);
+  color: var(--accent-hi);
+  background: color-mix(in srgb, var(--accent) 16%, transparent);
+  border: 1px solid color-mix(in srgb, var(--accent) 40%, transparent);
+  -webkit-backdrop-filter: blur(9px) saturate(1.4);
+  backdrop-filter: blur(9px) saturate(1.4);
+  overflow: hidden;
+  transition: transform var(--dur-1) var(--ease), background var(--dur-1) var(--ease),
+    border-color var(--dur-1) var(--ease);
+  animation: ask-flow-pulse 3.4s var(--ease) infinite;
+}
+/* glossy diagonal sheen — the "liquid glass" highlight */
+.ask-flow-trigger::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(140deg, color-mix(in srgb, #fff 26%, transparent), transparent 52%);
+  opacity: 0.65;
+  pointer-events: none;
+}
+.ask-flow-trigger svg {
+  position: relative;
+}
+.ask-flow-trigger:hover {
+  transform: translateY(-1px);
+  background: color-mix(in srgb, var(--accent) 26%, transparent);
+  border-color: var(--accent);
+}
+.ask-flow-trigger:active {
+  transform: translateY(0);
+}
+.ask-flow-trigger.open {
+  background: color-mix(in srgb, var(--accent) 32%, transparent);
+  border-color: var(--accent);
+  color: #fff;
+  animation: none;
+}
+@keyframes ask-flow-pulse {
+  0%,
+  100% {
+    box-shadow: inset 0 1px 0 color-mix(in srgb, #fff 22%, transparent),
+      0 0 0 0 color-mix(in srgb, var(--accent) 50%, transparent);
+  }
+  50% {
+    box-shadow: inset 0 1px 0 color-mix(in srgb, #fff 22%, transparent),
+      0 0 13px 1px color-mix(in srgb, var(--accent) 45%, transparent);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .ask-flow-trigger {
+    animation: none;
+  }
+}
+.ask-flow-pop {
+  position: absolute;
+  top: calc(100% + 8px);
+  right: 0;
+  z-index: 60;
+  width: 380px;
+  max-width: min(380px, calc(100vw - 48px));
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 14px;
+  background: var(--bg-1);
   border: 1px solid var(--accent-line);
   border-radius: var(--r);
-  box-shadow: var(--shadow-sm);
-}
-.ask-flow-mark {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 38px;
-  height: 38px;
-  color: var(--accent-hi);
-  background: var(--bg-2);
-  border: 1px solid var(--accent-line);
-  border-radius: var(--r-sm);
-}
-.ask-flow-main {
-  min-width: 0;
+  box-shadow: var(--shadow-pop);
+  animation: fade-up var(--dur-1) var(--ease);
 }
 .ask-flow-input {
-  width: 100%;
-  min-width: 0;
-  height: 30px;
-  margin-top: 2px;
-  padding: 0;
-  font: inherit;
   font-size: 14px;
-  color: var(--text);
-  background: transparent;
-  border: 0;
-  outline: 0;
 }
-.ask-flow-input::placeholder {
-  color: var(--text-3);
-}
-.ask-flow-input:disabled {
-  opacity: 0.65;
-}
-.ask-flow-actions {
+.ask-flow-pop-actions {
   display: flex;
   align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+.ask-flow-pop-actions .agent-seg {
   min-width: 0;
-}
-.ask-flow-actions .agent-seg {
-  max-width: 250px;
-}
-@media (max-width: 720px) {
-  .ask-flow {
-    grid-template-columns: 1fr;
-  }
-  .ask-flow-mark {
-    display: none;
-  }
-  .ask-flow .btn {
-    width: 100%;
-    justify-content: center;
-  }
-  .ask-flow-actions .agent-seg {
-    width: 100%;
-  }
-  .ask-flow-actions .agent-seg button {
-    flex: 1;
-  }
 }
 .env-pill {
   display: inline-flex;
