@@ -211,6 +211,8 @@ Read
   flow show playbook    [<ref>]
   flow search "<query>" [--in briefs,updates,memories,transcripts] [--limit N] [--format table|json|tsv]
   flow transcript   [<ref>] [--compact]    (readable transcript from session jsonl)
+  flow attention feedback [--group source|channel|author|thread-type|suggested-action|confidence-band]
+                     report Attention feedback approval/dismiss rates by one dimension
   flow list tasks    [--status backlog|in-progress|done] [--project <slug>]
                      [--priority high|medium|low] [--since today|monday|7d|YYYY-MM-DD]
                      [--include-archived] [--include-deleted|--deleted]

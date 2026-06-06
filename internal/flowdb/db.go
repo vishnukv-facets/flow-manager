@@ -175,6 +175,25 @@ CREATE TABLE IF NOT EXISTS attention_feed (
     acted_at           TEXT
 );
 
+CREATE TABLE IF NOT EXISTS attention_feedback (
+    id                 TEXT PRIMARY KEY,
+    feed_item_id       TEXT NOT NULL,
+    source             TEXT NOT NULL,
+    channel            TEXT,
+    author             TEXT,
+    thread_type        TEXT,
+    thread_key         TEXT NOT NULL,
+    suggested_action   TEXT NOT NULL,
+    final_action       TEXT NOT NULL,
+    outcome            TEXT NOT NULL,
+    confidence         REAL NOT NULL DEFAULT 0,
+    confidence_band    TEXT NOT NULL,
+    draft_before       TEXT,
+    draft_after        TEXT,
+    draft_edit_delta   TEXT,
+    created_at         TEXT NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS steering_trace (
     id                TEXT PRIMARY KEY,
     created_at        TEXT NOT NULL,
@@ -285,6 +304,12 @@ CREATE INDEX IF NOT EXISTS idx_search_docs_scope ON search_docs(scope);
 CREATE INDEX IF NOT EXISTS idx_search_docs_entity ON search_docs(entity_type, entity_slug);
 CREATE INDEX IF NOT EXISTS idx_attention_feed_status ON attention_feed(status);
 CREATE INDEX IF NOT EXISTS idx_attention_feed_thread ON attention_feed(thread_key);
+CREATE INDEX IF NOT EXISTS idx_attention_feedback_feed ON attention_feedback(feed_item_id);
+CREATE INDEX IF NOT EXISTS idx_attention_feedback_created ON attention_feedback(created_at);
+CREATE INDEX IF NOT EXISTS idx_attention_feedback_channel ON attention_feedback(channel);
+CREATE INDEX IF NOT EXISTS idx_attention_feedback_author ON attention_feedback(author);
+CREATE INDEX IF NOT EXISTS idx_attention_feedback_action ON attention_feedback(suggested_action);
+CREATE INDEX IF NOT EXISTS idx_attention_feedback_band ON attention_feedback(confidence_band);
 CREATE INDEX IF NOT EXISTS idx_steering_trace_created ON steering_trace(created_at);
 CREATE INDEX IF NOT EXISTS idx_steering_trace_disposition ON steering_trace(disposition);
 `

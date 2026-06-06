@@ -51,11 +51,18 @@ func TestCmdAttentionActDismiss(t *testing.T) {
 	if items, _ := flowdb.ListFeedItems(db, "dismissed"); len(items) != 1 {
 		t.Errorf("item should be dismissed, got %d dismissed rows", len(items))
 	}
+	fb, err := flowdb.ListAttentionFeedback(db, flowdb.AttentionFeedbackFilter{FeedItemID: "d1"})
+	if err != nil {
+		t.Fatalf("ListAttentionFeedback: %v", err)
+	}
+	if len(fb) != 1 || fb[0].FinalAction != "dismiss" || fb[0].Outcome != "dismissed" {
+		t.Errorf("dismiss feedback mismatch: %+v", fb)
+	}
 }
 
 func TestCmdAttentionSent(t *testing.T) {
 	db := attentionTestDB(t)
-	if _, err := flowdb.UpsertFeedItem(db, flowdb.FeedItem{ID: "s1", Source: "slack", ThreadKey: "C1:1.1", SuggestedAction: "reply", Status: "new", CreatedAt: "2026-06-05T10:00:00Z"}); err != nil {
+	if _, err := flowdb.UpsertFeedItem(db, flowdb.FeedItem{ID: "s1", Source: "slack", ThreadKey: "C1:1.1", SuggestedAction: "reply", Draft: "ok to ship", Status: "new", CreatedAt: "2026-06-05T10:00:00Z"}); err != nil {
 		t.Fatalf("seed: %v", err)
 	}
 	// No --close-floating + no FLOW_HOOK_URL → the close is a no-op, but the card
@@ -69,6 +76,13 @@ func TestCmdAttentionSent(t *testing.T) {
 	}
 	if news, _ := flowdb.ListFeedItems(db, "new"); len(news) != 0 {
 		t.Errorf("no items should remain 'new', got %d", len(news))
+	}
+	fb, err := flowdb.ListAttentionFeedback(db, flowdb.AttentionFeedbackFilter{FeedItemID: "s1"})
+	if err != nil {
+		t.Fatalf("ListAttentionFeedback: %v", err)
+	}
+	if len(fb) != 1 || fb[0].FinalAction != "send_reply" || fb[0].Outcome != "sent" || fb[0].DraftEditDelta != "unchanged" {
+		t.Errorf("sent feedback mismatch: %+v", fb)
 	}
 }
 
@@ -105,6 +119,30 @@ func TestCmdAttentionListRuns(t *testing.T) {
 	}
 }
 
+func TestCmdAttentionFeedbackReportsByChannel(t *testing.T) {
+	db := attentionTestDB(t)
+	rows := []flowdb.AttentionFeedback{
+		{ID: "a", FeedItemID: "fa", Source: "slack", Channel: "C1", Author: "U1", ThreadType: "channel", ThreadKey: "C1:1", SuggestedAction: "reply", FinalAction: "send_reply", Outcome: "approved", Confidence: 0.91, ConfidenceBand: "0.90-1.00", CreatedAt: "2026-06-05T10:00:00Z"},
+		{ID: "b", FeedItemID: "fb", Source: "slack", Channel: "C1", Author: "U2", ThreadType: "channel", ThreadKey: "C1:2", SuggestedAction: "reply", FinalAction: "dismiss", Outcome: "dismissed", Confidence: 0.72, ConfidenceBand: "0.70-0.79", CreatedAt: "2026-06-05T11:00:00Z"},
+	}
+	for _, row := range rows {
+		if err := flowdb.RecordAttentionFeedback(db, row); err != nil {
+			t.Fatalf("RecordAttentionFeedback: %v", err)
+		}
+	}
+
+	out := captureStdout(t, func() {
+		if rc := cmdAttentionFeedback([]string{"--group", "channel"}); rc != 0 {
+			t.Fatalf("feedback rc = %d, want 0", rc)
+		}
+	})
+	for _, want := range []string{"GROUP", "C1", "50%", "approved", "dismissed"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("feedback output missing %q:\n%s", want, out)
+		}
+	}
+}
+
 func TestRenderTrace(t *testing.T) {
 	funnel := flowdb.SteeringFunnel{
 		Observed:      5,
@@ -115,24 +153,24 @@ func TestRenderTrace(t *testing.T) {
 	}
 	items := []flowdb.SteeringTrace{
 		{
-			CreatedAt:   "2026-06-05T10:00:00Z",
-			Origin:      "slack",
-			Disposition: "dropped",
-			StageReached: "stage0",
+			CreatedAt:       "2026-06-05T10:00:00Z",
+			Origin:          "slack",
+			Disposition:     "dropped",
+			StageReached:    "stage0",
 			FinalConfidence: 0.0,
-			Channel:     "C123",
-			DropReason:  "self-authored",
-			TextPreview: "some text",
+			Channel:         "C123",
+			DropReason:      "self-authored",
+			TextPreview:     "some text",
 		},
 		{
-			CreatedAt:   "2026-06-05T09:00:00Z",
-			Origin:      "github",
-			Disposition: "surfaced",
-			StageReached: "stage3",
+			CreatedAt:       "2026-06-05T09:00:00Z",
+			Origin:          "github",
+			Disposition:     "surfaced",
+			StageReached:    "stage3",
 			FinalConfidence: 0.9,
-			Channel:     "C456",
-			DropReason:  "",
-			TextPreview: "PR review requested",
+			Channel:         "C456",
+			DropReason:      "",
+			TextPreview:     "PR review requested",
 		},
 	}
 

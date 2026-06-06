@@ -201,7 +201,13 @@ function AttentionCard({
           </span>
           {item.author_name ? <span className="att-origin-from faint">from {item.author_name}</span> : null}
           {item.permalink ? (
-            <a className="btn ghost sm" href={item.permalink} target="_blank" rel="noreferrer">
+            <a
+              className="btn ghost sm"
+              href={item.permalink}
+              target="_blank"
+              rel="noreferrer"
+              onClick={() => onAct(item, 'open-source')}
+            >
               <ExternalLink size={13} /> {linkLabel}
             </a>
           ) : null}
@@ -262,7 +268,14 @@ function AttentionCard({
             {item.acted_at ? ` · ${item.acted_at.slice(0, 10)}` : ''}
           </span>
           {item.linked_task ? (
-            <button type="button" className="btn ghost sm" onClick={() => navigate(`/session/${item.linked_task}`)}>
+            <button
+              type="button"
+              className="btn ghost sm"
+              onClick={() => {
+                onAct(item, 'open-session')
+                navigate(`/session/${item.linked_task}`)
+              }}
+            >
               <ArrowRight size={13} /> Go to session
             </button>
           ) : null}
@@ -507,6 +520,10 @@ function FeedDetail({ item, onClose }: { item: AttentionItem | null; onClose: ()
       { onSuccess: onClose },
     )
   }
+  const recordOpenSource = () => {
+    if (action.isPending) return
+    action.mutate({ kind: 'attention-act', target: item.id, attention_action: 'open-source' })
+  }
 
   const sourceLabel = item.source === 'github' ? 'GitHub' : titleCase(item.source || 'message')
   const title = `${sourceLabel} · ${titleCase(item.suggested_action || '—')}`
@@ -597,7 +614,7 @@ function FeedDetail({ item, onClose }: { item: AttentionItem | null; onClose: ()
               {item.thread_key || '—'}
             </span>
             {item.permalink ? (
-              <a className="btn ghost sm" href={item.permalink} target="_blank" rel="noreferrer">
+              <a className="btn ghost sm" href={item.permalink} target="_blank" rel="noreferrer" onClick={recordOpenSource}>
                 <ExternalLink size={13} /> {linkLabel}
               </a>
             ) : null}

@@ -53,8 +53,14 @@ func WatchConfigFnWithMutes(db *sql.DB) func() WatchConfig {
 				cfg.MutedChannels[ch] = true
 			}
 		}
-		cfg.MutedAuthors = mutes.Authors
-		cfg.MutedThreads = mutes.Threads
+		cfg.MutedAuthors = mergeBoolSet(cfg.MutedAuthors, mutes.Authors)
+		cfg.MutedThreads = mergeBoolSet(cfg.MutedThreads, mutes.Threads)
+		learned, err := flowdb.LearnedAttentionPolicyFromFeedback(db, flowdb.LearnedAttentionPolicyOptions{})
+		if err != nil {
+			return cfg
+		}
+		cfg.MutedChannels = mergeBoolSet(cfg.MutedChannels, learned.SuppressChannels)
+		cfg.MutedAuthors = mergeBoolSet(cfg.MutedAuthors, learned.SuppressAuthors)
 		return cfg
 	}
 }
@@ -85,4 +91,22 @@ func toSet(items []string) map[string]bool {
 		m[it] = true
 	}
 	return m
+}
+
+func mergeBoolSet(dst, src map[string]bool) map[string]bool {
+	if len(src) == 0 {
+		if dst == nil {
+			return map[string]bool{}
+		}
+		return dst
+	}
+	if dst == nil {
+		dst = map[string]bool{}
+	}
+	for k, v := range src {
+		if v {
+			dst[k] = true
+		}
+	}
+	return dst
 }

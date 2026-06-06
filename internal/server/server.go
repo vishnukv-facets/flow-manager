@@ -75,7 +75,7 @@ func New(cfg Config) *Server {
 		// Live re-read on settings changes, overlaying the operator's durable
 		// "perma drop" mutes (channel/sender/thread) from steering_mutes.
 		cascade.ConfigFn = steering.WatchConfigFnWithMutes(cfg.DB)
-		cascade.AutonomyFn = steering.AutonomyFromEnv // live per-action auto-act policy
+		cascade.AutonomyFn = steering.AutonomyFnWithFeedback(cfg.DB, steering.AutonomyFromEnv) // live per-action auto-act policy + learned threshold nudges
 		// De-ID feed text at ingest: clean Slack <@U…> mention markup to names
 		// BEFORE it reaches the classifier/LLM and the trace, so summaries and
 		// drafts never parrot raw IDs. nil resolver → no cleaner (identity).

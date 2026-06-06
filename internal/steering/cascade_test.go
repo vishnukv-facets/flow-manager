@@ -760,3 +760,39 @@ func TestCascadeConfigFnOverridesStatic(t *testing.T) {
 		t.Error("C1 is not in ConfigFn's set, so Stage 0 should drop it (classifier must not run)")
 	}
 }
+
+func TestCascadeConsumesLearnedSuppressionsWithoutRestart(t *testing.T) {
+	t.Setenv("FLOW_STEERING_WATCH_CHANNELS", "C_NOISE")
+	c, db := cascadeFixture(t)
+	c.ConfigFn = WatchConfigFnWithMutes(db)
+
+	classifierCalls := 0
+	stubClassifier(t, func(prompt string) (string, error) {
+		classifierCalls++
+		return `[{"thread_key":"C_NOISE:1.1","relevant":false}]`, nil
+	})
+	if err := c.Observe(context.Background(), msg("C_NOISE", "1.1", "U_OTHER", "first")); err != nil {
+		t.Fatalf("first Observe: %v", err)
+	}
+	if classifierCalls != 1 {
+		t.Fatalf("classifierCalls after first event = %d, want 1", classifierCalls)
+	}
+
+	for i := 0; i < 3; i++ {
+		if err := flowdb.RecordAttentionFeedback(db, flowdb.AttentionFeedback{
+			ID: "cascade-learn-" + string(rune('a'+i)), FeedItemID: "feed", Source: "slack",
+			Channel: "C_NOISE", Author: "U_OTHER", ThreadType: "channel", ThreadKey: "C_NOISE:1.1",
+			SuggestedAction: "reply", FinalAction: "dismiss", Outcome: "dismissed",
+			Confidence: 0.82, ConfidenceBand: "0.80-0.89", CreatedAt: "2026-06-05T10:00:00Z",
+		}); err != nil {
+			t.Fatalf("record feedback %d: %v", i, err)
+		}
+	}
+
+	if err := c.Observe(context.Background(), msg("C_NOISE", "2.1", "U_OTHER", "second")); err != nil {
+		t.Fatalf("second Observe: %v", err)
+	}
+	if classifierCalls != 1 {
+		t.Errorf("classifierCalls after learned suppression = %d, want still 1 (Stage 0 drop)", classifierCalls)
+	}
+}
