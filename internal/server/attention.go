@@ -22,6 +22,12 @@ var attentionMakeTask = func(s *Server, item flowdb.FeedItem) error {
 	return steering.ApplyAction(context.Background(), s.cfg.DB, item, steering.ActionMakeTask, steering.DefaultAutonomy(), true)
 }
 
+// attentionRequestHandoff asks a matched task's agent to accept/decline
+// ownership before the feed card is resolved.
+var attentionRequestHandoff = func(s *Server, item flowdb.FeedItem) (flowdb.AttentionHandoff, error) {
+	return steering.RequestHandoff(context.Background(), s.cfg.DB, item, "attention-router")
+}
+
 // attentionStartSession attaches the just-made task to a server-managed PTY so
 // its agent session streams into the UI ("start the session"). Package var so
 // tests can stub the PTY attach.
@@ -56,6 +62,10 @@ func (s *Server) handleAttention(w http.ResponseWriter, r *http.Request) {
 	}
 	if status == "all" {
 		status = ""
+	}
+	if _, err := flowdb.ExpireAttentionHandoffs(s.cfg.DB, time.Now().UTC().Format(time.RFC3339)); err != nil {
+		writeError(w, err, http.StatusInternalServerError)
+		return
 	}
 	items, err := flowdb.ListFeedItems(s.cfg.DB, status)
 	if err != nil {
@@ -164,7 +174,25 @@ func (s *Server) attentionItemView(ctx context.Context, it flowdb.FeedItem) Atte
 	}
 	v.Why = s.attentionWhyView(ctx, it)
 	v.ActionPreviews = attentionActionPreviews(it)
+	if h, ok, err := flowdb.LatestAttentionHandoffForFeed(s.cfg.DB, it.ID); err == nil && ok {
+		v.Handoff = attentionHandoffView(h)
+	}
 	return v
+}
+
+func attentionHandoffView(h flowdb.AttentionHandoff) *AttentionHandoffView {
+	return &AttentionHandoffView{
+		ID:               h.ID,
+		FeedItemID:       h.FeedItemID,
+		Sender:           h.Sender,
+		Receiver:         h.Receiver,
+		RequestedVerdict: h.RequestedVerdict,
+		Status:           h.Status,
+		Reason:           h.Reason,
+		RequestedAt:      h.RequestedAt,
+		ExpiresAt:        h.ExpiresAt,
+		RespondedAt:      h.RespondedAt,
+	}
 }
 
 func (s *Server) attentionWhyView(ctx context.Context, it flowdb.FeedItem) AttentionWhyView {
@@ -282,11 +310,17 @@ func attentionActionPreviews(it flowdb.FeedItem) []AttentionActionPreview {
 	}
 	if matched != "" {
 		out = append(out, AttentionActionPreview{
+			Action:      "confirm_handoff",
+			Label:       "Ask owner",
+			Target:      matched,
+			Description: "Asks the matched task's agent to accept or decline this handoff before forwarding.",
+			Primary:     attentionActionPrimary(it, "forward"),
+		})
+		out = append(out, AttentionActionPreview{
 			Action:      "forward",
 			Label:       "Forward",
 			Target:      matched,
 			Description: "Adds the context to the matched task and wakes that task's session.",
-			Primary:     attentionActionPrimary(it, "forward"),
 		})
 	}
 	if strings.TrimSpace(it.Draft) != "" {
@@ -433,6 +467,12 @@ func (s *Server) attentionAct(req actionRequest) (actionResponse, int) {
 			return actionResponse{OK: false, Message: err.Error()}, http.StatusInternalServerError
 		}
 		return actionResponse{OK: true, Message: "forwarded " + id}, http.StatusOK
+	case "confirm-handoff", "confirm_handoff", "handoff":
+		h, err := attentionRequestHandoff(s, item)
+		if err != nil {
+			return actionResponse{OK: false, Message: err.Error()}, http.StatusInternalServerError
+		}
+		return actionResponse{OK: true, Message: "handoff requested from " + h.Receiver + " (" + h.ID + ")"}, http.StatusOK
 	case "send-reply", "send_reply":
 		// An AGENT sends the reply via its own MCP tools — the server never posts
 		// to Slack/GitHub directly.

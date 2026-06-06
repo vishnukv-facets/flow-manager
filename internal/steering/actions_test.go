@@ -25,7 +25,7 @@ func stubActionIO(t *testing.T) (*[]spawnRec, *[]tellRec) {
 	var spawns []spawnRec
 	var tells []tellRec
 	stubbedTags = nil
-	oldSpawn, oldTell, oldTag := taskSpawner, taskTeller, taskTagger
+	oldSpawn, oldTell, oldTag, oldHandoff := taskSpawner, taskTeller, taskTagger, taskHandoffRequester
 	taskSpawner = func(_ context.Context, name, slug, brief, project string) error {
 		spawns = append(spawns, spawnRec{name, slug, brief, project})
 		return nil
@@ -34,11 +34,17 @@ func stubActionIO(t *testing.T) (*[]spawnRec, *[]tellRec) {
 		tells = append(tells, tellRec{slug, msg})
 		return nil
 	}
+	taskHandoffRequester = func(_ context.Context, slug, msg, _ string) error {
+		tells = append(tells, tellRec{slug, msg})
+		return nil
+	}
 	taskTagger = func(_ context.Context, slug, tag string) error {
 		stubbedTags = append(stubbedTags, tagRec{slug, tag})
 		return nil
 	}
-	t.Cleanup(func() { taskSpawner, taskTeller, taskTagger = oldSpawn, oldTell, oldTag })
+	t.Cleanup(func() {
+		taskSpawner, taskTeller, taskTagger, taskHandoffRequester = oldSpawn, oldTell, oldTag, oldHandoff
+	})
 	return &spawns, &tells
 }
 
@@ -395,6 +401,126 @@ func TestForwardFeed(t *testing.T) {
 	}
 	if items, _ := flowdb.ListFeedItems(db, "acted"); len(items) != 1 {
 		t.Errorf("forwarded item should be 'acted'")
+	}
+}
+
+func TestRequestHandoffSendsCorrelationAndLeavesFeedNew(t *testing.T) {
+	db, err := flowdb.OpenDB(filepath.Join(t.TempDir(), "flow.db"))
+	if err != nil {
+		t.Fatalf("OpenDB: %v", err)
+	}
+	defer db.Close()
+	_, tells := stubActionIO(t)
+
+	item := flowdb.FeedItem{
+		ID: "hr1", Source: "slack", ThreadKey: "C1:handoff", Summary: "Is this part of your rollout task?",
+		SuggestedAction: "forward", MatchedTask: "rollout-task", Reason: "same customer thread",
+		Status: "new", CreatedAt: "2026-06-05T10:00:00Z",
+	}
+	if _, err := flowdb.UpsertFeedItem(db, item); err != nil {
+		t.Fatalf("seed feed: %v", err)
+	}
+
+	h, err := RequestHandoff(context.Background(), db, item, "attention-router")
+	if err != nil {
+		t.Fatalf("RequestHandoff: %v", err)
+	}
+	if h.ID == "" || h.Receiver != "rollout-task" || h.Sender != "attention-router" {
+		t.Fatalf("handoff metadata = %+v, want id/sender/receiver", h)
+	}
+	if len(*tells) != 1 || (*tells)[0].slug != "rollout-task" {
+		t.Fatalf("task tell calls = %+v, want one message to rollout-task", *tells)
+	}
+	for _, want := range []string{h.ID, "Sender: attention-router", "Receiver: rollout-task", "Requested verdict: accept or decline with reason", "flow attention handoff accept", "flow attention handoff decline", "Is this part of your rollout task?"} {
+		if !strings.Contains((*tells)[0].msg, want) {
+			t.Errorf("handoff request missing %q:\n%s", want, (*tells)[0].msg)
+		}
+	}
+	got, _ := flowdb.GetFeedItem(db, "hr1")
+	if got.Status != "new" || got.LinkedTask != "" {
+		t.Fatalf("request must leave feed item open, got %+v", got)
+	}
+}
+
+func TestRespondHandoffAcceptMarksFeedActed(t *testing.T) {
+	db, err := flowdb.OpenDB(filepath.Join(t.TempDir(), "flow.db"))
+	if err != nil {
+		t.Fatalf("OpenDB: %v", err)
+	}
+	defer db.Close()
+	stubActionIO(t)
+
+	item := flowdb.FeedItem{
+		ID: "ha1", Source: "slack", ThreadKey: "C1:accept", Summary: "belongs here",
+		SuggestedAction: "forward", MatchedTask: "owner-task", Status: "new",
+		CreatedAt: "2026-06-05T10:00:00Z",
+	}
+	if _, err := flowdb.UpsertFeedItem(db, item); err != nil {
+		t.Fatalf("seed feed: %v", err)
+	}
+	h, err := RequestHandoff(context.Background(), db, item, "attention-router")
+	if err != nil {
+		t.Fatalf("RequestHandoff: %v", err)
+	}
+
+	got, err := RespondHandoff(context.Background(), db, h.ID, "accept", "this is our deployment thread")
+	if err != nil {
+		t.Fatalf("RespondHandoff accept: %v", err)
+	}
+	if got.Status != "accepted" || got.Reason != "this is our deployment thread" {
+		t.Fatalf("accepted handoff = %+v", got)
+	}
+	feed, _ := flowdb.GetFeedItem(db, "ha1")
+	if feed.Status != "acted" || feed.LinkedTask != "owner-task" {
+		t.Fatalf("accepted handoff should mark feed acted/linked, got %+v", feed)
+	}
+	fb, err := flowdb.ListAttentionFeedback(db, flowdb.AttentionFeedbackFilter{FeedItemID: "ha1"})
+	if err != nil {
+		t.Fatalf("ListAttentionFeedback: %v", err)
+	}
+	if len(fb) != 1 || fb[0].FinalAction != "confirm_handoff" || fb[0].Outcome != "approved" {
+		t.Fatalf("accept feedback mismatch: %+v", fb)
+	}
+}
+
+func TestRespondHandoffDeclineLeavesFeedNew(t *testing.T) {
+	db, err := flowdb.OpenDB(filepath.Join(t.TempDir(), "flow.db"))
+	if err != nil {
+		t.Fatalf("OpenDB: %v", err)
+	}
+	defer db.Close()
+	stubActionIO(t)
+
+	item := flowdb.FeedItem{
+		ID: "hd1", Source: "slack", ThreadKey: "C1:decline", Summary: "probably not ours",
+		SuggestedAction: "forward", MatchedTask: "owner-task", Status: "new",
+		CreatedAt: "2026-06-05T10:00:00Z",
+	}
+	if _, err := flowdb.UpsertFeedItem(db, item); err != nil {
+		t.Fatalf("seed feed: %v", err)
+	}
+	h, err := RequestHandoff(context.Background(), db, item, "attention-router")
+	if err != nil {
+		t.Fatalf("RequestHandoff: %v", err)
+	}
+
+	got, err := RespondHandoff(context.Background(), db, h.ID, "decline", "this belongs to support-triage")
+	if err != nil {
+		t.Fatalf("RespondHandoff decline: %v", err)
+	}
+	if got.Status != "declined" || got.Reason != "this belongs to support-triage" {
+		t.Fatalf("declined handoff = %+v", got)
+	}
+	feed, _ := flowdb.GetFeedItem(db, "hd1")
+	if feed.Status != "new" || feed.LinkedTask != "" {
+		t.Fatalf("declined handoff should leave feed open, got %+v", feed)
+	}
+	fb, err := flowdb.ListAttentionFeedback(db, flowdb.AttentionFeedbackFilter{FeedItemID: "hd1"})
+	if err != nil {
+		t.Fatalf("ListAttentionFeedback: %v", err)
+	}
+	if len(fb) != 1 || fb[0].FinalAction != "confirm_handoff" || fb[0].Outcome != "declined" {
+		t.Fatalf("decline feedback mismatch: %+v", fb)
 	}
 }
 

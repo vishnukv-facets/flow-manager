@@ -646,6 +646,7 @@ export interface AttentionItem {
   permalink?: string // slack:// deep link OR https GitHub URL
   why: AttentionWhy
   action_previews?: AttentionActionPreview[]
+  handoff?: AttentionHandoff
 }
 
 export interface AttentionTaskMatch {
@@ -684,6 +685,19 @@ export interface AttentionActionPreview {
   target?: string
   primary?: boolean
   destructive?: boolean
+}
+
+export interface AttentionHandoff {
+  id: string
+  feed_item_id: string
+  sender: string
+  receiver: string
+  requested_verdict: string
+  status: string
+  reason?: string
+  requested_at: string
+  expires_at: string
+  responded_at?: string
 }
 
 export interface SteeringFunnel {

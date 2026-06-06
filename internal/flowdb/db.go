@@ -194,6 +194,20 @@ CREATE TABLE IF NOT EXISTS attention_feedback (
     created_at         TEXT NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS attention_handoffs (
+    id                 TEXT PRIMARY KEY,
+    feed_item_id       TEXT NOT NULL,
+    sender             TEXT NOT NULL,
+    receiver           TEXT NOT NULL,
+    context            TEXT NOT NULL,
+    requested_verdict  TEXT NOT NULL,
+    status             TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending','accepted','declined','timeout')),
+    reason             TEXT,
+    requested_at       TEXT NOT NULL,
+    expires_at         TEXT NOT NULL,
+    responded_at       TEXT
+);
+
 CREATE TABLE IF NOT EXISTS steering_trace (
     id                TEXT PRIMARY KEY,
     created_at        TEXT NOT NULL,
@@ -310,6 +324,9 @@ CREATE INDEX IF NOT EXISTS idx_attention_feedback_channel ON attention_feedback(
 CREATE INDEX IF NOT EXISTS idx_attention_feedback_author ON attention_feedback(author);
 CREATE INDEX IF NOT EXISTS idx_attention_feedback_action ON attention_feedback(suggested_action);
 CREATE INDEX IF NOT EXISTS idx_attention_feedback_band ON attention_feedback(confidence_band);
+CREATE INDEX IF NOT EXISTS idx_attention_handoffs_feed ON attention_handoffs(feed_item_id);
+CREATE INDEX IF NOT EXISTS idx_attention_handoffs_receiver ON attention_handoffs(receiver);
+CREATE INDEX IF NOT EXISTS idx_attention_handoffs_status ON attention_handoffs(status);
 CREATE INDEX IF NOT EXISTS idx_steering_trace_created ON steering_trace(created_at);
 CREATE INDEX IF NOT EXISTS idx_steering_trace_disposition ON steering_trace(disposition);
 `

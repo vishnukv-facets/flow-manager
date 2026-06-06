@@ -465,6 +465,19 @@ type AttentionActionPreview struct {
 	Destructive bool   `json:"destructive,omitempty"`
 }
 
+type AttentionHandoffView struct {
+	ID               string `json:"id"`
+	FeedItemID       string `json:"feed_item_id"`
+	Sender           string `json:"sender"`
+	Receiver         string `json:"receiver"`
+	RequestedVerdict string `json:"requested_verdict"`
+	Status           string `json:"status"`
+	Reason           string `json:"reason,omitempty"`
+	RequestedAt      string `json:"requested_at"`
+	ExpiresAt        string `json:"expires_at"`
+	RespondedAt      string `json:"responded_at,omitempty"`
+}
+
 // AttentionItemView is the UI shape of an attention_feed row.
 type AttentionItemView struct {
 	ID                string                   `json:"id"`
@@ -493,6 +506,7 @@ type AttentionItemView struct {
 	Permalink         string                   `json:"permalink,omitempty"`
 	Why               AttentionWhyView         `json:"why"`
 	ActionPreviews    []AttentionActionPreview `json:"action_previews,omitempty"`
+	Handoff           *AttentionHandoffView    `json:"handoff,omitempty"`
 }
 
 type WorkdirView struct {

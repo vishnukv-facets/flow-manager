@@ -96,6 +96,43 @@ func TestCmdAttentionSentErrors(t *testing.T) {
 	}
 }
 
+func TestCmdAttentionHandoffAcceptAndMalformed(t *testing.T) {
+	db := attentionTestDB(t)
+	if _, err := flowdb.UpsertFeedItem(db, flowdb.FeedItem{
+		ID: "ha-cli", Source: "slack", ThreadKey: "C1:cli", SuggestedAction: "forward",
+		MatchedTask: "owner-task", Status: "new", CreatedAt: "2026-06-05T10:00:00Z",
+	}); err != nil {
+		t.Fatalf("seed feed: %v", err)
+	}
+	h, err := flowdb.CreateAttentionHandoff(db, flowdb.AttentionHandoff{
+		FeedItemID: "ha-cli", Sender: "attention-router", Receiver: "owner-task",
+		Context: "context", RequestedVerdict: "accept_or_decline",
+		RequestedAt: "2026-06-05T10:01:00Z", ExpiresAt: "2026-06-05T11:01:00Z",
+	})
+	if err != nil {
+		t.Fatalf("CreateAttentionHandoff: %v", err)
+	}
+	if rc := cmdAttentionHandoff([]string{"respond", h.ID, "maybe", "--reason", "unclear"}); rc != 2 {
+		t.Fatalf("malformed verdict rc = %d, want 2", rc)
+	}
+	if got, _ := flowdb.GetAttentionHandoff(db, h.ID); got.Status != "pending" {
+		t.Fatalf("malformed response should leave pending, got %+v", got)
+	}
+
+	out := captureStdout(t, func() {
+		if rc := cmdAttentionHandoff([]string{"accept", h.ID, "--reason", "belongs to this task"}); rc != 0 {
+			t.Fatalf("accept rc = %d, want 0", rc)
+		}
+	})
+	if !strings.Contains(out, "accepted "+h.ID) {
+		t.Fatalf("accept output = %q", out)
+	}
+	item, _ := flowdb.GetFeedItem(db, "ha-cli")
+	if item.Status != "acted" || item.LinkedTask != "owner-task" {
+		t.Fatalf("accepted handoff should act/link feed item, got %+v", item)
+	}
+}
+
 func TestCmdAttentionActErrors(t *testing.T) {
 	db := attentionTestDB(t)
 	if _, err := flowdb.UpsertFeedItem(db, flowdb.FeedItem{ID: "e1", Source: "slack", ThreadKey: "C1:1.1", SuggestedAction: "reply", Status: "new", CreatedAt: "2026-06-05T10:00:00Z"}); err != nil {
