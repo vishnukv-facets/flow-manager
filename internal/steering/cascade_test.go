@@ -135,6 +135,95 @@ func TestCascadeFeedCapturesSourceContext(t *testing.T) {
 	}
 }
 
+func TestCascadeFetchesContextForDeepTriageAndStoresJSON(t *testing.T) {
+	c, db := cascadeFixture(t)
+	c.FetchContext = func(_ context.Context, ev monitor.InboundEvent) (ThreadContext, error) {
+		return ThreadContext{
+			Source:      "slack",
+			ThreadKey:   monitor.ThreadKey(ev.Channel, ev.ThreadTS),
+			Permalink:   "https://example.slack.com/archives/C1/p111",
+			FetchStatus: "ok",
+			Parent: &ContextMessage{
+				Kind:   "parent",
+				Author: "alice",
+				Text:   "Need ETA on the migration",
+				TS:     "1.1",
+			},
+			Messages: []ContextMessage{{
+				Kind:   "reply",
+				Author: "bob",
+				Text:   "Can we ship Friday?",
+				TS:     "1.2",
+			}},
+			Participants: []string{"alice", "bob"},
+			Timestamps:   []string{"1.1", "1.2"},
+			Summary:      "2 Slack messages from alice, bob",
+		}, nil
+	}
+	stubClassifier(t, func(prompt string) (string, error) {
+		if strings.Contains(prompt, "MODE: stage1-relevance") {
+			return `[{"thread_key":"C1:1.1","relevant":true}]`, nil
+		}
+		return `{"suggested_action":"reply","confidence":0.8,"summary":"q"}`, nil
+	})
+	stubDeepTriage(t, func(prompt string) (string, error) {
+		if !strings.Contains(prompt, "Need ETA on the migration") || !strings.Contains(prompt, "Can we ship Friday?") {
+			t.Fatalf("deep triage prompt missing fetched context:\n%s", prompt)
+		}
+		return `{"suggested_action":"reply","confidence":0.9,"summary":"migration ETA","draft":"Targeting Friday."}`, nil
+	})
+	if err := c.Observe(context.Background(), msg("C1", "1.1", "U_OTHER", "need help")); err != nil {
+		t.Fatalf("Observe: %v", err)
+	}
+	items, _ := flowdb.ListFeedItems(db, "new")
+	if len(items) != 1 {
+		t.Fatalf("feed len = %d, want 1", len(items))
+	}
+	var stored ThreadContext
+	if err := json.Unmarshal([]byte(items[0].ContextJSON), &stored); err != nil {
+		t.Fatalf("context_json is not a ThreadContext JSON object: %v\n%s", err, items[0].ContextJSON)
+	}
+	if stored.Permalink != "https://example.slack.com/archives/C1/p111" ||
+		stored.Parent == nil || stored.Parent.Text != "Need ETA on the migration" ||
+		len(stored.Messages) != 1 || stored.Messages[0].Text != "Can we ship Friday?" ||
+		stored.Summary != "2 Slack messages from alice, bob" {
+		t.Errorf("stored context mismatch: %+v", stored)
+	}
+}
+
+func TestCascadeStoresFallbackContextWhenFetchFails(t *testing.T) {
+	c, db := cascadeFixture(t)
+	c.FetchContext = func(context.Context, monitor.InboundEvent) (ThreadContext, error) {
+		return ThreadContext{}, errTestContextFetch
+	}
+	stubClassifier(t, func(prompt string) (string, error) {
+		if strings.Contains(prompt, "MODE: stage1-relevance") {
+			return `[{"thread_key":"C1:1.1","relevant":true}]`, nil
+		}
+		return `{"suggested_action":"reply","confidence":0.8,"summary":"q"}`, nil
+	})
+	stubDeepTriage(t, func(prompt string) (string, error) {
+		if !strings.Contains(prompt, `"fetch_status":"error"`) || !strings.Contains(prompt, "fallback from event") {
+			t.Fatalf("deep prompt missing fallback context:\n%s", prompt)
+		}
+		return `{"suggested_action":"reply","confidence":0.9,"summary":"fallback","draft":"On it."}`, nil
+	})
+	if err := c.Observe(context.Background(), msg("C1", "1.1", "U_OTHER", "fallback from event")); err != nil {
+		t.Fatalf("Observe: %v", err)
+	}
+	items, _ := flowdb.ListFeedItems(db, "new")
+	if len(items) != 1 {
+		t.Fatalf("feed len = %d, want 1", len(items))
+	}
+	var stored ThreadContext
+	if err := json.Unmarshal([]byte(items[0].ContextJSON), &stored); err != nil {
+		t.Fatalf("context_json invalid: %v", err)
+	}
+	if stored.FetchStatus != "error" || stored.FetchError == "" || stored.Parent == nil || stored.Parent.Text != "fallback from event" {
+		t.Errorf("fallback context mismatch: %+v", stored)
+	}
+}
+
 func TestCascadeStage0DropWritesNothing(t *testing.T) {
 	c, db := cascadeFixture(t)
 	// self-authored → Stage0 drops before any model call
@@ -351,7 +440,7 @@ func TestObserveBatchSingleStage1Call(t *testing.T) {
 		return `{"suggested_action":"reply","confidence":0.9,"summary":"q"}`, nil
 	})
 	evs := []monitor.InboundEvent{
-		msg("C1", "20.1", "U_ME", "self note"),  // stage0 drop
+		msg("C1", "20.1", "U_ME", "self note"), // stage0 drop
 		msg("C1", "21.1", "U_OTHER", "need a hand"),
 		msg("C1", "22.1", "U_OTHER", "another one"),
 	}

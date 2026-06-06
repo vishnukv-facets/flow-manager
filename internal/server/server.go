@@ -82,6 +82,7 @@ func New(cfg Config) *Server {
 		if s.nameResolver != nil {
 			cascade.TextClean = s.nameResolver.CleanText
 		}
+		cascade.FetchContext = steering.NewDefaultContextFetcher(cascade.TextClean, s.slackPermalinker)
 		dispatcher.Steerer = cascade
 		s.cascade = cascade
 		// Reuse a primed Haiku session across the cheap classifier stages (the
