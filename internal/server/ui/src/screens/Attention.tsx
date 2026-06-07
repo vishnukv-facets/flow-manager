@@ -1,12 +1,13 @@
-import { useEffect, useState, type ReactNode } from 'react'
+import { useEffect, useMemo, useState, type ReactNode } from 'react'
 import { useLocation } from 'wouter'
 import { AlertTriangle, ArrowRight, AtSign, BellOff, Check, ChevronDown, ExternalLink, Filter, Github, Handshake, Hash, Inbox, Info, ListPlus, Lock, MessageSquare, Play, RefreshCw, Send, Share2 } from 'lucide-react'
-import { useAction, useAttention, useAttentionDecision, useAttentionTrace } from '../lib/query'
+import { useAction, useAttention, useAttentionDecision, useAttentionTrace, useWorkEvents } from '../lib/query'
 import { useDocumentTitle } from '../lib/useDocumentTitle'
 import { EmptyState, ErrorNote, Loading, SourceIcon } from '../components/ui'
+import { WorkEventRow } from '../components/WorkEventRow'
 import { Modal } from '../components/Modal'
 import { dateTimeFull, dateTimeSec, titleCase } from '../lib/format'
-import type { AttentionItem, SteeringFunnel, SteeringTrace } from '../lib/types'
+import type { AttentionItem, SteeringFunnel, SteeringTrace, WorkEvent } from '../lib/types'
 
 const STATUSES = ['new', 'acted', 'dismissed', 'all'] as const
 const VIEWS = ['feed', 'trace'] as const
@@ -52,7 +53,15 @@ function FeedView() {
   const [status, setStatus] = useState<string>('new')
   const [detail, setDetail] = useState<AttentionItem | null>(null)
   const { data, isLoading, error } = useAttention(status)
+  const { data: workEvents } = useWorkEvents({ limit: 200 })
   const action = useAction()
+  const eventByAttentionId = useMemo(() => {
+    const map = new Map<string, WorkEvent>()
+    for (const event of workEvents?.items ?? []) {
+      if (event.id.startsWith('attention:')) map.set(event.id.slice('attention:'.length), event)
+    }
+    return map
+  }, [workEvents])
   // Cards with an in-flight re-triage → id mapped to the card signature at click
   // time. Deep triage is async (~a minute), so we hold a spinner until the card's
   // content actually changes (SSE refetch) or a safety timeout fires.
@@ -120,6 +129,7 @@ function FeedView() {
             <AttentionCard
               key={it.id}
               item={it}
+              workEvent={eventByAttentionId.get(it.id)}
               disabled={action.isPending}
               retriaging={!!retriaging[it.id]}
               onAct={act}
@@ -129,7 +139,7 @@ function FeedView() {
         </div>
       )}
 
-      <FeedDetail item={detail} onClose={() => setDetail(null)} />
+      <FeedDetail item={detail} workEvent={detail ? eventByAttentionId.get(detail.id) : undefined} onClose={() => setDetail(null)} />
     </>
   )
 }
@@ -149,12 +159,14 @@ function OriginIcon({ source, channelType }: { source?: string; channelType?: st
 
 function AttentionCard({
   item,
+  workEvent,
   disabled,
   retriaging,
   onAct,
   onOpen,
 }: {
   item: AttentionItem
+  workEvent?: WorkEvent
   disabled: boolean
   retriaging?: boolean
   onAct: (item: AttentionItem, verb: string) => void
@@ -216,6 +228,7 @@ function AttentionCard({
       ) : null}
 
       <div className="att-summary">{item.summary || <span className="faint">(no summary)</span>}</div>
+      <WorkEventRow event={workEvent} onOpen={(href) => navigate(href)} />
       <WhyThis item={item} compact onNavigate={(slug) => navigate(`/session/${slug}`)} />
       <HandoffStatus item={item} />
 
@@ -524,23 +537,26 @@ function actionPreviewTarget(item: AttentionItem, p: NonNullable<AttentionItem['
 // item, plus the SAME cascade-decision grid the Trace view shows — fetched by
 // feed id — so the operator can audit "why was this surfaced / chosen". Reuses
 // the TraceDetail layout (.meta-grid + KV, .td-section, .att-draft).
-function FeedDetail({ item, onClose }: { item: AttentionItem | null; onClose: () => void }) {
-  // Hooks must run unconditionally; pass null while closed so the query stays idle.
-  const { data: trace, isLoading, isError } = useAttentionDecision(item?.id ?? null)
+function FeedDetail({ item, workEvent, onClose }: { item: AttentionItem | null; workEvent?: WorkEvent; onClose: () => void }) {
+  // Keep the modal mounted (empty) while closed so content doesn't blank mid-anim.
+  if (!item) {
+    return (
+      <Modal open={false} onClose={onClose} title="">
+        {null}
+      </Modal>
+    )
+  }
+  return <FeedDetailOpen key={item.id} item={item} workEvent={workEvent} onClose={onClose} />
+}
+
+function FeedDetailOpen({ item, workEvent, onClose }: { item: AttentionItem; workEvent?: WorkEvent; onClose: () => void }) {
+  const { data: trace, isLoading, isError } = useAttentionDecision(item.id)
   const action = useAction()
   const [, navigate] = useLocation()
-  // Editable draft, controlled. Reset to the item's draft whenever the open
-  // item changes (keyed by id), so reopening a different card doesn't keep the
-  // previous edit. `item.draft ?? ''` covers items with no draft.
-  const [replyText, setReplyText] = useState('')
+  // This component is keyed by item.id, so switching cards remounts it and
+  // naturally resets the editable draft without syncing props through an effect.
+  const [replyText, setReplyText] = useState(item.draft ?? '')
   const [replyInstructions, setReplyInstructions] = useState('')
-  const itemId = item?.id ?? null
-  useEffect(() => {
-    setReplyText(item?.draft ?? '')
-    setReplyInstructions('')
-  }, [itemId, item?.draft])
-  // Keep the modal mounted (empty) while closed so content doesn't blank mid-anim.
-  if (!item) return <Modal open={false} onClose={onClose} title="" children={null} />
 
   const sendReply = () => {
     if (action.isPending || !replyText.trim()) return
@@ -591,6 +607,13 @@ function FeedDetail({ item, onClose }: { item: AttentionItem | null; onClose: ()
           <div className="eyebrow">summary</div>
           <div className="att-draft-body td-message">{item.summary || '(no summary)'}</div>
         </div>
+
+        {workEvent ? (
+          <div className="td-section">
+            <div className="eyebrow">work event</div>
+            <WorkEventRow event={workEvent} onOpen={(href) => navigate(href)} />
+          </div>
+        ) : null}
 
         <div className="td-section">
           <WhyThis

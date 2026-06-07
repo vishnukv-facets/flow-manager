@@ -664,6 +664,15 @@ func (f *fakeSteerer) Observe(_ context.Context, ev InboundEvent) error {
 	return nil
 }
 
+type scopedFakeSteerer struct {
+	fakeSteerer
+	allow bool
+}
+
+func (f *scopedFakeSteerer) ShouldObserve(_ InboundEvent) bool {
+	return f.allow
+}
+
 func TestDispatcher_UntrackedMessageRoutesToSteerer(t *testing.T) {
 	db := dispatcherTestDB(t)
 	d := NewDispatcher(db, nil)
@@ -676,6 +685,21 @@ func TestDispatcher_UntrackedMessageRoutesToSteerer(t *testing.T) {
 	}
 	if len(fs.events) != 1 {
 		t.Fatalf("steerer Observe should be called once for an untracked message, got %d", len(fs.events))
+	}
+}
+
+func TestDispatcher_UntrackedMessageSkippedWhenSteererDeclines(t *testing.T) {
+	db := dispatcherTestDB(t)
+	d := NewDispatcher(db, nil)
+	fs := &scopedFakeSteerer{allow: false}
+	d.Steerer = fs
+
+	msg := InboundEvent{Kind: "message", ChannelType: "channel", Channel: "C_noise", TS: "1.1", ThreadTS: "1.1", UserID: "U_other", Text: "not watched"}
+	if err := d.Dispatch(context.Background(), msg); err != nil {
+		t.Fatalf("Dispatch: %v", err)
+	}
+	if len(fs.events) != 0 {
+		t.Fatalf("steerer should not observe scoped-out message, got %d events", len(fs.events))
 	}
 }
 

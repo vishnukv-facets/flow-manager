@@ -7,7 +7,11 @@ import (
 )
 
 func TestListSlackChannels(t *testing.T) {
+	t.Setenv("FLOW_ROOT", t.TempDir())
+	t.Setenv("SLACK_BOT_TOKEN", "")
 	t.Setenv("FLOW_SLACK_TOKEN", "xoxb-test")
+	t.Setenv("SLACK_USER_TOKEN", "")
+	t.Setenv("SLACK_TOKEN", "")
 	old := slackConversationsFn
 	slackConversationsFn = func(_ context.Context, token string) ([]SlackChannelInfo, error) {
 		if token != "xoxb-test" {
@@ -26,7 +30,63 @@ func TestListSlackChannels(t *testing.T) {
 	}
 }
 
+func TestListSlackChannelsCachesSuccessfulList(t *testing.T) {
+	t.Setenv("FLOW_ROOT", t.TempDir())
+	t.Setenv("SLACK_BOT_TOKEN", "")
+	t.Setenv("FLOW_SLACK_TOKEN", "xoxb-test")
+	t.Setenv("SLACK_USER_TOKEN", "")
+	t.Setenv("SLACK_TOKEN", "")
+	old := slackConversationsFn
+	calls := 0
+	slackConversationsFn = func(_ context.Context, _ string) ([]SlackChannelInfo, error) {
+		calls++
+		if calls == 1 {
+			return []SlackChannelInfo{
+				{ID: "C1", Name: "general", IsMember: true},
+				{ID: "C2", Name: "engineering", IsPrivate: true, IsMember: true},
+			}, nil
+		}
+		return nil, errors.New("slack rate limit exceeded, retry after 30s")
+	}
+	t.Cleanup(func() { slackConversationsFn = old })
+
+	first, err := ListSlackChannels(context.Background())
+	if err != nil {
+		t.Fatalf("first ListSlackChannels: %v", err)
+	}
+	if len(first) != 2 {
+		t.Fatalf("first channels = %+v", first)
+	}
+
+	second, err := ListSlackChannels(context.Background())
+	if err != nil {
+		t.Fatalf("rate-limited ListSlackChannels should use cache, got %v", err)
+	}
+	if len(second) != 2 || second[0].Name != "general" || second[1].Name != "engineering" {
+		t.Fatalf("cached channels = %+v", second)
+	}
+}
+
+func TestListSlackChannelsReturnsErrorWithoutCache(t *testing.T) {
+	t.Setenv("FLOW_ROOT", t.TempDir())
+	t.Setenv("SLACK_BOT_TOKEN", "")
+	t.Setenv("FLOW_SLACK_TOKEN", "xoxb-test")
+	t.Setenv("SLACK_USER_TOKEN", "")
+	t.Setenv("SLACK_TOKEN", "")
+	old := slackConversationsFn
+	slackConversationsFn = func(_ context.Context, _ string) ([]SlackChannelInfo, error) {
+		return nil, errors.New("slack rate limit exceeded, retry after 30s")
+	}
+	t.Cleanup(func() { slackConversationsFn = old })
+
+	_, err := ListSlackChannels(context.Background())
+	if err == nil {
+		t.Fatal("ListSlackChannels error = nil, want Slack error when no cache exists")
+	}
+}
+
 func TestListSlackChannelsNoToken(t *testing.T) {
+	t.Setenv("FLOW_ROOT", t.TempDir())
 	t.Setenv("FLOW_SLACK_TOKEN", "")
 	t.Setenv("SLACK_BOT_TOKEN", "")
 	t.Setenv("SLACK_USER_TOKEN", "")
@@ -38,5 +98,4 @@ func TestListSlackChannelsNoToken(t *testing.T) {
 	if len(chans) != 0 {
 		t.Errorf("no token → empty, got %d", len(chans))
 	}
-	_ = errors.New // keep import if unused elsewhere
 }

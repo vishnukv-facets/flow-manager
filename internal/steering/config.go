@@ -41,6 +41,7 @@ func WatchConfigFnWithMutes(db *sql.DB) func() WatchConfig {
 		if db == nil {
 			return cfg
 		}
+		cfg.TaskLinkedGitHubThreads = taskLinkedGitHubThreads(db)
 		mutes, err := flowdb.ListSteeringMutes(db)
 		if err != nil {
 			return cfg // on error, fall back to env-only rather than failing the cascade
@@ -63,6 +64,52 @@ func WatchConfigFnWithMutes(db *sql.DB) func() WatchConfig {
 		cfg.MutedAuthors = mergeBoolSet(cfg.MutedAuthors, learned.SuppressAuthors)
 		return cfg
 	}
+}
+
+func taskLinkedGitHubThreads(db *sql.DB) map[string]bool {
+	out := map[string]bool{}
+	tasks, err := flowdb.ListTasks(db, flowdb.TaskFilter{IncludeArchived: false})
+	if err != nil || len(tasks) == 0 {
+		return out
+	}
+	slugs := make([]string, 0, len(tasks))
+	for _, task := range tasks {
+		if task != nil && task.Status != "done" {
+			slugs = append(slugs, task.Slug)
+		}
+	}
+	if len(slugs) == 0 {
+		return out
+	}
+	tags, err := flowdb.GetTaskTagsBatch(db, slugs)
+	if err != nil {
+		return out
+	}
+	for _, taskTags := range tags {
+		for _, tag := range taskTags {
+			repo := githubRepoFromLinkTag(tag)
+			if repo == "" {
+				continue
+			}
+			out[monitor.ThreadKey(repo, tag)] = true
+		}
+	}
+	return out
+}
+
+func githubRepoFromLinkTag(tag string) string {
+	for _, prefix := range []string{"gh-pr:", "gh-issue:"} {
+		if !strings.HasPrefix(tag, prefix) {
+			continue
+		}
+		body := strings.TrimPrefix(tag, prefix)
+		idx := strings.LastIndex(body, "#")
+		if idx <= 0 {
+			return ""
+		}
+		return body[:idx]
+	}
+	return ""
 }
 
 // splitList splits a comma/space/tab/newline-separated env value into trimmed,

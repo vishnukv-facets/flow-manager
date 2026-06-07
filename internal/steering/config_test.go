@@ -69,3 +69,26 @@ func TestWatchConfigFnWithMutesOverlaysLearnedSuppressions(t *testing.T) {
 		t.Errorf("learned dismissed author not overlaid into MutedAuthors: %+v", cfg.MutedAuthors)
 	}
 }
+
+func TestWatchConfigFnWithMutesIncludesTaskLinkedGitHubThreads(t *testing.T) {
+	db, err := flowdb.OpenDB(filepath.Join(t.TempDir(), "flow.db"))
+	if err != nil {
+		t.Fatalf("OpenDB: %v", err)
+	}
+	defer db.Close()
+
+	now := "2026-06-07T08:00:00Z"
+	if _, err := db.Exec(`INSERT INTO tasks (slug,name,status,priority,work_dir,session_provider,created_at,updated_at)
+		VALUES ('autonomy-trust-ladder','Autonomy trust ladder','in-progress','high',?,'codex',?,?)`, t.TempDir(), now, now); err != nil {
+		t.Fatalf("seed task: %v", err)
+	}
+	if err := flowdb.AddTaskTag(db, "autonomy-trust-ladder", "gh-pr:vishnukv-facets/flow-manager#21"); err != nil {
+		t.Fatalf("AddTaskTag: %v", err)
+	}
+
+	cfg := WatchConfigFnWithMutes(db)()
+	key := "vishnukv-facets/flow-manager:gh-pr:vishnukv-facets/flow-manager#21"
+	if !cfg.TaskLinkedGitHubThreads[key] {
+		t.Fatalf("task-linked github key %q missing from %+v", key, cfg.TaskLinkedGitHubThreads)
+	}
+}

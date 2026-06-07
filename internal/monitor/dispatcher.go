@@ -45,6 +45,14 @@ type MessageObserver interface {
 	Observe(ctx context.Context, ev InboundEvent) error
 }
 
+// ScopedMessageObserver can cheaply decline events before they enter a heavier
+// observer. The steering cascade uses this to keep unwatched Slack channel
+// traffic out of the decision trace entirely.
+type ScopedMessageObserver interface {
+	MessageObserver
+	ShouldObserve(ev InboundEvent) bool
+}
+
 // Dispatcher routes parsed InboundEvents into flow tasks. It is the
 // integration layer between the side-effect-free DecideReaction and the
 // actual filesystem / database / process effects (flow spawn, inbox
@@ -154,9 +162,13 @@ func (d *Dispatcher) dispatchMessage(ctx context.Context, ev InboundEvent) error
 	// specific conversation, not the whole DM channel.
 	//
 	// Untracked conversation — not owned by the reaction pipeline. Hand it to the
-	// steerer (if wired) to triage; Stage 0 inside the cascade decides whether
-	// it's even in scope. A nil steerer (CLI contexts) drops it as before.
+	// steerer (if wired) to triage. Scoped observers can cheaply decline obvious
+	// out-of-watch-list traffic before it writes decision traces; Stage 0 still
+	// owns the full deterministic policy for accepted candidates.
 	if d.Steerer != nil {
+		if scoped, ok := d.Steerer.(ScopedMessageObserver); ok && !scoped.ShouldObserve(ev) {
+			return nil
+		}
 		return d.Steerer.Observe(ctx, ev)
 	}
 	return nil

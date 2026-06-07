@@ -16,20 +16,22 @@ func RenderMarkdown(b Briefing) string {
 	if b.GeneratedAt != "" {
 		fmt.Fprintf(&out, "_Generated: %s_\n", b.GeneratedAt)
 	}
-	out.WriteString("\n## Needs action\n")
-	renderItems(&out, b.NeedsAction, true)
-	out.WriteString("\n## FYI\n")
-	renderItems(&out, b.FYI, false)
+	renderSection(&out, "Needs action", b.NeedsAction, true, "Nothing needs action.")
+	renderSection(&out, "Closeout", b.Closeout, true, "No closeout items.")
+	renderSection(&out, "Waiting", b.Waiting, true, "Nothing is waiting.")
+	renderSection(&out, "Next up", b.NextUp, true, "No startable next-up work.")
+	renderSection(&out, "FYI", b.FYI, false, "No FYI items in this window.")
 	return out.String()
 }
 
-func renderItems(out *strings.Builder, items []Item, action bool) {
+func renderSection(out *strings.Builder, title string, items []Item, action bool, empty string) {
+	fmt.Fprintf(out, "\n## %s\n", title)
+	renderItems(out, items, action, empty)
+}
+
+func renderItems(out *strings.Builder, items []Item, action bool, empty string) {
 	if len(items) == 0 {
-		if action {
-			out.WriteString("- Nothing needs action.\n")
-		} else {
-			out.WriteString("- No FYI items in this window.\n")
-		}
+		fmt.Fprintf(out, "- %s\n", empty)
 		return
 	}
 	lastGroup := ""

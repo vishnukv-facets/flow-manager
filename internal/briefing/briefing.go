@@ -31,6 +31,9 @@ type Briefing struct {
 	WindowStart string `json:"window_start"`
 	WindowEnd   string `json:"window_end"`
 	NeedsAction []Item `json:"needs_action"`
+	Closeout    []Item `json:"closeout"`
+	Waiting     []Item `json:"waiting"`
+	NextUp      []Item `json:"next_up"`
 	FYI         []Item `json:"fyi"`
 }
 
@@ -69,6 +72,9 @@ func Build(db *sql.DB, flowRoot string, opts Options) (Briefing, error) {
 		WindowStart: opts.Since.Format(time.RFC3339),
 		WindowEnd:   opts.Now.Format(time.RFC3339),
 		NeedsAction: []Item{},
+		Closeout:    []Item{},
+		Waiting:     []Item{},
+		NextUp:      []Item{},
 		FYI:         []Item{},
 	}
 
@@ -90,14 +96,31 @@ func Build(db *sql.DB, flowRoot string, opts Options) (Briefing, error) {
 		return Briefing{}, err
 	}
 	out.NeedsAction = append(out.NeedsAction, attention...)
-	out.NeedsAction = append(out.NeedsAction, taskActionItems(db, tasks, projects, opts)...)
+	for _, item := range taskActionItems(db, tasks, projects, opts) {
+		switch item.Kind {
+		case "waiting":
+			out.Waiting = append(out.Waiting, item)
+		case "ready":
+			out.NextUp = append(out.NextUp, item)
+		case "stale":
+			out.FYI = append(out.FYI, item)
+		default:
+			out.NeedsAction = append(out.NeedsAction, item)
+		}
+	}
 	out.FYI = append(out.FYI, shippedItems(tasks, projects, opts)...)
 	out.FYI = append(out.FYI, updateItems(flowRoot, taskBySlug, projects, opts)...)
 
 	sortItems(out.NeedsAction, true)
+	sortItems(out.Closeout, true)
+	sortItems(out.Waiting, true)
+	sortItems(out.NextUp, true)
 	sortItems(out.FYI, false)
 	if opts.Limit > 0 {
 		out.NeedsAction = limitItems(out.NeedsAction, opts.Limit)
+		out.Closeout = limitItems(out.Closeout, opts.Limit)
+		out.Waiting = limitItems(out.Waiting, opts.Limit)
+		out.NextUp = limitItems(out.NextUp, opts.Limit)
 		out.FYI = limitItems(out.FYI, opts.Limit)
 	}
 	return out, nil
@@ -243,15 +266,17 @@ func taskUpdateItems(flowRoot string, tasks map[string]*flowdb.Task, projects ma
 		}
 		slug := entry.Name()
 		task := tasks[slug]
-		project := ""
-		if task != nil {
-			project = taskProject(task, projects)
+		if task == nil {
+			continue
 		}
+		project := taskProject(task, projects)
 		for _, file := range updateFilesInWindow(filepath.Join(base, slug, "updates"), opts) {
+			links := []Link{{Kind: "update", Target: file.Path}}
+			links = append([]Link{{Kind: "task", Target: slug}}, links...)
 			out = append(out, Item{
 				Kind: "update", Ref: slug, Source: "task", Project: project,
 				Title: updateTitle(file.Path), Detail: file.Name,
-				Links: []Link{{Kind: "task", Target: slug}, {Kind: "update", Target: file.Path}},
+				Links: links,
 			})
 		}
 	}

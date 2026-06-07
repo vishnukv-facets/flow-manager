@@ -176,6 +176,9 @@ export interface Briefing {
   window_start: string
   window_end: string
   needs_action: BriefingItem[]
+  closeout: BriefingItem[]
+  waiting: BriefingItem[]
+  next_up: BriefingItem[]
   fyi: BriefingItem[]
 }
 
@@ -196,6 +199,62 @@ export interface BriefingLink {
   label?: string
   target: string
   url?: string
+}
+
+export type WorkEventBucket =
+  | 'needs_action'
+  | 'closeout'
+  | 'waiting'
+  | 'next_up'
+  | 'fyi'
+  | 'handled'
+  | 'ignored'
+
+export interface WorkEventLink {
+  kind: string
+  label?: string
+  target: string
+  url?: string
+}
+
+export interface WorkEvent {
+  id: string
+  source: string
+  kind: string
+  event_key?: string
+  thread_key?: string
+  url?: string
+  title: string
+  summary?: string
+  actor?: string
+  authored_by_self?: boolean
+  occurred_at?: string
+  observed_at?: string
+  task_slug?: string
+  project_slug?: string
+  entity_kind?: string
+  entity_ref?: string
+  bucket: WorkEventBucket
+  urgency?: string
+  confidence?: number
+  reason_code?: string
+  reason_text?: string
+  links?: WorkEventLink[]
+}
+
+export interface WorkEventCounts {
+  needs_action: number
+  closeout: number
+  waiting: number
+  next_up: number
+  fyi: number
+  handled: number
+  ignored: number
+}
+
+export interface WorkEventResponse {
+  items: WorkEvent[]
+  counts: WorkEventCounts
 }
 
 export interface DiffCount {

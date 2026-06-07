@@ -10,7 +10,7 @@ import { ago, compact, compactTokens, dueTone } from '../lib/format'
 import { agendaCount, bucketByDue, type DueBuckets } from '../lib/agenda'
 import { throughputByWeek, timeToDone, tokensByWeek, type WeekPoint } from '../lib/analytics'
 import { clickable } from '../lib/a11y'
-import type { ActivityDay, BriefingItem, InboxFeedEntry, PlaybookRun, ProjectMC, TaskView, TokenDay, UiStats } from '../lib/types'
+import type { ActivityDay, Briefing, BriefingItem, InboxFeedEntry, PlaybookRun, ProjectMC, TaskView, TokenDay, UiStats } from '../lib/types'
 
 const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
 const WEEKDAYS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat']
@@ -123,33 +123,37 @@ function useGreeting() {
   return info
 }
 
-function BriefingPanel({ actionItems, fyiItems, onOpen }: { actionItems: BriefingItem[]; fyiItems: BriefingItem[]; onOpen: (href: string) => void }) {
-  if (actionItems.length === 0 && fyiItems.length === 0) return null
+function BriefingPanel({ briefing, onOpen }: { briefing?: Briefing; onOpen: (href: string) => void }) {
+  const sections = [
+    { key: 'needs', label: 'Needs action', items: briefing?.needs_action ?? [], limit: 5, empty: 'Nothing needs a decision right now.' },
+    { key: 'closeout', label: 'Closeout', items: briefing?.closeout ?? [], limit: 4, empty: 'No closeout checks.' },
+    { key: 'waiting', label: 'Waiting', items: briefing?.waiting ?? [], limit: 4, empty: 'Nothing is waiting.' },
+    { key: 'next', label: 'Next up', items: briefing?.next_up ?? [], limit: 4, empty: 'No startable next-up work.' },
+    { key: 'fyi', label: 'FYI', items: briefing?.fyi ?? [], limit: 4, empty: 'No recent FYI activity in this window.', muted: true },
+  ]
+  const total = sections.reduce((n, s) => n + s.items.length, 0)
+  if (total === 0) return null
   return (
     <section className="briefing-panel">
       <div className="section-head">
         <span className="eyebrow"><Activity size={13} /> Morning briefing</span>
-        <span className="section-count">{actionItems.length + fyiItems.length}</span>
+        <span className="section-count">{total}</span>
         <div className="spacer" />
-        <span className="faint" style={{ fontSize: 12 }}>action first, FYI second</span>
+        <span className="faint" style={{ fontSize: 12 }}>action · closeout · waiting · next · FYI</span>
       </div>
       <div className="briefing-grid">
-        <div className="briefing-column">
-          <div className="briefing-label">Needs action</div>
-          {actionItems.length === 0 ? (
-            <div className="briefing-empty">Nothing needs a decision right now.</div>
-          ) : (
-            actionItems.slice(0, 5).map((item) => <BriefingRow key={`${item.kind}:${item.ref}`} item={item} onOpen={onOpen} />)
-          )}
-        </div>
-        <div className="briefing-column muted">
-          <div className="briefing-label">FYI</div>
-          {fyiItems.length === 0 ? (
-            <div className="briefing-empty">No recent FYI activity in this window.</div>
-          ) : (
-            fyiItems.slice(0, 4).map((item) => <BriefingRow key={`${item.kind}:${item.ref}:${item.title}`} item={item} onOpen={onOpen} />)
-          )}
-        </div>
+        {sections.map((section) => (
+          <div className={`briefing-column${section.muted ? ' muted' : ''}`} key={section.key}>
+            <div className="briefing-label">{section.label}</div>
+            {section.items.length === 0 ? (
+              <div className="briefing-empty">{section.empty}</div>
+            ) : (
+              section.items.slice(0, section.limit).map((item) => (
+                <BriefingRow key={`${section.key}:${item.kind}:${item.ref}:${item.title}`} item={item} onOpen={onOpen} />
+              ))
+            )}
+          </div>
+        ))}
       </div>
     </section>
   )
@@ -718,8 +722,7 @@ export function Overview() {
       </div>
 
       <BriefingPanel
-        actionItems={overview?.briefing?.needs_action ?? []}
-        fyiItems={overview?.briefing?.fyi ?? []}
+        briefing={overview?.briefing}
         onOpen={navigate}
       />
 

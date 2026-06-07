@@ -120,6 +120,7 @@ func (s *Server) registerAPIRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/actions", s.handleAction)
 	mux.HandleFunc("/api/hooks/agent", s.handleAgentHook)
 	mux.HandleFunc("/api/overview", s.handleOverview)
+	mux.HandleFunc("/api/work-events", s.handleWorkEvents)
 	mux.HandleFunc("/api/fs/entries", s.handleFSEntries)
 	mux.HandleFunc("/api/fs/mkdir", s.handleFSMkdir)
 	mux.HandleFunc("/api/tasks", s.handleTasks)

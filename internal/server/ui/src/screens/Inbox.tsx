@@ -1,15 +1,16 @@
 import { useEffect, useMemo, useState } from 'react'
 import { useLocation } from 'wouter'
 import { CheckCheck, ExternalLink, Play } from 'lucide-react'
-import { useAction, useInbox, useInboxConversation } from '../lib/query'
+import { useAction, useInbox, useInboxConversation, useWorkEvents } from '../lib/query'
 import { useDocumentTitle } from '../lib/useDocumentTitle'
 import { NudgeComposer } from '../components/NudgeComposer'
 import { EmptyState, ErrorNote, Loading, ProviderIcon, SourceIcon, StatusDot } from '../components/ui'
+import { WorkEventRow, strongerWorkEvent } from '../components/WorkEventRow'
 import { Md } from '../components/Markdown'
 import { ClaudeFlowScene } from '../components/ClaudeMascot'
 import { ago, dateTime } from '../lib/format'
 import { clickable } from '../lib/a11y'
-import type { InboxFeedEntry } from '../lib/types'
+import type { InboxFeedEntry, WorkEvent } from '../lib/types'
 
 // Slack/GitHub use :claude:/:codex: shortcodes to trigger an agent. In rendered
 // markdown we swap them for the real brand logos (inline images, sized by the
@@ -65,7 +66,9 @@ interface Convo {
 
 export function InboxScreen() {
   useDocumentTitle('Inbox')
+  const [, navigate] = useLocation()
   const { data, isLoading, error } = useInbox()
+  const { data: workEvents } = useWorkEvents({ limit: 200 })
   const [selected, setSelected] = useState<string | null>(null)
 
   const convos = useMemo<Convo[]>(() => {
@@ -90,6 +93,7 @@ export function InboxScreen() {
     }
     return [...map.values()].sort((a, b) => Date.parse(b.latest.timestamp) - Date.parse(a.latest.timestamp))
   }, [data])
+  const eventByTask = useMemo(() => strongestEventByTask(workEvents?.items), [workEvents])
 
   useEffect(() => {
     if (!selected && convos.length) setSelected(convos[0].slug)
@@ -136,6 +140,7 @@ export function InboxScreen() {
                 {c.project && <span className="tag">{c.project}</span>}
                 {c.unread > 1 && <span className="tag">{c.unread} new</span>}
               </div>
+              <WorkEventRow event={eventByTask.get(c.slug)} compact onOpen={navigate} />
             </div>
           ))}
         </div>
@@ -150,7 +155,13 @@ export function InboxScreen() {
 function Conversation({ slug, unread }: { slug: string; unread: number }) {
   const [, navigate] = useLocation()
   const { data, isLoading, error } = useInboxConversation(slug)
+  const { data: workEvents } = useWorkEvents({ task: slug, limit: 20 })
   const action = useAction()
+  const primaryEvent = useMemo(() => {
+    let picked: WorkEvent | undefined
+    for (const event of workEvents?.items ?? []) picked = strongerWorkEvent(picked, event)
+    return picked
+  }, [workEvents])
   const markRead = () => {
     if (unread <= 0 || action.isPending) return
     action.mutate({ kind: 'mark-read', target: slug })
@@ -178,6 +189,8 @@ function Conversation({ slug, unread }: { slug: string; unread: number }) {
           <Play size={13} /> Open session
         </button>
       </div>
+
+      <WorkEventRow event={primaryEvent} onOpen={navigate} />
 
       <div className="inbox-reply">
         <div className="eyebrow row gap" style={{ gap: 7 }}>
@@ -210,4 +223,13 @@ function Conversation({ slug, unread }: { slug: string; unread: number }) {
       </div>
     </div>
   )
+}
+
+function strongestEventByTask(items?: WorkEvent[]): Map<string, WorkEvent> {
+  const map = new Map<string, WorkEvent>()
+  for (const event of items ?? []) {
+    if (!event.task_slug) continue
+    map.set(event.task_slug, strongerWorkEvent(map.get(event.task_slug), event))
+  }
+  return map
 }

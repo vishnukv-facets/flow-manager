@@ -10,8 +10,10 @@ const WATCH_KEY = 'FLOW_STEERING_WATCH_CHANNELS'
 function parseIds(csv: string): string[] {
   return csv
     .split(/[,\s]+/)
-    .map((s) => s.trim())
-    .filter(Boolean)
+    .flatMap((s) => {
+      const id = s.trim()
+      return id ? [id] : []
+    })
 }
 
 // WatchedChannels is a checkbox picker for the channels the attention router
@@ -36,6 +38,8 @@ export function WatchedChannels() {
   const [filter, setFilter] = useState('')
 
   const current = selected ?? savedSet
+  const savedIDs = useMemo(() => Array.from(current).sort(), [current])
+  const errorMessage = error instanceof Error ? error.message : error ? String(error) : ''
   const dirty = useMemo(() => {
     if (selected === null) return false
     if (selected.size !== savedSet.size) return true
@@ -63,7 +67,7 @@ export function WatchedChannels() {
       (c) => !q || c.name.toLowerCase().includes(q) || c.id.toLowerCase().includes(q),
     )
     // Watched first, then alphabetical — so the current selection stays visible.
-    return [...list].sort((a, b) => {
+    return list.sort((a, b) => {
       const aw = current.has(a.id) ? 0 : 1
       const bw = current.has(b.id) ? 0 : 1
       if (aw !== bw) return aw - bw
@@ -94,8 +98,23 @@ export function WatchedChannels() {
             <Loader2 size={14} className="spin" /> loading channels…
           </div>
         ) : error ? (
-          <div className="slack-error">
-            Couldn&apos;t list channels — connect Slack (a bot token with <code>channels:read</code>) first.
+          <div className="wc-fallback">
+            <div className="slack-error">
+              Couldn&apos;t list Slack channels: {errorMessage || 'unknown error'}.
+              {savedIDs.length > 0 ? ' Your saved watch list is still active.' : ' Connect Slack with channel-list access to pick channels here.'}
+            </div>
+            {savedIDs.length > 0 ? (
+              <div className="wc-list saved-only">
+                {savedIDs.map((id) => (
+                  <div key={id} className="wc-row on">
+                    <Hash size={12} className="faint" />
+                    <span className="wc-name clip">saved channel</span>
+                    <span className="spacer" />
+                    <span className="wc-id mono faint">{id}</span>
+                  </div>
+                ))}
+              </div>
+            ) : null}
           </div>
         ) : (channels ?? []).length === 0 ? (
           <div className="dim">No channels available yet. Connect Slack to populate this list.</div>

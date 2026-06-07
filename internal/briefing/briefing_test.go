@@ -74,9 +74,9 @@ func TestBuildSeparatesNeedsActionFromFYIAndLinksEvidence(t *testing.T) {
 	requireLink(t, attention, "source", "https://example.slack.com/archives/C1/p1001")
 	requireLink(t, attention, "trace", "trace-deploy")
 
-	requireItem(t, got.NeedsAction, "waiting", "blocked-rollout")
-	requireItem(t, got.NeedsAction, "stale", "cold-session")
-	requireItem(t, got.NeedsAction, "ready", "ready-briefing")
+	requireItem(t, got.Waiting, "waiting", "blocked-rollout")
+	requireItem(t, got.FYI, "stale", "cold-session")
+	requireItem(t, got.NextUp, "ready", "ready-briefing")
 
 	requireItem(t, got.FYI, "shipped", "shipped-widget")
 	update := requireItem(t, got.FYI, "update", "deploy-followup")
@@ -84,6 +84,21 @@ func TestBuildSeparatesNeedsActionFromFYIAndLinksEvidence(t *testing.T) {
 
 	if _, ok := findItem(got.NeedsAction, "shipped", "shipped-widget"); ok {
 		t.Fatalf("shipped task must be FYI, not needs-action: %+v", got.NeedsAction)
+	}
+}
+
+func TestBriefingSkipsOrphanTaskUpdateDirectory(t *testing.T) {
+	db, root := briefingTestDB(t)
+	now := time.Date(2026, 6, 7, 9, 0, 0, 0, time.UTC)
+	seedBriefingProject(t, db, root, "flow-manager")
+	writeBriefingUpdate(t, root, "ghost-task", "2026-06-07-note.md", "Ghost note\n")
+
+	got, err := Build(db, root, Options{Now: now, Since: now.Add(-24 * time.Hour)})
+	if err != nil {
+		t.Fatalf("Build: %v", err)
+	}
+	if _, ok := findItem(got.FYI, "update", "ghost-task"); ok {
+		t.Fatalf("orphan task update should not be shown in briefing: %+v", got.FYI)
 	}
 }
 
@@ -96,6 +111,14 @@ func TestRenderMarkdownGroupsNeedsActionAndFYI(t *testing.T) {
 			Kind: "attention", Ref: "feed-deploy", Source: "slack", Project: "flow-manager",
 			Urgency: "urgent", Title: "Rollback note needed", Action: "forward",
 			Links: []Link{{Kind: "attention", Target: "feed-deploy"}, {Kind: "task", Target: "deploy-followup"}},
+		}},
+		Waiting: []Item{{
+			Kind: "waiting", Ref: "blocked-rollout", Project: "flow-manager",
+			Title: "Blocked rollout", Detail: "waiting on approval",
+		}},
+		NextUp: []Item{{
+			Kind: "ready", Ref: "ready-briefing", Project: "flow-manager",
+			Title: "Ready briefing work", Detail: "high-priority backlog is startable",
 		}},
 		FYI: []Item{{
 			Kind: "shipped", Ref: "shipped-widget", Project: "flow-manager",
@@ -110,6 +133,10 @@ func TestRenderMarkdownGroupsNeedsActionAndFYI(t *testing.T) {
 		"- [attention] Rollback note needed",
 		"action: forward",
 		"links: attention:feed-deploy · task:deploy-followup",
+		"## Waiting",
+		"- [waiting] Blocked rollout",
+		"## Next up",
+		"- [ready] Ready briefing work",
 		"## FYI",
 		"### flow-manager",
 		"- [shipped] Shipped widget",

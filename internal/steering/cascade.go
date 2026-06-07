@@ -91,6 +91,38 @@ func (c *Cascade) autonomy() AutonomyPolicy {
 	return DefaultAutonomy()
 }
 
+func (c *Cascade) watchConfig() WatchConfig {
+	cfg := c.Config
+	if c.ConfigFn != nil {
+		cfg = c.ConfigFn()
+	}
+	return cfg
+}
+
+// ShouldObserve is the dispatcher's cheap prefilter. It mirrors only the Slack
+// scope rules that decide whether a message can ever be operator-relevant:
+// watched channel, DM/MPIM, direct mention, or operator self-reply for resolving
+// an open attention card. Full Stage 0 still owns mute/self/bot/drop reasoning.
+func (c *Cascade) ShouldObserve(ev monitor.InboundEvent) bool {
+	if connectorOf(ev) == "github" {
+		return true
+	}
+	if ev.Kind != "message" && ev.Kind != "app_mention" {
+		return false
+	}
+	cfg := c.watchConfig()
+	if containsFold(cfg.Identity.UserIDs, ev.UserID) {
+		return true
+	}
+	if ev.ChannelType == "im" || ev.ChannelType == "mpim" {
+		return true
+	}
+	if ev.Kind == "app_mention" || mentionsOperator(ev.Text, cfg.MentionUserIDs) {
+		return true
+	}
+	return cfg.WatchedChannels[ev.Channel]
+}
+
 type autonomyTrace struct {
 	action, decision, reason string
 }
@@ -175,10 +207,7 @@ func (c *Cascade) observe(ctx context.Context, ev monitor.InboundEvent, origin s
 	start := c.now()
 	cleaned := c.cleanText(ctx, ev.Text)
 	tr := c.newTrace(ev, origin, cleaned)
-	cfg := c.Config
-	if c.ConfigFn != nil {
-		cfg = c.ConfigFn()
-	}
+	cfg := c.watchConfig()
 
 	s0 := Stage0(ev, cfg)
 	if !s0.Pass {

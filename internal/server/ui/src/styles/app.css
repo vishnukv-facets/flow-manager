@@ -1916,6 +1916,68 @@ select.input {
   border-top: 0;
 }
 
+/* Shared WorkEvent metadata strip used by Inbox and Attention. */
+.workevent-row {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  min-width: 0;
+  padding: 7px 9px;
+  border: 1px solid var(--border-faint);
+  border-radius: var(--r-sm);
+  background: var(--bg-1);
+  color: var(--text-2);
+  font-size: 12px;
+  line-height: 1.35;
+}
+.workevent-row.compact {
+  gap: 6px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  font-size: 11.5px;
+}
+.workevent-row.compact .badge {
+  height: 20px;
+  padding: 3px 7px;
+  font-size: 10px;
+}
+.workevent-urgency {
+  flex: 0 0 auto;
+  color: var(--text-3);
+  font-size: 10.5px;
+}
+.workevent-reason {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+.workevent-links {
+  display: flex;
+  flex: 0 0 auto;
+  gap: 7px;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+.workevent-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  border: 0;
+  padding: 0;
+  background: transparent;
+  color: var(--accent-hi);
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+  text-decoration: none;
+}
+.workevent-link:hover {
+  text-decoration: underline;
+}
+.detail-head + .workevent-row {
+  margin: -4px 0 14px;
+}
+
 /* ----------------------------- detail header ---------------------------- */
 .detail-head {
   display: flex;
@@ -3177,7 +3239,7 @@ select.input {
 }
 .briefing-grid {
   display: grid;
-  grid-template-columns: minmax(0, 1.1fr) minmax(280px, 0.9fr);
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
   gap: 12px;
 }
 .briefing-column {

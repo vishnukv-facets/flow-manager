@@ -122,6 +122,41 @@ func TestStage0GitHubSelfAuthored(t *testing.T) {
 	}
 }
 
+func TestStage0GitHubAllowsTaskLinkedSelfAuthoredHeadUpdate(t *testing.T) {
+	cfg := githubCfg()
+	cfg.TaskLinkedGitHubThreads = map[string]bool{"o/r:gh-pr:o/r#21": true}
+	ev := ghEvent("o/r", "octocat-self", "head changed")
+	ev.Kind = "pr_head_updated"
+	ev.ThreadTS = "gh-pr:o/r#21"
+	got := Stage0(ev, cfg)
+	if !got.Pass {
+		t.Fatalf("Stage0 = %+v, want task-linked self-authored head update to pass", got)
+	}
+}
+
+func TestStage0GitHubAllowsTaskLinkedAuthorlessHeadUpdate(t *testing.T) {
+	cfg := githubCfg()
+	cfg.TaskLinkedGitHubThreads = map[string]bool{"o/r:gh-pr:o/r#21": true}
+	ev := ghEvent("o/r", "", "head changed")
+	ev.Kind = "pr_head_updated"
+	ev.ThreadTS = "gh-pr:o/r#21"
+	got := Stage0(ev, cfg)
+	if !got.Pass {
+		t.Fatalf("Stage0 = %+v, want task-linked authorless head update to pass", got)
+	}
+}
+
+func TestStage0GitHubStillDropsUnlinkedSelfAuthoredInvolved(t *testing.T) {
+	cfg := githubCfg()
+	ev := ghEvent("o/r", "octocat-self", "self authored")
+	ev.Kind = "pr_involved"
+	ev.ThreadTS = "gh-pr:o/r#21"
+	got := Stage0(ev, cfg)
+	if got.Pass || got.DropReason != "self-authored" {
+		t.Fatalf("Stage0 = %+v, want self-authored drop", got)
+	}
+}
+
 func TestStage0GitHubMutedRepo(t *testing.T) {
 	cfg := githubCfg()
 	cfg.MutedChannels = map[string]bool{"o/r": true}

@@ -25,6 +25,7 @@ import type {
   TranscriptResponse,
   UiAgent,
   UiData,
+  WorkEventResponse,
   WorkdirView,
 } from './types'
 
@@ -40,20 +41,21 @@ export const queryClient = new QueryClient({
 })
 
 // ----- live invalidation: events + reconnect drive refetches -------------
-// The anime quote is deliberately excluded: it must only refetch when the
-// greeting bucket changes (its query key), never on every activity event —
-// that keeps us off the animechan rate limit.
-const notQuote = { predicate: (q: { queryKey: readonly unknown[] }) => q.queryKey[0] !== 'quote' }
+// Live events should refresh live work data, not slow/static metadata. Quote,
+// settings, and Slack channel listing have their own refresh cadence; invalidating
+// Slack channels on every message can hammer conversations.list into rate limits.
+const liveInvalidationExclusions = new Set(['quote', 'settings', 'slack-channels', 'slack-setup'])
+const liveData = { predicate: (q: { queryKey: readonly unknown[] }) => !liveInvalidationExclusions.has(String(q.queryKey[0])) }
 let invalidateTimer: ReturnType<typeof setTimeout> | null = null
 function scheduleInvalidate() {
   if (invalidateTimer) return
   invalidateTimer = setTimeout(() => {
     invalidateTimer = null
-    queryClient.invalidateQueries(notQuote)
+    queryClient.invalidateQueries(liveData)
   }, 500)
 }
 events.on(() => scheduleInvalidate())
-rpc.onReady(() => queryClient.invalidateQueries(notQuote))
+rpc.onReady(() => queryClient.invalidateQueries(liveData))
 
 // ----- query string helper ----------------------------------------------
 function qs(params: Record<string, string | boolean | number | undefined>): string {
@@ -235,8 +237,30 @@ export function useAttentionDecision(feedId: string | null) {
     queryFn: () => apiGet<SteeringTrace>(`/api/attention/decision?feed_id=${encodeURIComponent(feedId!)}`),
   })
 }
+export interface WorkEventFilters {
+  source?: string
+  bucket?: string
+  task?: string
+  limit?: number
+}
+export function useWorkEvents(filters: WorkEventFilters = {}) {
+  return useQuery({
+    queryKey: ['work-events', filters],
+    queryFn: () =>
+      apiGet<WorkEventResponse>(
+        `/api/work-events${qs(filters as Record<string, string | boolean | number | undefined>)}`,
+      ),
+    placeholderData: keepPreviousData,
+  })
+}
 export function useSlackChannels() {
-  return useQuery({ queryKey: ['slack-channels'], queryFn: () => apiGet<SlackChannel[]>('/api/slack/channels') })
+  return useQuery({
+    queryKey: ['slack-channels'],
+    queryFn: () => apiGet<SlackChannel[]>('/api/slack/channels'),
+    staleTime: 10 * 60 * 1000,
+    gcTime: 30 * 60 * 1000,
+    retry: 0,
+  })
 }
 // Keyed by hour bucket ("YYYY-MM-DD-HH"): a new quote is fetched only when the
 // hour flips. staleTime Infinity means it's never refetched within the hour no

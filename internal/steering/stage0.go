@@ -23,6 +23,11 @@ type WatchConfig struct {
 	Identity       OperatorIdentity
 	MentionUserIDs []string
 	GitHubIdentity []string
+	// TaskLinkedGitHubThreads contains monitor.ThreadKey(repo, gh-pr:/gh-issue:
+	// tag) entries for active tasks that already own a GitHub item. Lifecycle
+	// events on these threads must not be dropped just because the poll event is
+	// self-authored or authorless.
+	TaskLinkedGitHubThreads map[string]bool
 }
 
 // Stage0Result is the outcome of the free deterministic filter.
@@ -52,10 +57,11 @@ func Stage0(ev monitor.InboundEvent, cfg WatchConfig) Stage0Result {
 // the LinkTag-derived thread key. ev.Channel is owner/repo; ev.ThreadTS is the
 // gh-pr/gh-issue link tag.
 func stage0GitHub(ev monitor.InboundEvent, cfg WatchConfig) Stage0Result {
-	if containsFold(cfg.GitHubIdentity, ev.UserID) {
+	taskLinked := githubTaskLinked(ev, cfg)
+	if containsFold(cfg.GitHubIdentity, ev.UserID) && !(taskLinked && githubLifecycleNeedsTaskAttention(ev.Kind)) {
 		return Stage0Result{DropReason: "self-authored"}
 	}
-	if strings.TrimSpace(ev.UserID) == "" {
+	if strings.TrimSpace(ev.UserID) == "" && !(taskLinked && githubLifecycleNeedsTaskAttention(ev.Kind)) {
 		return Stage0Result{DropReason: "no author"}
 	}
 	if cfg.MutedChannels[ev.Channel] { // ev.Channel is owner/repo
@@ -75,6 +81,20 @@ func stage0GitHub(ev monitor.InboundEvent, cfg WatchConfig) Stage0Result {
 		return Stage0Result{DropReason: "muted thread"}
 	}
 	return Stage0Result{Pass: true, ThreadKey: key}
+}
+
+func githubTaskLinked(ev monitor.InboundEvent, cfg WatchConfig) bool {
+	key := monitor.ThreadKey(ev.Channel, ev.ThreadTS)
+	return key != "" && cfg.TaskLinkedGitHubThreads[key]
+}
+
+func githubLifecycleNeedsTaskAttention(kind string) bool {
+	switch kind {
+	case "pr_head_updated", "pr_merged", "pr_review_changes_requested", "pr_review_comment", "pr_comment", "issue_comment":
+		return true
+	default:
+		return false
+	}
 }
 
 // stage0Slack applies the no-LLM drop rules (spec §6, Stage 0) for the Slack

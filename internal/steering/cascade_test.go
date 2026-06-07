@@ -842,6 +842,29 @@ func TestCascadeConfigFnOverridesStatic(t *testing.T) {
 	}
 }
 
+func TestCascadeShouldObserveUsesLiveScope(t *testing.T) {
+	c, _ := cascadeFixture(t)
+	c.ConfigFn = func() WatchConfig {
+		return WatchConfig{
+			WatchedChannels: map[string]bool{"C_WATCHED": true},
+			MentionUserIDs:  []string{"U_ME"},
+		}
+	}
+
+	if c.ShouldObserve(msg("C_NOISE", "1.1", "U_OTHER", "plain noise")) {
+		t.Fatal("unwatched channel message without mention should not enter cascade")
+	}
+	if !c.ShouldObserve(msg("C_WATCHED", "1.1", "U_OTHER", "watched")) {
+		t.Fatal("watched channel message should enter cascade")
+	}
+	if !c.ShouldObserve(msg("C_NOISE", "1.2", "U_OTHER", "ping <@U_ME>")) {
+		t.Fatal("operator mention in an unwatched channel should enter cascade")
+	}
+	if !c.ShouldObserve(monitor.InboundEvent{Kind: "message", ChannelType: "im", Channel: "D1", TS: "2.1", ThreadTS: "2.1", UserID: "U_OTHER", Text: "dm"}) {
+		t.Fatal("DM should enter cascade")
+	}
+}
+
 func TestCascadeConsumesLearnedSuppressionsWithoutRestart(t *testing.T) {
 	t.Setenv("FLOW_STEERING_WATCH_CHANNELS", "C_NOISE")
 	c, db := cascadeFixture(t)

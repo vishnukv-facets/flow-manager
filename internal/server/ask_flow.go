@@ -6,10 +6,12 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"net/url"
 	"sort"
 	"strings"
 
 	"flow/internal/flowdb"
+	"flow/internal/workevents"
 )
 
 const askFlowMaxCitations = 12
@@ -54,6 +56,18 @@ func (s *Server) answerAskFlow(ctx context.Context, query string) (AskFlowRespon
 		err       error
 	)
 	switch intent {
+	case "needs_action":
+		answer, citations, err = s.askFlowWorkEvents(
+			workevents.Filter{Bucket: workevents.BucketNeedsAction, Limit: 8},
+			"Work that needs you",
+			"No WorkEvents currently need your attention.",
+		)
+	case "closeout":
+		answer, citations, err = s.askFlowWorkEvents(
+			workevents.Filter{Bucket: workevents.BucketCloseout, Limit: 8},
+			"Work you can close out",
+			"No closeout WorkEvents found.",
+		)
 	case "look_now":
 		answer, citations, err = s.askFlowLookNow(ctx)
 	case "blockers":
@@ -83,6 +97,10 @@ func (s *Server) answerAskFlow(ctx context.Context, query string) (AskFlowRespon
 func classifyAskFlowIntent(query string) string {
 	q := strings.ToLower(query)
 	switch {
+	case strings.Contains(q, "needs me") || strings.Contains(q, "needs my attention") || strings.Contains(q, "need my attention"):
+		return "needs_action"
+	case strings.Contains(q, "what can i close") || strings.Contains(q, "can i close") || strings.Contains(q, "closeout") || strings.Contains(q, "close out"):
+		return "closeout"
 	case strings.Contains(q, "draft") && strings.Contains(q, "repl"):
 		return "draft_replies"
 	case strings.Contains(q, "blocker") || strings.Contains(q, "blocked") || strings.Contains(q, "waiting on"):
@@ -101,61 +119,32 @@ func classifyAskFlowIntent(query string) string {
 }
 
 func (s *Server) askFlowLookNow(ctx context.Context) (string, []AskFlowCitation, error) {
+	_ = ctx
+	sections := []struct {
+		bucket workevents.Bucket
+		label  string
+	}{
+		{workevents.BucketNeedsAction, "Needs action"},
+		{workevents.BucketCloseout, "Closeout"},
+		{workevents.BucketWaiting, "Waiting"},
+		{workevents.BucketNextUp, "Next up"},
+	}
+	lines := []string{"Start with needs-action and closeout, then waiting or next-up work."}
 	var citations []AskFlowCitation
-	var lines []string
-	lines = append(lines, "Start with the freshest operator-review items, then unblock active work, then pick from high-priority backlog.")
-
-	items, err := flowdb.ListFeedItems(s.cfg.DB, "new")
-	if err != nil {
-		return "", nil, err
-	}
-	if len(items) > 0 {
-		lines = append(lines, "", "Attention:")
-		for _, it := range takeFeedItems(items, 3) {
-			lines = append(lines, fmt.Sprintf("- %s — %s (%.0f%% confidence)", nonempty(it.Summary, it.ThreadKey), actionLabel(it.SuggestedAction), it.Confidence*100))
-			citations = append(citations, attentionCitation(ctx, s, it))
+	for _, section := range sections {
+		eventLines, eventCitations, err := s.askFlowWorkEventLines(workevents.Filter{Bucket: section.bucket, Limit: 4}, nil)
+		if err != nil {
+			return "", nil, err
 		}
-	}
-
-	tasks, err := s.askFlowTaskViews()
-	if err != nil {
-		return "", nil, err
-	}
-	waiting := filterTaskViews(tasks, func(t TaskView) bool { return t.WaitingOn != nil && *t.WaitingOn != "" && t.Status != "done" })
-	stale := filterTaskViews(tasks, func(t TaskView) bool { return t.StaleDays != nil && t.Status == "in-progress" })
-	inFlight := filterTaskViews(tasks, func(t TaskView) bool { return t.Status == "in-progress" && t.WaitingOn == nil })
-	backlog := filterTaskViews(tasks, func(t TaskView) bool { return t.Status == "backlog" && t.Priority == "high" })
-
-	if len(waiting) > 0 {
-		lines = append(lines, "", "Blocked active work:")
-		for _, task := range takeTaskViews(waiting, 3) {
-			lines = append(lines, fmt.Sprintf("- %s — waiting on %s", task.Name, *task.WaitingOn))
-			citations = append(citations, taskCitation(task))
+		if len(eventLines) == 0 {
+			continue
 		}
-	}
-	if len(stale) > 0 {
-		lines = append(lines, "", "Stale sessions:")
-		for _, task := range takeTaskViews(stale, 3) {
-			lines = append(lines, fmt.Sprintf("- %s — stale for %d day(s)", task.Name, *task.StaleDays))
-			citations = append(citations, taskCitation(task))
-		}
-	}
-	if len(inFlight) > 0 {
-		lines = append(lines, "", "In flight:")
-		for _, task := range takeTaskViews(inFlight, 3) {
-			lines = append(lines, fmt.Sprintf("- %s — %s", task.Name, task.TemporalSummary))
-			citations = append(citations, taskCitation(task))
-		}
-	}
-	if len(backlog) > 0 {
-		lines = append(lines, "", "High-priority backlog:")
-		for _, task := range takeTaskViews(backlog, 3) {
-			lines = append(lines, fmt.Sprintf("- %s — %s", task.Name, task.TemporalSummary))
-			citations = append(citations, taskCitation(task))
-		}
+		lines = append(lines, "", section.label+":")
+		lines = append(lines, eventLines...)
+		citations = append(citations, eventCitations...)
 	}
 	if len(citations) == 0 {
-		lines = append(lines, "", "No new Attention cards, blockers, stale sessions, or high-priority backlog tasks are visible.")
+		return "No actionable WorkEvents are visible right now.", nil, nil
 	}
 	return strings.Join(lines, "\n"), citations, nil
 }
@@ -231,6 +220,14 @@ func (s *Server) askFlowChanged(ctx context.Context) (string, []AskFlowCitation,
 		lines = append(lines, fmt.Sprintf("- %s — %s", row.task.Name, row.file.Filename))
 		citations = append(citations, updateCitation(row.task, row.file))
 	}
+	eventLines, eventCitations, err := s.askFlowWorkEventLines(workevents.Filter{Limit: 32}, func(ev workevents.Event) bool {
+		return ev.Source != "flow"
+	})
+	if err != nil {
+		return "", nil, err
+	}
+	lines = append(lines, eventLines...)
+	citations = append(citations, eventCitations...)
 	items, err := flowdb.ListFeedItems(s.cfg.DB, "new")
 	if err != nil {
 		return "", nil, err
@@ -243,6 +240,50 @@ func (s *Server) askFlowChanged(ctx context.Context) (string, []AskFlowCitation,
 		return "No task updates or new Attention cards were found.", nil, nil
 	}
 	return "Recent changes I found:\n" + strings.Join(lines, "\n"), citations, nil
+}
+
+func (s *Server) askFlowWorkEvents(filter workevents.Filter, heading, empty string) (string, []AskFlowCitation, error) {
+	lines, citations, err := s.askFlowWorkEventLines(filter, nil)
+	if err != nil {
+		return "", nil, err
+	}
+	if len(lines) == 0 {
+		return empty, nil, nil
+	}
+	return heading + ":\n" + strings.Join(lines, "\n"), citations, nil
+}
+
+func (s *Server) askFlowWorkEventLines(filter workevents.Filter, keep func(workevents.Event) bool) ([]string, []AskFlowCitation, error) {
+	if filter.Limit <= 0 {
+		filter.Limit = 8
+	}
+	result, err := workevents.Build(s.cfg.DB, s.cfg.FlowRoot, filter)
+	if err != nil {
+		return nil, nil, err
+	}
+	var lines []string
+	var citations []AskFlowCitation
+	for _, ev := range result.Items {
+		if keep != nil && !keep(ev) {
+			continue
+		}
+		lines = append(lines, askFlowWorkEventLine(ev))
+		citations = append(citations, workEventCitations(ev)...)
+	}
+	return lines, citations, nil
+}
+
+func askFlowWorkEventLine(ev workevents.Event) string {
+	title := nonempty(ev.Title, ev.EntityRef, ev.ID)
+	if ev.TaskSlug != "" {
+		title += " [" + ev.TaskSlug + "]"
+	}
+	reason := nonempty(ev.ReasonText, ev.Summary, ev.Kind)
+	if summary := strings.TrimSpace(ev.Summary); summary != "" && summary != reason {
+		reason += "; " + summary
+	}
+	bucket := strings.ReplaceAll(string(ev.Bucket), "_", " ")
+	return fmt.Sprintf("- %s: %s — %s", bucket, title, reason)
 }
 
 func (s *Server) askFlowDraftReplies(ctx context.Context) (string, []AskFlowCitation, error) {
@@ -428,6 +469,68 @@ func attentionCitation(ctx context.Context, s *Server, it flowdb.FeedItem) AskFl
 		URL:     "/attention",
 		Snippet: nonempty(it.Reason, actionLabel(it.SuggestedAction)),
 	}
+}
+
+func workEventCitations(ev workevents.Event) []AskFlowCitation {
+	var citations []AskFlowCitation
+	for _, link := range ev.Links {
+		switch link.Kind {
+		case "attention":
+			citations = append(citations, AskFlowCitation{
+				Type:    "attention",
+				ID:      link.Target,
+				Title:   nonempty(ev.Title, link.Target),
+				URL:     "/attention",
+				Snippet: nonempty(ev.ReasonText, ev.Summary),
+			})
+		case "project":
+			citations = append(citations, AskFlowCitation{
+				Type:    "project",
+				Slug:    link.Target,
+				Title:   nonempty(link.Label, ev.ProjectSlug, link.Target),
+				URL:     "/project/" + url.PathEscape(link.Target),
+				Snippet: nonempty(ev.ReasonText, ev.Summary),
+			})
+		case "source":
+			target := nonempty(link.URL, link.Target, ev.URL)
+			if target == "" {
+				continue
+			}
+			citations = append(citations, AskFlowCitation{
+				Type:    "source",
+				ID:      target,
+				Title:   nonempty(link.Label, ev.Source, "source"),
+				URL:     target,
+				Snippet: nonempty(ev.Summary, ev.ReasonText),
+			})
+		case "task":
+			citations = append(citations, AskFlowCitation{
+				Type:    "task",
+				Slug:    link.Target,
+				Title:   nonempty(link.Label, ev.Title, link.Target),
+				URL:     "/session/" + url.PathEscape(link.Target),
+				Snippet: nonempty(ev.ReasonText, ev.Summary),
+			})
+		case "trace":
+			citations = append(citations, AskFlowCitation{
+				Type:    "trace",
+				ID:      link.Target,
+				Title:   nonempty(link.Label, ev.Title+" trace", link.Target),
+				URL:     "/attention",
+				Snippet: nonempty(ev.ReasonText, ev.Summary),
+			})
+		}
+	}
+	if len(citations) == 0 && ev.TaskSlug != "" {
+		citations = append(citations, AskFlowCitation{
+			Type:    "task",
+			Slug:    ev.TaskSlug,
+			Title:   nonempty(ev.Title, ev.TaskSlug),
+			URL:     "/session/" + url.PathEscape(ev.TaskSlug),
+			Snippet: nonempty(ev.ReasonText, ev.Summary),
+		})
+	}
+	return citations
 }
 
 func searchCitation(result flowdb.SearchResult) AskFlowCitation {
