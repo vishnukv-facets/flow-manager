@@ -1,15 +1,13 @@
 import { useEffect, useMemo, useState, type ReactNode } from 'react'
-import { AlertTriangle, Bell, CheckCircle2, Copy, Database, ExternalLink, Globe2, Link2, Loader2, MonitorCog, Moon, PlugZap, RotateCw, Save, Settings as SettingsIcon, SlidersHorizontal, Sun } from 'lucide-react'
-import { useAction, useHealth, useIngressStatus, useSettings, useUiData } from '../lib/query'
-import { confirmAction } from '../lib/confirm'
-import { pushToast } from '../lib/toast'
+import { Bell, CheckCircle2, Database, Loader2, MonitorCog, Moon, PlugZap, Save, Settings as SettingsIcon, SlidersHorizontal, Sun } from 'lucide-react'
+import { useHealth, useSettings, useUiData } from '../lib/query'
 import { useDocumentTitle } from '../lib/useDocumentTitle'
 import { getTheme, onThemeChange, toggleTheme, type Theme } from '../lib/theme'
 import { ErrorNote, Loading, ProviderIcon, SourceIcon } from '../components/ui'
-import { SlackConnect } from '../components/SlackConnect'
+import { ConfigField, SettingsPanel, SettingsSection, useConfigDraft } from '../components/SettingsPanels'
 import { WatchedChannels } from '../components/WatchedChannels'
 import { AutonomyPanel } from '../components/AutonomyPanel'
-import type { IngressStatus, SettingField, ToolCapability } from '../lib/types'
+import type { SettingField, ToolCapability } from '../lib/types'
 import { useMascotPrefs, setMascotPrefs, NAP_OPTIONS } from '../lib/mascot'
 
 type BrowserNotificationPermission = NotificationPermission | 'unsupported'
@@ -132,10 +130,6 @@ export function Settings() {
         </div>
       </SettingsSection>
 
-      <SettingsSection title="Slack" hint="Three steps, one approval — reactions become sessions.">
-        <SlackConnect />
-      </SettingsSection>
-
       <SettingsSection title="Steering" hint="What the attention router watches beyond DMs and mentions.">
         <WatchedChannels />
         <AutonomyPanel />
@@ -158,18 +152,6 @@ export function Settings() {
   )
 }
 
-function SettingsSection({ title, hint, children }: { title: string; hint?: string; children: ReactNode }) {
-  return (
-    <section className="settings-section">
-      <div className="settings-section-head">
-        <span className="eyebrow">{title}</span>
-        {hint && <span className="settings-section-hint">{hint}</span>}
-      </div>
-      {children}
-    </section>
-  )
-}
-
 function SummaryItem({ label, value, mono = false }: { label: string; value: string; mono?: boolean }) {
   return (
     <div className="sum-item">
@@ -179,34 +161,18 @@ function SummaryItem({ label, value, mono = false }: { label: string; value: str
   )
 }
 
-function SettingsPanel({ title, icon, children }: { title: string; icon: ReactNode; children: ReactNode }) {
-  return (
-    <section className="settings-card">
-      <div className="settings-card-head">
-        <span>{icon}</span>
-        <h2>{title}</h2>
-      </div>
-      <div className="settings-card-body">{children}</div>
-    </section>
-  )
-}
-
-const BOOL_TRUE = ['1', 'true', 'yes', 'y', 'on']
-const isBoolOn = (s: string) => BOOL_TRUE.includes(s.trim().toLowerCase())
-
 // ConfigPanels renders one editable card per setting group, sourced from the
-// server registry. Edits are staged in `draft`; Save submits only the changed
-// keys for that group (empty secret fields are skipped → keep the stored value).
+// server registry. Connector-owned settings (Slack/GitHub/ingress) are excluded
+// — they live on the Connectors page — as are the two Steering keys with
+// dedicated controls. Edits stage through useConfigDraft; Save submits only the
+// changed keys for that group (empty secret fields keep the stored value).
 function ConfigPanels() {
   const { data } = useSettings()
-  const action = useAction()
-  const [draft, setDraft] = useState<Record<string, string>>({})
-  // These settings have dedicated controls in the Steering section, so skip
-  // them in the generic form to avoid two controls for one key.
+  const cfg = useConfigDraft()
   const fields = useMemo(
     () =>
       (data?.fields ?? []).filter(
-        (f) => f.key !== 'FLOW_STEERING_WATCH_CHANNELS' && f.key !== 'FLOW_STEERING_AUTONOMY',
+        (f) => !f.connector && f.key !== 'FLOW_STEERING_WATCH_CHANNELS' && f.key !== 'FLOW_STEERING_AUTONOMY',
       ),
     [data?.fields],
   )
@@ -224,52 +190,21 @@ function ConfigPanels() {
     return order.map((group) => ({ group, fields: byGroup[group] }))
   }, [fields])
 
-  const changesFor = (gfields: SettingField[]) => {
-    const out: Record<string, string> = {}
-    for (const f of gfields) {
-      const v = draft[f.key]
-      if (v === undefined) continue
-      if (f.type === 'secret') {
-        if (v.trim() !== '') out[f.key] = v
-      } else if (v !== f.value) {
-        out[f.key] = v
-      }
-    }
-    return out
-  }
-
-  const saveGroup = (gfields: SettingField[]) => {
-    const changes = changesFor(gfields)
-    if (Object.keys(changes).length === 0) return
-    action.mutate(
-      { kind: 'update-settings', settings: changes },
-      {
-        onSuccess: () =>
-          setDraft((d) => {
-            const next = { ...d }
-            for (const k of Object.keys(changes)) delete next[k]
-            return next
-          }),
-      },
-    )
-  }
-
   if (fields.length === 0) return null
 
   return (
     <>
       {groups.map(({ group, fields: gfields }) => {
-        const dirty = Object.keys(changesFor(gfields)).length > 0
+        const dirty = Object.keys(cfg.changesFor(gfields)).length > 0
         return (
           <SettingsPanel key={group} title={group} icon={<SlidersHorizontal size={17} />}>
             <div className="config-form">
-              {group === 'Ingress' && <IngressStatusPanel />}
               {gfields.map((f) => (
-                <ConfigField key={f.key} field={f} draft={draft[f.key]} onChange={(v) => setDraft((d) => ({ ...d, [f.key]: v }))} />
+                <ConfigField key={f.key} field={f} draft={cfg.draft[f.key]} onChange={(v) => cfg.setField(f.key, v)} />
               ))}
               <div className="config-actions">
-                <button type="button" className="btn primary" disabled={!dirty || action.isPending} onClick={() => saveGroup(gfields)}>
-                  {action.isPending ? <Loader2 size={14} className="spin" /> : <Save size={14} />}
+                <button type="button" className="btn primary" disabled={!dirty || cfg.isPending} onClick={() => cfg.save(gfields)}>
+                  {cfg.isPending ? <Loader2 size={14} className="spin" /> : <Save size={14} />}
                   Save {group}
                 </button>
               </div>
@@ -278,180 +213,6 @@ function ConfigPanels() {
         )
       })}
     </>
-  )
-}
-
-function IngressStatusPanel() {
-  const { data: ingress, isLoading } = useIngressStatus()
-  const action = useAction()
-
-  const copyToClipboard = async (value: string, label: string) => {
-    try {
-      await navigator.clipboard.writeText(value)
-      pushToast('ok', `${label} copied to clipboard`)
-    } catch {
-      pushToast('error', `Could not copy — the value is in ~/.flow/config.json`)
-    }
-  }
-  const copySecret = () => {
-    action.mutate(
-      { kind: 'reveal-webhook-secret' },
-      { onSuccess: (data) => data.output && copyToClipboard(data.output, 'Webhook secret') },
-    )
-  }
-  const rotateSecret = async () => {
-    const ok = await confirmAction({
-      title: 'Rotate GitHub webhook secret?',
-      body: 'A new signing secret is generated, saved, and copied to your clipboard now. You must paste it into your GitHub webhook settings afterward — until you do, GitHub deliveries will fail signature verification.',
-      confirmLabel: 'Rotate secret',
-      danger: true,
-    })
-    if (ok)
-      action.mutate(
-        { kind: 'rotate-webhook-secret' },
-        { onSuccess: (data) => data.output && copyToClipboard(data.output, 'New webhook secret') },
-      )
-  }
-  const rotateUrl = async () => {
-    const ok = await confirmAction({
-      title: 'Rotate public callback URL?',
-      body: 'A new zrok reserved share (and public URL) is created and the old one released. You must update the Payload URL in your GitHub webhook to the new URL once it appears.',
-      confirmLabel: 'Rotate URL',
-      danger: true,
-    })
-    if (ok) action.mutate({ kind: 'rotate-ingress-url' })
-  }
-
-  if (isLoading && !ingress) {
-    return (
-      <div className="ingress-runtime waiting">
-        <div className="ingress-runtime-head">
-          <span className="ingress-state waiting"><Loader2 size={13} className="spin" /> checking</span>
-        </div>
-      </div>
-    )
-  }
-  if (!ingress) return null
-
-  return (
-    <div className={`ingress-runtime ${ingressRuntimeState(ingress)}`}>
-      <div className="ingress-runtime-head">
-        <div className="setting-label">Runtime status</div>
-        <span className={`ingress-state ${ingressRuntimeState(ingress)}`}>
-          {ingress.running ? <CheckCircle2 size={13} /> : ingress.last_error ? <AlertTriangle size={13} /> : <Globe2 size={13} />}
-          {ingressRuntimeLabel(ingress)}
-        </span>
-      </div>
-      <div className="ingress-kv">
-        <IngressRuntimeValue label="Provider" value={ingress.provider || 'none'} />
-        {ingress.provider === 'zrok' && <IngressRuntimeValue label="zrok env" value={ingress.env_enabled ? 'enabled' : 'not enabled'} />}
-        {ingress.share_name && <IngressRuntimeValue label="Share" value={ingress.share_name} mono />}
-        {ingress.base_url ? <IngressRuntimeLink label="Public URL" value={ingress.base_url} /> : <IngressRuntimeValue label="Public URL" value="not created yet" />}
-        {ingress.github_webhook_url && <IngressRuntimeLink label="GitHub webhook" value={ingress.github_webhook_url} />}
-        {ingress.provider !== 'none' && (
-          <IngressRuntimeValue label="Webhook secret" value={ingress.webhook_secret_set ? 'configured' : 'not set yet'} warn={!ingress.webhook_secret_set} />
-        )}
-        {ingress.last_error && <IngressRuntimeValue label="Last error" value={ingress.last_error} mono warn />}
-      </div>
-      {ingress.provider !== 'none' && (
-        <div className="ingress-actions">
-          {ingress.webhook_secret_set && (
-            <button type="button" className="btn ghost sm" onClick={copySecret} disabled={action.isPending} title="Copy the GitHub webhook signing secret to paste into GitHub">
-              <Copy size={13} /> Copy webhook secret
-            </button>
-          )}
-          <button type="button" className="btn ghost sm" onClick={rotateSecret} disabled={action.isPending} title="Generate a fresh GitHub webhook signing secret">
-            <RotateCw size={13} /> Rotate webhook secret
-          </button>
-          {ingress.provider === 'zrok' && (
-            <button type="button" className="btn ghost sm" onClick={rotateUrl} disabled={action.isPending} title="Generate a fresh public callback URL">
-              <RotateCw size={13} /> Rotate public URL
-            </button>
-          )}
-        </div>
-      )}
-    </div>
-  )
-}
-
-function ingressRuntimeState(ingress: IngressStatus): 'online' | 'failed' | 'waiting' | 'off' {
-  if (ingress.running) return 'online'
-  if (ingress.last_error) return 'failed'
-  if (ingress.provider === 'none') return 'off'
-  return 'waiting'
-}
-
-function ingressRuntimeLabel(ingress: IngressStatus): string {
-  const state = ingressRuntimeState(ingress)
-  if (state === 'online') return 'public URL live'
-  if (state === 'failed') return 'share failed'
-  if (state === 'off') return 'off'
-  return 'waiting for URL'
-}
-
-function IngressRuntimeValue({ label, value, mono = false, warn = false }: { label: string; value: string; mono?: boolean; warn?: boolean }) {
-  return (
-    <div className="ingress-row">
-      <div className="setting-label">{label}</div>
-      <div className={`ingress-value${mono ? ' mono' : ''}${warn ? ' warn' : ''}`} title={value}>{value}</div>
-    </div>
-  )
-}
-
-function IngressRuntimeLink({ label, value }: { label: string; value: string }) {
-  return (
-    <div className="ingress-row">
-      <div className="setting-label">{label}</div>
-      <a className="ingress-value link mono" href={value} target="_blank" rel="noreferrer" title={value}>
-        <Link2 size={12} />
-        <span>{value}</span>
-        <ExternalLink size={11} />
-      </a>
-    </div>
-  )
-}
-
-function ConfigField({ field, draft, onChange }: { field: SettingField; draft: string | undefined; onChange: (v: string) => void }) {
-  const checked = draft !== undefined ? isBoolOn(draft) : isBoolOn(field.value)
-  return (
-    <div className="config-field">
-      <div className="config-field-head">
-        <label className="setting-label" htmlFor={field.key}>{field.label}</label>
-        {field.source !== 'default' && <span className={`config-src ${field.source}`}>{field.source}</span>}
-      </div>
-      {field.type === 'bool' ? (
-        <label className="config-toggle">
-          <input id={field.key} type="checkbox" checked={checked} onChange={(e) => onChange(e.target.checked ? 'true' : 'false')} />
-          <span>{checked ? 'On' : 'Off'}</span>
-        </label>
-      ) : field.type === 'enum' ? (
-        <select id={field.key} className="input" value={draft ?? field.value} onChange={(e) => onChange(e.target.value)}>
-          {(field.options ?? []).map((o) => (
-            <option key={o} value={o}>{o}</option>
-          ))}
-        </select>
-      ) : field.type === 'secret' ? (
-        <input
-          id={field.key}
-          className="input mono"
-          type="password"
-          autoComplete="off"
-          placeholder={field.set ? '•••••••• (set — blank keeps it)' : 'not set'}
-          value={draft ?? ''}
-          onChange={(e) => onChange(e.target.value)}
-        />
-      ) : (
-        <input
-          id={field.key}
-          className="input"
-          type={field.type === 'int' ? 'number' : 'text'}
-          value={draft ?? field.value}
-          placeholder={field.default || ''}
-          onChange={(e) => onChange(e.target.value)}
-        />
-      )}
-      {field.help && <div className="config-help">{field.help}</div>}
-    </div>
   )
 }
 

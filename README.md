@@ -300,9 +300,10 @@ user) are collapsed by `(channel, ts)` at inbox-append time.
 
 ### Quick setup — the Connect Slack wizard (recommended)
 
-Open **Mission Control → Settings → Connect Slack** (`flow ui serve`, then
-the gear). The wizard does the whole dance in three steps and is resumable
-at any point — reload the page and it picks up where you left off:
+Open **Mission Control → Connectors → Slack** (`flow ui serve`, then the
+plug icon in the sidebar). The wizard does the whole dance in three steps
+and is resumable at any point — reload the page and it picks up where you
+left off:
 
 1. **Create the app.** Mint an *app configuration token* at
    <https://api.slack.com/apps> ("Your App Configuration Tokens" →
@@ -439,10 +440,11 @@ more than one identity).
 
 #### 5. Give the tokens to flow
 
-Easiest: open **Mission Control → Settings** (`flow ui serve`, then the gear)
-and paste the three tokens + your user ID into the **Slack** group. flow
-writes them to `~/.flow/config.json` and restarts the listener live — no
-server bounce. Settings persisted this way always win over shell env vars.
+Easiest: open **Mission Control → Connectors → Slack** (`flow ui serve`, then
+the plug icon) and paste the three tokens + your user ID — the token fields
+live under the card's **Manual tokens** disclosure. flow writes them to
+`~/.flow/config.json` and restarts the listener live — no server bounce.
+Values persisted this way always win over shell env vars.
 
 Prefer the shell? Export them before `flow ui serve` instead:
 
@@ -594,7 +596,9 @@ One-time setup:
 1. Install zrok and enable your environment once: `zrok enable <your-token>`
    (this writes `~/.zrok` identity files the SDK reuses). flow never needs the
    `zrok` CLI again after this.
-2. In **Settings → Ingress** (or via env): set `FLOW_INGRESS_PROVIDER=zrok`.
+2. In **Mission Control → Connectors → Public ingress** (or via env): set
+   `FLOW_INGRESS_PROVIDER=zrok`. The card also shows the discovered public base
+   URL plus the derived Slack OAuth callback and GitHub webhook URLs.
 3. Set **`FLOW_ZROK_SHARE_NAME`** to a stable, unique name (e.g. `my-flow`).
    This reserves the share so the public URL **survives restarts** — required,
    because Slack and GitHub register the callback URL once. Leave it empty only
@@ -725,7 +729,8 @@ Without either label, flow defaults to Claude.
 Run `gh auth login` first, or provide the usual `GH_TOKEN` /
 `GITHUB_TOKEN` environment that `gh api` supports. Without
 `FLOW_GH_ENABLED=1`, the rest of flow works unchanged — GitHub is
-opt-in.
+opt-in. **Mission Control → Connectors → GitHub** shows the live `gh`
+auth status and lets you edit these `FLOW_GH_*` settings in one place.
 
 ## Settings & configuration
 
@@ -761,6 +766,11 @@ empty secret field means "leave the stored value unchanged" — so you never
 have to retype a token you can't read. Saving a Slack or GitHub key
 **hot-restarts** that listener so new tokens / toggles apply live, without
 bouncing the server.
+
+External-connector auth (Slack, GitHub, and public ingress) lives on its own
+**Connectors** page — the **plug** icon in the sidebar — grouped by category
+(Messaging / Git / Network). Settings keeps preferences, steering, database
+info, and the generic configuration knobs.
 
 Anything not in `config.json` falls back to the inherited shell env, so the
 two approaches compose: bake stable values into your shell rc, override or

@@ -221,6 +221,15 @@ var (
 // gh processes per minute.
 const ghAuthCacheTTL = 15 * time.Second
 
+// invalidateGitHubAuthCache forces the next detectGitHubIntegration call to
+// re-run `gh auth status` instead of returning the cached chip. Called after an
+// account switch so the integration status reflects the new identity promptly.
+func invalidateGitHubAuthCache() {
+	ghAuthMu.Lock()
+	ghAuthExpiry = time.Time{}
+	ghAuthMu.Unlock()
+}
+
 func detectGitHubIntegration() uiToolCapability {
 	ghAuthMu.Lock()
 	defer ghAuthMu.Unlock()

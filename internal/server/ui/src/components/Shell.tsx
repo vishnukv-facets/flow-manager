@@ -17,6 +17,7 @@ import {
   LayoutDashboard,
   ListTodo,
   Moon,
+  Plug,
   Plus,
   Radar,
   RefreshCw,
@@ -194,6 +195,7 @@ export function Shell({ children }: { children: ReactNode }) {
       label: 'System',
       items: [
         { to: '/workdirs', label: 'Workdirs', icon: <HardDrive size={16} />, match: (p) => p === '/workdirs' },
+        { to: '/connectors', label: 'Connectors', icon: <Plug size={16} />, match: (p) => p === '/connectors' },
         { to: '/settings', label: 'Settings', icon: <Settings size={16} />, match: (p) => p === '/settings' },
         { to: '/trash', label: 'Trash', icon: <Trash2 size={16} />, match: (p) => p === '/trash' },
       ],

@@ -9,10 +9,11 @@ import type {
   AskFlowResponse,
   AttentionItem,
   AttentionTraceResponse,
+  GitHubAuthStatus,
   HealthView,
+  IngressStatus,
   InboxConversation,
   InboxFeed,
-  IngressStatus,
   KBFileView,
   MemorySource,
   OverviewView,
@@ -47,7 +48,7 @@ export const queryClient = new QueryClient({
 // Live events should refresh live work data, not slow/static metadata. Quote,
 // settings, and Slack channel listing have their own refresh cadence; invalidating
 // Slack channels on every message can hammer conversations.list into rate limits.
-const liveInvalidationExclusions = new Set(['quote', 'settings', 'slack-channels', 'slack-setup', 'memory-sources', 'ingress-status'])
+const liveInvalidationExclusions = new Set(['quote', 'settings', 'slack-channels', 'slack-setup', 'ingress-status', 'github-auth', 'memory-sources'])
 const liveData = { predicate: (q: { queryKey: readonly unknown[] }) => !liveInvalidationExclusions.has(String(q.queryKey[0])) }
 let invalidateTimer: ReturnType<typeof setTimeout> | null = null
 let pendingBroadInvalidate = false
@@ -112,15 +113,32 @@ export function useSlackSetupStatus() {
     refetchInterval: (q) => (q.state.data?.oauth_active ? 1500 : 8000),
   })
 }
+export function useHealth() {
+  return useQuery({ queryKey: ['health'], queryFn: () => apiGet<HealthView>('/api/health') })
+}
+// GitHub `gh` CLI identity: active login + all switchable accounts. Changes
+// only on an explicit account switch (which invalidates this key), so it isn't
+// part of the live-event refresh set.
+export function useGitHubAuth() {
+  return useQuery({
+    queryKey: ['github-auth'],
+    queryFn: () => apiGet<GitHubAuthStatus>('/api/github/auth/status'),
+    staleTime: 10_000,
+  })
+}
+// Public ingress status (zrok/manual/none) + derived connector callback URLs.
+// Refetches while a zrok share is coming up so the discovered URL appears
+// without a manual reload; settles to a slow poll once running/idle.
 export function useIngressStatus() {
   return useQuery({
     queryKey: ['ingress-status'],
     queryFn: () => apiGet<IngressStatus>('/api/ingress/status'),
-    refetchInterval: 5000,
+    refetchInterval: (q) => {
+      const st = q.state.data
+      if (st && st.provider === 'zrok' && st.env_enabled && !st.running) return 3000
+      return 20000
+    },
   })
-}
-export function useHealth() {
-  return useQuery({ queryKey: ['health'], queryFn: () => apiGet<HealthView>('/api/health') })
 }
 export function useOverview() {
   return useQuery({ queryKey: ['overview'], queryFn: () => apiGet<OverviewView>('/api/overview') })
