@@ -117,6 +117,157 @@ func TestFormatInboxWakePromptIncludesSourceAndURL(t *testing.T) {
 	}
 }
 
+func TestFormatInboxWakePromptAttributesAttentionForwardSource(t *testing.T) {
+	entries := []monitor.InboxEntry{{
+		Event: monitor.InboundEvent{
+			Kind:        "attention_forward",
+			ChannelType: "slack",
+			Channel:     "D03LH2RCZMG",
+			ThreadTS:    "1780916901.021529",
+			UserID:      "U03LK2CCE68",
+			Text:        "Original slack sender: U03LK2CCE68\nReply target: slack thread D03LH2RCZMG:1780916901.021529\n\nForwarded source context",
+		},
+		Meta: monitor.InboxEventMeta{Source: "slack", Actionable: true},
+	}}
+
+	prompt := formatInboxWakePrompt("coinswitch-task", entries)
+	for _, want := range []string{
+		"slack attention_forward",
+		"from U03LK2CCE68",
+		"thread D03LH2RCZMG:1780916901.021529",
+		"Forwarded source context",
+	} {
+		if !strings.Contains(prompt, want) {
+			t.Fatalf("wake prompt missing %q:\n%s", want, prompt)
+		}
+	}
+}
+
+func TestInboxNotifyWakesSharedTaskWithFullMessage(t *testing.T) {
+	oldLook, oldCmd := sharedTerminalLookPath, sharedTerminalCommand
+	resetSharedTerminalAvailable()
+	t.Cleanup(func() {
+		sharedTerminalLookPath = oldLook
+		sharedTerminalCommand = oldCmd
+		resetSharedTerminalAvailable()
+	})
+	sharedTerminalLookPath = func(string) (string, error) { return "/usr/bin/tmux", nil }
+
+	live := sharedTerminalSessionName("coinswitch-task")
+	var calls [][]string
+	sharedTerminalCommand = func(args ...string) ([]byte, error) {
+		calls = append(calls, append([]string(nil), args...))
+		if len(args) > 0 && args[0] == "has-session" {
+			if args[len(args)-1] == live {
+				return nil, nil
+			}
+			return nil, fmt.Errorf("missing session")
+		}
+		return nil, nil
+	}
+
+	srv := &Server{terminals: &terminalHub{}}
+	body := strings.NewReader(`{
+		"task_slug": "coinswitch-task",
+		"sender": "attention-router",
+		"message": "Forwarded by the attention router.\nSummary: CSX Phase 2/3 execution plan shared."
+	}`)
+	rec := httptest.NewRecorder()
+	srv.handleInboxNotify(rec, httptest.NewRequest(http.MethodPost, "/api/inbox/notify", body))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, body = %s", rec.Code, rec.Body.String())
+	}
+
+	var pasted string
+	for _, call := range calls {
+		if len(call) == 5 && call[0] == "send-keys" && call[2] == live && call[3] == "-l" {
+			pasted = call[4]
+			break
+		}
+	}
+	if pasted == "" {
+		t.Fatalf("expected send-keys paste call, got %#v", calls)
+	}
+	for _, want := range []string{
+		"Flow task coinswitch-task has a new inbox.md message from attention-router.",
+		"Read the latest task inbox entry",
+		"Forwarded by the attention router.",
+		"CSX Phase 2/3 execution plan shared.",
+	} {
+		if !strings.Contains(pasted, want) {
+			t.Fatalf("wake prompt missing %q:\n%s", want, pasted)
+		}
+	}
+}
+
+func TestInboxNotifyScansStructuredInboxJSONL(t *testing.T) {
+	oldLook, oldCmd := sharedTerminalLookPath, sharedTerminalCommand
+	resetSharedTerminalAvailable()
+	t.Cleanup(func() {
+		sharedTerminalLookPath = oldLook
+		sharedTerminalCommand = oldCmd
+		resetSharedTerminalAvailable()
+	})
+
+	root, db := testRootDB(t)
+	t.Setenv("FLOW_ROOT", root)
+	insertProjectTask(t, db, root)
+	if err := monitor.AppendFlowTellEvent("build-ui", "attention-router", "Full forwarded context from inbox.jsonl"); err != nil {
+		t.Fatalf("AppendFlowTellEvent: %v", err)
+	}
+
+	sharedTerminalLookPath = func(string) (string, error) { return "/usr/bin/tmux", nil }
+	resetSharedTerminalAvailable()
+	live := sharedTerminalSessionName("build-ui")
+	var calls [][]string
+	sharedTerminalCommand = func(args ...string) ([]byte, error) {
+		calls = append(calls, append([]string(nil), args...))
+		if len(args) > 0 && args[0] == "has-session" {
+			if args[len(args)-1] == live {
+				return nil, nil
+			}
+			return nil, fmt.Errorf("missing session")
+		}
+		return nil, nil
+	}
+
+	srv := New(Config{DB: db, FlowRoot: root, Version: "test"})
+	body := strings.NewReader(`{
+		"task_slug": "build-ui",
+		"sender": "attention-router",
+		"message": "Full forwarded context from inbox.jsonl",
+		"jsonl_appended": true
+	}`)
+	rec := httptest.NewRecorder()
+	srv.handleInboxNotify(rec, httptest.NewRequest(http.MethodPost, "/api/inbox/notify", body))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, body = %s", rec.Code, rec.Body.String())
+	}
+
+	var pasted string
+	for _, call := range calls {
+		if len(call) == 5 && call[0] == "send-keys" && call[2] == live && call[3] == "-l" {
+			pasted = call[4]
+			break
+		}
+	}
+	if pasted == "" {
+		t.Fatalf("expected send-keys paste call, got %#v", calls)
+	}
+	if !strings.Contains(pasted, "Read the new task inbox entries from inbox.jsonl") ||
+		!strings.Contains(pasted, "flow flow_tell") ||
+		!strings.Contains(pasted, "Full forwarded context from inbox.jsonl") {
+		t.Fatalf("wake prompt should come from structured inbox scan:\n%s", pasted)
+	}
+	cursor, err := monitor.ReadInboxMonitorCursor("build-ui")
+	if err != nil {
+		t.Fatalf("ReadInboxMonitorCursor: %v", err)
+	}
+	if cursor == 0 {
+		t.Fatalf("cursor = 0, want advanced after notify scan")
+	}
+}
+
 func TestInboxMonitorManagerStartIsIdempotent(t *testing.T) {
 	t.Setenv("FLOW_ROOT", t.TempDir())
 	manager := newInboxMonitorManager(inboxWakeTarget{})

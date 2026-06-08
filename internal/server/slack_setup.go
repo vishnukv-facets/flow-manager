@@ -95,6 +95,7 @@ var (
 		"channels:read",    // channel name/member resolution for task titles
 		"groups:read",      // same, private channels
 		"users:read",       // author display names
+		"files:read",       // safe text/PDF extraction for channel file shares
 		"app_mentions:read",
 		"im:read",
 		"mpim:read",
@@ -106,6 +107,7 @@ var (
 		"mpim:history", // group DMs
 		"channels:history",
 		"groups:history",
+		"files:read", // safe text/PDF extraction for DM file shares
 	}
 	slackManifestBotEvents = []string{
 		"reaction_added",

@@ -10,6 +10,7 @@ require (
 	github.com/openziti/zrok v1.1.11
 	github.com/slack-go/slack v0.23.1
 	modernc.org/sqlite v1.48.2
+	rsc.io/pdf v0.1.1
 )
 
 require (

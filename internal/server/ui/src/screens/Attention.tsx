@@ -274,27 +274,29 @@ function AttentionCard({
 
       {item.status === 'new' ? (
         <div className="att-actions row gap" onClick={stop}>
-          <button type="button" className="btn primary sm" disabled={disabled} onClick={() => onAct(item, 'make-task')}>
-            <ListPlus size={13} /> Make task
-          </button>
-          <button type="button" className="btn sm" disabled={disabled} onClick={() => onAct(item, 'make-task-start')}>
-            <Play size={13} /> Make task & start
-          </button>
           {item.matched_task ? (
             <>
               <button
                 type="button"
-                className="btn sm"
-                disabled={disabled || item.handoff?.status === 'pending'}
-                onClick={() => onAct(item, 'confirm-handoff')}
+                className="btn primary sm"
+                disabled={disabled}
+                onClick={() => onAct(item, 'forward')}
+                title={matchedTaskLabel(item)}
               >
-                <Handshake size={13} /> Ask owner
+                <Share2 size={13} /> Forward to <span className="att-forward-target">{matchedTaskLabel(item)}</span>
               </button>
-              <button type="button" className="btn sm" disabled={disabled} onClick={() => onAct(item, 'forward')}>
-                <Share2 size={13} /> Forward
+              <MatchedTaskMoreMenu item={item} disabled={disabled} onAct={onAct} />
+            </>
+          ) : (
+            <>
+              <button type="button" className="btn primary sm" disabled={disabled} onClick={() => onAct(item, 'make-task')}>
+                <ListPlus size={13} /> Make task
+              </button>
+              <button type="button" className="btn sm" disabled={disabled} onClick={() => onAct(item, 'make-task-start')}>
+                <Play size={13} /> Make task & start
               </button>
             </>
-          ) : null}
+          )}
           {item.draft ? (
             // Opens the detail modal (review/edit before sending) rather than
             // blind-sending — the action row already stopPropagation's the
@@ -339,6 +341,65 @@ function AttentionCard({
           ) : null}
         </div>
       )}
+    </div>
+  )
+}
+
+function matchedTaskLabel(item: AttentionItem): string {
+  return item.why?.matched_task?.name || item.why?.matched_task?.slug || item.matched_task || 'matched task'
+}
+
+function MatchedTaskMoreMenu({
+  item,
+  disabled,
+  onAct,
+}: {
+  item: AttentionItem
+  disabled?: boolean
+  onAct: (item: AttentionItem, verb: string) => void
+}) {
+  const [open, setOpen] = useState(false)
+  const handoffPending = item.handoff?.status === 'pending'
+  const choose = (verb: string) => {
+    setOpen(false)
+    onAct(item, verb)
+  }
+  return (
+    <div className="mute-menu left">
+      <button
+        type="button"
+        className="btn sm"
+        disabled={disabled}
+        aria-haspopup="menu"
+        aria-expanded={open}
+        title="More actions"
+        onClick={() => setOpen((o) => !o)}
+      >
+        More <ChevronDown size={11} />
+      </button>
+      {open ? (
+        <>
+          <button type="button" className="mute-backdrop" aria-label="Close actions menu" onClick={() => setOpen(false)} />
+          <div className="mute-pop" role="menu">
+            <button type="button" role="menuitem" className="mute-item" onClick={() => choose('make-task')}>
+              <ListPlus size={12} className="faint" /> Make new task
+            </button>
+            <button type="button" role="menuitem" className="mute-item" onClick={() => choose('make-task-start')}>
+              <Play size={12} className="faint" /> Make new task & start
+            </button>
+            <button
+              type="button"
+              role="menuitem"
+              className="mute-item"
+              disabled={handoffPending}
+              title={handoffPending ? 'A handoff request is already pending' : undefined}
+              onClick={() => choose('confirm-handoff')}
+            >
+              <Handshake size={12} className="faint" /> Ask task agent
+            </button>
+          </div>
+        </>
+      ) : null}
     </div>
   )
 }
@@ -412,7 +473,7 @@ function MuteMenu({
       </button>
       {open ? (
         <>
-          <div className="mute-backdrop" onClick={() => setOpen(false)} />
+          <button type="button" className="mute-backdrop" aria-label="Close mute menu" onClick={() => setOpen(false)} />
           <div className="mute-pop" role="menu">
             {item.channel ? (
               <button type="button" role="menuitem" className="mute-item" onClick={() => choose('mute-channel')}>
@@ -1011,8 +1072,15 @@ function relevantLabel(b: boolean | null | undefined): string {
 }
 
 function TraceDetail({ item, onClose }: { item: SteeringTrace | null; onClose: () => void }) {
+  const [, navigate] = useLocation()
   // Keep the last item around so content doesn't blank during the close anim.
-  if (!item) return <Modal open={false} onClose={onClose} title="" children={null} />
+  if (!item) {
+    return (
+      <Modal open={false} onClose={onClose} title="">
+        {null}
+      </Modal>
+    )
+  }
 
   const sourceLabel = item.source === 'github' ? 'GitHub' : titleCase(item.source || 'message')
   const title = `${sourceLabel} · ${item.disposition}`
@@ -1020,6 +1088,9 @@ function TraceDetail({ item, onClose }: { item: SteeringTrace | null; onClose: (
   const from = item.author_name || '(system/bot — no user)'
   const message = item.text || item.text_preview || '(no text)'
   const linkLabel = item.source === 'github' ? 'Open in GitHub' : 'Open in Slack'
+  const targetTask = item.matched_task
+  const targetSlug = item.linked_task || targetTask?.slug || ''
+  const targetLabel = item.autonomy_action === 'forward' || item.final_action === 'forward' ? 'forwarded task' : 'task'
 
   return (
     <Modal open onClose={onClose} title={title} width={620}>
@@ -1069,6 +1140,22 @@ function TraceDetail({ item, onClose }: { item: SteeringTrace | null; onClose: (
             <KV k="stage 3 action" v={item.stage3_action ? `${item.stage3_action} · ${pctConf(item.stage3_confidence)}` : '—'} />
             <KV k="final action" v={item.final_action ? `${item.final_action} · ${pctConf(item.final_confidence)}` : '—'} />
             <KV k="autonomy" v={item.autonomy_decision ? `${item.autonomy_action || item.final_action || 'action'} · ${item.autonomy_decision}` : '—'} />
+            {targetSlug ? (
+              <KV
+                k={targetLabel}
+                v={
+                  <span className="row gap">
+                    <span>
+                      <strong>{targetTask?.name || targetSlug}</strong>
+                      {targetTask?.name ? <span className="mono faint"> · {targetSlug}</span> : null}
+                    </span>
+                    <button type="button" className="btn ghost sm" onClick={() => navigate(`/session/${targetSlug}`)}>
+                      <ArrowRight size={13} /> Open
+                    </button>
+                  </span>
+                }
+              />
+            ) : null}
             <KV k="autonomy reason" v={item.autonomy_reason || '—'} />
             <KV k="drop reason" v={item.drop_reason || '—'} />
             <KV k="latency" v={item.latency_ms != null ? `${item.latency_ms} ms` : '—'} />
@@ -1081,6 +1168,14 @@ function TraceDetail({ item, onClose }: { item: SteeringTrace | null; onClose: (
           <div className="td-section">
             <div className="dim">
               <Check size={13} /> Surfaced to the Attention feed.{' '}
+              {targetSlug ? (
+                <>
+                  Linked to{' '}
+                  <button type="button" className="btn ghost sm" onClick={() => navigate(`/session/${targetSlug}`)}>
+                    <ArrowRight size={13} /> {targetTask?.name || targetSlug}
+                  </button>{' '}
+                </>
+              ) : null}
               <span className="faint">Find it under the Feed tab.</span>
             </div>
           </div>

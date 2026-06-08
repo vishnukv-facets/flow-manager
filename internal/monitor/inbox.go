@@ -43,6 +43,8 @@ func ClassifyInboxEvent(ev InboundEvent) InboxEventMeta {
 		source = "github"
 	} else if ev.ChannelType == "slack" || ev.Kind == "message" || ev.Kind == "app_mention" || ev.Kind == "reaction_added" {
 		source = "slack"
+	} else if ev.ChannelType == "flow" || strings.HasPrefix(ev.Kind, "flow_") {
+		source = "flow"
 	} else if ev.ChannelType != "" {
 		source = ev.ChannelType
 	}
@@ -59,12 +61,38 @@ func ClassifyInboxEvent(ev InboundEvent) InboxEventMeta {
 		actionable = true
 	case "slack":
 		switch ev.Kind {
-		case "message", "app_mention":
+		case "message", "app_mention", "attention_forward":
+			actionable = true
+		}
+	case "flow":
+		switch ev.Kind {
+		case "flow_tell":
 			actionable = true
 		}
 	}
 
 	return InboxEventMeta{Source: source, Actionable: actionable}
+}
+
+func FlowTellEvent(sender, message string, at time.Time) InboundEvent {
+	if at.IsZero() {
+		at = time.Now().UTC()
+	}
+	ts := at.UTC().Format(time.RFC3339Nano)
+	return InboundEvent{
+		Kind:        "flow_tell",
+		Channel:     "flow-tell",
+		ChannelType: "flow",
+		TS:          ts,
+		ThreadTS:    ts,
+		UserID:      strings.TrimSpace(sender),
+		Text:        strings.TrimSpace(message),
+		EventKey:    "flow-tell:" + ts,
+	}
+}
+
+func AppendFlowTellEvent(slug, sender, message string) error {
+	return AppendInboxEvent(slug, FlowTellEvent(sender, message, time.Now().UTC()))
 }
 
 // TaskDir returns the absolute path to a task's directory under

@@ -2,6 +2,7 @@ package app
 
 import (
 	"flow/internal/flowdb"
+	"flow/internal/monitor"
 	"fmt"
 	"net/http"
 	"os"
@@ -94,7 +95,8 @@ func cmdTell(args []string) int {
 		return 1
 	}
 
-	stamp := time.Now().UTC().Format("2006-01-02 15:04:05Z")
+	now := time.Now().UTC()
+	stamp := now.Format("2006-01-02 15:04:05Z")
 	entry := fmt.Sprintf("## %s — from: %s\n\n%s\n\n", stamp, sender, message)
 	f, err := os.OpenFile(inboxPath, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o644)
 	if err != nil {
@@ -117,6 +119,10 @@ func cmdTell(args []string) int {
 	}
 	if err := f.Close(); err != nil {
 		fmt.Fprintf(os.Stderr, "error: close inbox: %v\n", err)
+		return 1
+	}
+	if err := monitor.AppendInboxEvent(task.Slug, monitor.FlowTellEvent(sender, message, now)); err != nil {
+		fmt.Fprintf(os.Stderr, "error: append inbox jsonl: %v\n", err)
 		return 1
 	}
 
@@ -146,8 +152,8 @@ func notifyInboxChanged(slug, sender, message string) {
 		endpoint = "http://127.0.0.1:8787"
 	}
 	url := strings.TrimRight(endpoint, "/") + "/api/inbox/notify"
-	payload := fmt.Sprintf(`{"task_slug":%q,"sender":%q,"preview":%q}`,
-		slug, sender, truncateInboxPreview(message, 200))
+	payload := fmt.Sprintf(`{"task_slug":%q,"sender":%q,"preview":%q,"message":%q,"jsonl_appended":true}`,
+		slug, sender, truncateInboxPreview(message, 200), message)
 	req, err := http.NewRequest(http.MethodPost, url, strings.NewReader(payload))
 	if err != nil {
 		return

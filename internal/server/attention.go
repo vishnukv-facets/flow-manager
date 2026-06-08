@@ -314,16 +314,16 @@ func attentionActionPreviews(it flowdb.FeedItem) []AttentionActionPreview {
 	if matched != "" {
 		out = append(out, AttentionActionPreview{
 			Action:      "confirm_handoff",
-			Label:       "Ask owner",
+			Label:       "Ask task agent",
 			Target:      matched,
 			Description: "Asks the matched task's agent to accept or decline this handoff before forwarding.",
-			Primary:     attentionActionPrimary(it, "forward"),
 		})
 		out = append(out, AttentionActionPreview{
 			Action:      "forward",
 			Label:       "Forward",
 			Target:      matched,
 			Description: "Adds the context to the matched task and wakes that task's session.",
+			Primary:     attentionActionPrimary(it, "forward"),
 		})
 	}
 	if strings.TrimSpace(it.Draft) != "" {
@@ -684,6 +684,18 @@ func (s *Server) steeringTraceView(ctx context.Context, t flowdb.SteeringTrace) 
 		FinalConfidence: t.FinalConfidence, FeedItemID: t.FeedItemID, Error: t.Error, LatencyMS: t.LatencyMS, Model: t.Model,
 		AutonomyAction: t.AutonomyAction, AutonomyDecision: t.AutonomyDecision, AutonomyReason: t.AutonomyReason,
 		TS: t.TS, TeamID: t.TeamID, URL: t.URL,
+	}
+	if strings.TrimSpace(t.FeedItemID) != "" && s.cfg.DB != nil {
+		if item, err := flowdb.GetFeedItem(s.cfg.DB, t.FeedItemID); err == nil {
+			target := strings.TrimSpace(item.LinkedTask)
+			if target == "" {
+				target = strings.TrimSpace(item.MatchedTask)
+			}
+			v.LinkedTask = target
+			if target != "" {
+				v.MatchedTask = s.attentionTaskMatch(ctx, target)
+			}
+		}
 	}
 	if t.Source == "github" {
 		// GitHub fields are already human: owner/repo channel, GitHub login

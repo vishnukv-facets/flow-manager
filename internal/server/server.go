@@ -132,6 +132,7 @@ func (s *Server) registerAPIRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/tasks/", s.handleTaskRoute)
 	mux.HandleFunc("/api/inbox", s.handleInbox)
 	mux.HandleFunc("/api/inbox/conversation", s.handleInboxConversation)
+	mux.HandleFunc("/api/inbox/notify", s.handleInboxNotify)
 	mux.HandleFunc("/api/projects", s.handleProjects)
 	mux.HandleFunc("/api/projects/", s.handleProjectRoute)
 	mux.HandleFunc("/api/playbooks", s.handlePlaybooks)

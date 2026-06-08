@@ -3,6 +3,7 @@ package steering
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"os"
 	"strconv"
@@ -12,6 +13,8 @@ import (
 	"flow/internal/flowdb"
 	"flow/internal/monitor"
 )
+
+const backfillInaccessibleCooldown = 15 * time.Minute
 
 // SteeringBackfill is the steerer's durable catch-up. The live Socket Mode
 // listener only sees events delivered while connected; this runner reconciles
@@ -38,6 +41,7 @@ type SteeringBackfill struct {
 	limit    int
 	now      func() time.Time
 	logFn    func(string, ...any)
+	skipTill map[string]time.Time
 }
 
 // NewSteeringBackfill builds the runner. Zero interval/lookback/limit fall back
@@ -58,7 +62,7 @@ func NewSteeringBackfill(db *sql.DB, observe func(context.Context, []monitor.Inb
 	return &SteeringBackfill{
 		db: db, observe: observe, channels: channels, dms: dms, ims: ims,
 		configFn: configFn, interval: interval, lookback: lookback, limit: limit,
-		now: time.Now, logFn: func(string, ...any) {},
+		now: time.Now, logFn: func(string, ...any) {}, skipTill: map[string]time.Time{},
 	}
 }
 
@@ -103,13 +107,19 @@ func (b *SteeringBackfill) runOnce(ctx context.Context) {
 			b.backfillChannel(ctx, ch, "channel", b.channels)
 		}
 	}
-	if b.dms != nil && b.ims != nil {
-		ids, err := b.ims.ListIMs(ctx)
-		if err != nil {
-			b.logFn("steering backfill: list DMs: %v", err)
-			return
+	if b.dms != nil {
+		var ids []string
+		if b.ims != nil {
+			var err error
+			ids, err = b.ims.ListIMs(ctx)
+			if err != nil {
+				b.logFn("steering backfill: list DMs: %v; falling back to known DM watermarks", err)
+				ids = b.knownDMWatermarkChannels()
+			}
+		} else {
+			ids = b.knownDMWatermarkChannels()
 		}
-		for _, id := range ids {
+		for _, id := range uniqueStrings(ids) {
 			select {
 			case <-ctx.Done():
 				return
@@ -121,6 +131,9 @@ func (b *SteeringBackfill) runOnce(ctx context.Context) {
 }
 
 func (b *SteeringBackfill) backfillChannel(ctx context.Context, channel, channelType string, client monitor.SlackHistory) {
+	if b.backfillSkipped(channel) {
+		return
+	}
 	wm, err := flowdb.GetSteeringWatermark(b.db, channel)
 	if err != nil {
 		b.logFn("steering backfill %s: watermark: %v", channel, err)
@@ -133,9 +146,11 @@ func (b *SteeringBackfill) backfillChannel(ctx context.Context, channel, channel
 	}
 	msgs, err := client.History(ctx, channel, oldest, b.limit)
 	if err != nil {
+		b.noteBackfillHistoryError(channel, err)
 		b.logFn("steering backfill %s: history: %v", channel, err)
 		return
 	}
+	b.clearBackfillHistoryError(channel)
 	if len(msgs) == 0 {
 		return
 	}
@@ -165,7 +180,7 @@ func (b *SteeringBackfill) backfillChannel(ctx context.Context, channel, channel
 		evs = append(evs, monitor.InboundEvent{
 			Kind: "message", Channel: channel, ChannelType: channelType,
 			TS: ts, ThreadTS: threadTS,
-			UserID: strings.TrimSpace(m.User), Text: strings.TrimSpace(m.Text),
+			UserID: strings.TrimSpace(m.User), Text: strings.TrimSpace(m.DisplayText()),
 		})
 	}
 	if len(evs) > 0 {
@@ -204,11 +219,106 @@ func slackTSGreater(a, b string) bool {
 // subtypes (joins, leaves, message_changed, …). Mirrors monitor's accept rule.
 func acceptBackfillMessage(m monitor.SlackMessage) bool {
 	switch strings.TrimSpace(m.SubType) {
-	case "", "bot_message", "thread_broadcast":
-		return strings.TrimSpace(m.Text) != "" || strings.TrimSpace(m.User) != ""
+	case "", "bot_message", "thread_broadcast", "file_share":
+		return strings.TrimSpace(m.DisplayText()) != "" || strings.TrimSpace(m.User) != ""
 	default:
 		return false
 	}
+}
+
+func (b *SteeringBackfill) knownDMWatermarkChannels() []string {
+	if b == nil || b.db == nil {
+		return nil
+	}
+	rows, err := b.db.Query(`SELECT channel FROM steering_watermark`)
+	if err != nil {
+		b.logFn("steering backfill: list known DM watermarks: %v", err)
+		return nil
+	}
+	defer rows.Close()
+	var ids []string
+	for rows.Next() {
+		var ch string
+		if err := rows.Scan(&ch); err != nil {
+			continue
+		}
+		ch = strings.TrimSpace(ch)
+		if looksLikeSlackDMChannel(ch) {
+			ids = append(ids, ch)
+		}
+	}
+	if err := rows.Err(); err != nil {
+		b.logFn("steering backfill: scan known DM watermarks: %v", err)
+	}
+	return ids
+}
+
+func looksLikeSlackDMChannel(ch string) bool {
+	return strings.HasPrefix(strings.ToUpper(strings.TrimSpace(ch)), "D") && !strings.Contains(ch, ":")
+}
+
+func uniqueStrings(values []string) []string {
+	if len(values) == 0 {
+		return nil
+	}
+	seen := make(map[string]bool, len(values))
+	out := make([]string, 0, len(values))
+	for _, value := range values {
+		value = strings.TrimSpace(value)
+		if value == "" || seen[value] {
+			continue
+		}
+		seen[value] = true
+		out = append(out, value)
+	}
+	return out
+}
+
+func (b *SteeringBackfill) backfillSkipped(channel string) bool {
+	if b == nil || len(b.skipTill) == 0 {
+		return false
+	}
+	until, ok := b.skipTill[strings.TrimSpace(channel)]
+	if !ok {
+		return false
+	}
+	if b.now().Before(until) {
+		return true
+	}
+	delete(b.skipTill, strings.TrimSpace(channel))
+	return false
+}
+
+func (b *SteeringBackfill) noteBackfillHistoryError(channel string, err error) {
+	if b == nil || err == nil || !backfillInaccessibleError(err) {
+		return
+	}
+	if b.skipTill == nil {
+		b.skipTill = map[string]time.Time{}
+	}
+	b.skipTill[strings.TrimSpace(channel)] = b.now().Add(backfillInaccessibleCooldown)
+}
+
+func (b *SteeringBackfill) clearBackfillHistoryError(channel string) {
+	if b == nil || len(b.skipTill) == 0 {
+		return
+	}
+	delete(b.skipTill, strings.TrimSpace(channel))
+}
+
+func backfillInaccessibleError(err error) bool {
+	if err == nil {
+		return false
+	}
+	for e := err; e != nil; e = errors.Unwrap(e) {
+		text := strings.ToLower(e.Error())
+		for _, marker := range []string{"not_in_channel", "channel_not_found", "missing_scope"} {
+			if strings.Contains(text, marker) {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 func backfillInterval() time.Duration {

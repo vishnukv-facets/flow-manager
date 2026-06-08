@@ -249,6 +249,24 @@ func TestClassifyInboxEvent_GitHubLifecycleEventsAreActionable(t *testing.T) {
 	}
 }
 
+func TestClassifyInboxEvent_FlowTellIsActionableButNoticeIsNot(t *testing.T) {
+	tell := ClassifyInboxEvent(InboundEvent{Kind: "flow_tell", ChannelType: "flow"})
+	if tell.Source != "flow" || !tell.Actionable {
+		t.Fatalf("flow_tell meta = %+v, want actionable flow", tell)
+	}
+	notice := ClassifyInboxEvent(InboundEvent{Kind: "flow_notice", ChannelType: "flow"})
+	if notice.Source != "flow" || notice.Actionable {
+		t.Fatalf("flow_notice meta = %+v, want non-actionable flow", notice)
+	}
+}
+
+func TestClassifyInboxEvent_AttentionForwardIsActionableSlack(t *testing.T) {
+	meta := ClassifyInboxEvent(InboundEvent{Kind: "attention_forward", ChannelType: "slack"})
+	if meta.Source != "slack" || !meta.Actionable {
+		t.Fatalf("attention_forward meta = %+v, want actionable slack", meta)
+	}
+}
+
 func TestReadInboxEntries_AcceptsLegacyRowsWithoutMeta(t *testing.T) {
 	slug := inboxTestSlug(t)
 	if err := os.MkdirAll(TaskDir(slug), 0o755); err != nil {
