@@ -61,7 +61,7 @@ func ClassifyInboxEvent(ev InboundEvent) InboxEventMeta {
 		actionable = true
 	case "slack":
 		switch ev.Kind {
-		case "message", "app_mention":
+		case "message", "app_mention", "attention_forward":
 			actionable = true
 		}
 	case "flow":

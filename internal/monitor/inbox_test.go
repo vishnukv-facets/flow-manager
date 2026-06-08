@@ -260,6 +260,13 @@ func TestClassifyInboxEvent_FlowTellIsActionableButNoticeIsNot(t *testing.T) {
 	}
 }
 
+func TestClassifyInboxEvent_AttentionForwardIsActionableSlack(t *testing.T) {
+	meta := ClassifyInboxEvent(InboundEvent{Kind: "attention_forward", ChannelType: "slack"})
+	if meta.Source != "slack" || !meta.Actionable {
+		t.Fatalf("attention_forward meta = %+v, want actionable slack", meta)
+	}
+}
+
 func TestReadInboxEntries_AcceptsLegacyRowsWithoutMeta(t *testing.T) {
 	slug := inboxTestSlug(t)
 	if err := os.MkdirAll(TaskDir(slug), 0o755); err != nil {

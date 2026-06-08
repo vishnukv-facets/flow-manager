@@ -2,31 +2,41 @@ package steering
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"flow/internal/flowdb"
+	"flow/internal/monitor"
 )
 
 // stubActionIO swaps the shell-out vars and records calls.
 type spawnRec struct{ name, slug, brief, project string }
 type tellRec struct{ slug, msg string }
 type tagRec struct{ slug, tag string }
+type forwardRec struct {
+	slug string
+	item flowdb.FeedItem
+	msg  string
+}
 
 // stubbedTags records taskTagger calls for the most recent stubActionIO setup,
 // so tests can assert source-thread tagging without changing the helper's return
 // signature (used by 11 call sites). Reset on each stubActionIO call.
 var stubbedTags []tagRec
+var stubbedForwards []forwardRec
 
 func stubActionIO(t *testing.T) (*[]spawnRec, *[]tellRec) {
 	t.Helper()
 	var spawns []spawnRec
 	var tells []tellRec
 	stubbedTags = nil
-	oldSpawn, oldTell, oldTag, oldHandoff := taskSpawner, taskTeller, taskTagger, taskHandoffRequester
+	stubbedForwards = nil
+	oldSpawn, oldTell, oldTag, oldHandoff, oldForward := taskSpawner, taskTeller, taskTagger, taskHandoffRequester, taskForwarder
 	taskSpawner = func(_ context.Context, name, slug, brief, project string) error {
 		spawns = append(spawns, spawnRec{name, slug, brief, project})
 		return nil
@@ -43,8 +53,12 @@ func stubActionIO(t *testing.T) (*[]spawnRec, *[]tellRec) {
 		stubbedTags = append(stubbedTags, tagRec{slug, tag})
 		return nil
 	}
+	taskForwarder = func(_ context.Context, _ *sql.DB, slug string, item flowdb.FeedItem, msg string) error {
+		stubbedForwards = append(stubbedForwards, forwardRec{slug: slug, item: item, msg: msg})
+		return nil
+	}
 	t.Cleanup(func() {
-		taskSpawner, taskTeller, taskTagger, taskHandoffRequester = oldSpawn, oldTell, oldTag, oldHandoff
+		taskSpawner, taskTeller, taskTagger, taskHandoffRequester, taskForwarder = oldSpawn, oldTell, oldTag, oldHandoff, oldForward
 	})
 	return &spawns, &tells
 }
@@ -385,7 +399,7 @@ func TestForwardFeed(t *testing.T) {
 		t.Fatalf("OpenDB: %v", err)
 	}
 	defer db.Close()
-	_, tells := stubActionIO(t)
+	stubActionIO(t)
 
 	item := flowdb.FeedItem{ID: "f2", Source: "slack", ThreadKey: "C1:200.1", Summary: "rel q", MatchedTask: "kong-split", SuggestedAction: "forward", Status: "new", CreatedAt: "2026-06-05T10:00:00Z"}
 	if _, err := flowdb.UpsertFeedItem(db, item); err != nil {
@@ -394,11 +408,11 @@ func TestForwardFeed(t *testing.T) {
 	if err := ForwardFeed(context.Background(), db, item); err != nil {
 		t.Fatalf("ForwardFeed: %v", err)
 	}
-	if len(*tells) != 1 || (*tells)[0].slug != "kong-split" {
-		t.Fatalf("taskTeller = %+v, want one call to kong-split", *tells)
+	if len(stubbedForwards) != 1 || stubbedForwards[0].slug != "kong-split" {
+		t.Fatalf("taskForwarder = %+v, want one call to kong-split", stubbedForwards)
 	}
-	if !strings.Contains((*tells)[0].msg, "C1:200.1") {
-		t.Errorf("forward message should reference the source thread: %q", (*tells)[0].msg)
+	if !strings.Contains(stubbedForwards[0].msg, "C1:200.1") {
+		t.Errorf("forward message should reference the source thread: %q", stubbedForwards[0].msg)
 	}
 	if items, _ := flowdb.ListFeedItems(db, "acted"); len(items) != 1 {
 		t.Errorf("forwarded item should be 'acted'")
@@ -411,7 +425,7 @@ func TestForwardFeedIncludesContextPack(t *testing.T) {
 		t.Fatalf("OpenDB: %v", err)
 	}
 	defer db.Close()
-	_, tells := stubActionIO(t)
+	stubActionIO(t)
 
 	item := flowdb.FeedItem{
 		ID:              "fctx",
@@ -434,10 +448,10 @@ func TestForwardFeedIncludesContextPack(t *testing.T) {
 	if err := ForwardFeed(context.Background(), db, item); err != nil {
 		t.Fatalf("ForwardFeed: %v", err)
 	}
-	if len(*tells) != 1 {
-		t.Fatalf("taskTeller calls = %+v, want one", *tells)
+	if len(stubbedForwards) != 1 {
+		t.Fatalf("taskForwarder calls = %+v, want one", stubbedForwards)
 	}
-	msg := (*tells)[0].msg
+	msg := stubbedForwards[0].msg
 	for _, want := range []string{
 		"Source context",
 		"untrusted",
@@ -447,6 +461,98 @@ func TestForwardFeedIncludesContextPack(t *testing.T) {
 		if !strings.Contains(msg, want) {
 			t.Fatalf("forward message missing %q:\n%s", want, msg)
 		}
+	}
+}
+
+func TestFeedForwardInboxEventPreservesSourceAttribution(t *testing.T) {
+	at := time.Date(2026, 6, 8, 17, 30, 0, 0, time.UTC)
+	item := flowdb.FeedItem{
+		ID:          "src1",
+		Source:      "slack",
+		ThreadKey:   "D03LH2RCZMG:1780916901.021529",
+		Channel:     "D03LH2RCZMG",
+		ChannelType: "im",
+		Author:      "U03LK2CCE68",
+		TS:          "1780916901.021529",
+		TeamID:      "T123",
+		URL:         "slack://channel?team=T123&id=D03LH2RCZMG&message=1780916901021529",
+		Summary:     "Ishaan shared the Phase 2 plan",
+	}
+
+	ev := feedForwardInboxEvent(item, feedForwardMessage(item)+"\nForwarded source context", at)
+
+	if ev.Kind != "attention_forward" {
+		t.Fatalf("kind = %q, want attention_forward", ev.Kind)
+	}
+	if ev.ChannelType != "slack" || ev.Channel != "D03LH2RCZMG" || ev.UserID != "U03LK2CCE68" {
+		t.Fatalf("source attribution lost: %+v", ev)
+	}
+	if ev.ThreadTS != "1780916901.021529" || ev.TS != "1780916901.021529" {
+		t.Fatalf("thread identity lost: ts=%q thread_ts=%q", ev.TS, ev.ThreadTS)
+	}
+	if !strings.Contains(ev.Text, "Original slack sender: U03LK2CCE68") ||
+		!strings.Contains(ev.Text, "Reply target: slack thread D03LH2RCZMG:1780916901.021529") ||
+		!strings.Contains(ev.Text, "Forwarded source context") {
+		t.Fatalf("forward text missing source guidance:\n%s", ev.Text)
+	}
+}
+
+func TestForwardFeedWritesSourceAttributedInboxEvent(t *testing.T) {
+	root := t.TempDir()
+	t.Setenv("FLOW_ROOT", root)
+	t.Setenv("FLOW_UI_URL", "http://127.0.0.1:1")
+	db, err := flowdb.OpenDB(filepath.Join(root, "flow.db"))
+	if err != nil {
+		t.Fatalf("OpenDB: %v", err)
+	}
+	defer db.Close()
+	now := "2026-06-08T17:40:00Z"
+	if _, err := db.Exec(
+		`INSERT INTO tasks (slug, name, status, kind, priority, work_dir, session_provider, session_id, created_at, updated_at)
+		 VALUES (?, ?, 'in-progress', 'regular', 'high', ?, 'claude', 'session-1', ?, ?)`,
+		"coinswitch-task", "coinswitch slack thread", root, now, now,
+	); err != nil {
+		t.Fatalf("seed task: %v", err)
+	}
+	item := flowdb.FeedItem{
+		ID:              "fw-src",
+		Source:          "slack",
+		ThreadKey:       "D03LH2RCZMG:1780916901.021529",
+		Channel:         "D03LH2RCZMG",
+		ChannelType:     "im",
+		Author:          "U03LK2CCE68",
+		TS:              "1780916901.021529",
+		Summary:         "Ishaan shared the Phase 2 plan",
+		MatchedTask:     "coinswitch-task",
+		SuggestedAction: "forward",
+		Status:          "new",
+		CreatedAt:       now,
+	}
+	if _, err := flowdb.UpsertFeedItem(db, item); err != nil {
+		t.Fatalf("seed feed: %v", err)
+	}
+
+	if err := ForwardFeed(context.Background(), db, item); err != nil {
+		t.Fatalf("ForwardFeed: %v", err)
+	}
+
+	entries, err := monitor.ReadInboxEntries("coinswitch-task")
+	if err != nil {
+		t.Fatalf("ReadInboxEntries: %v", err)
+	}
+	if len(entries) != 1 {
+		t.Fatalf("inbox entries = %d, want 1", len(entries))
+	}
+	ev := entries[0].Event
+	if entries[0].Meta.Source != "slack" || !entries[0].Meta.Actionable {
+		t.Fatalf("meta = %+v, want actionable slack", entries[0].Meta)
+	}
+	if ev.Kind != "attention_forward" || ev.UserID != "U03LK2CCE68" || ev.Channel != "D03LH2RCZMG" || ev.ThreadTS != "1780916901.021529" {
+		t.Fatalf("source-attributed event not preserved: %+v", ev)
+	}
+	if !strings.Contains(ev.Text, "it was not authored by the operator") ||
+		!strings.Contains(ev.Text, "Reply target: slack thread D03LH2RCZMG:1780916901.021529") {
+		t.Fatalf("forward guidance missing from event text:\n%s", ev.Text)
 	}
 }
 

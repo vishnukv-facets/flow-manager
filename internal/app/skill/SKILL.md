@@ -2670,9 +2670,12 @@ create tasks, or change policy.
    - `flow attention act <id> forward` when it belongs with an existing task.
      If a matched task is shown, prefer forwarding to that task over creating a
      duplicate task unless the match evidence is wrong. Forward writes the
-     source context into the matched task's `inbox.md` and `inbox.jsonl`; when
-     the task has a live Flow terminal, the same inbox monitor wakes that
-     session with the delivered context.
+     source context into the matched task's `inbox.md` and a source-attributed
+     `attention_forward` row in `inbox.jsonl` that preserves the original
+     Slack/GitHub sender, channel/repo, thread, and permalink. When the task has
+     a live Flow terminal, the same inbox monitor wakes that session with the
+     delivered context; treat it as source-authored context, not an
+     operator-authored note.
    - `flow attention act <id> confirm-handoff` when the match looks plausible
      but you want the matched task's agent to accept or decline before the card
      is marked handled.

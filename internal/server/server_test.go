@@ -117,6 +117,32 @@ func TestFormatInboxWakePromptIncludesSourceAndURL(t *testing.T) {
 	}
 }
 
+func TestFormatInboxWakePromptAttributesAttentionForwardSource(t *testing.T) {
+	entries := []monitor.InboxEntry{{
+		Event: monitor.InboundEvent{
+			Kind:        "attention_forward",
+			ChannelType: "slack",
+			Channel:     "D03LH2RCZMG",
+			ThreadTS:    "1780916901.021529",
+			UserID:      "U03LK2CCE68",
+			Text:        "Original slack sender: U03LK2CCE68\nReply target: slack thread D03LH2RCZMG:1780916901.021529\n\nForwarded source context",
+		},
+		Meta: monitor.InboxEventMeta{Source: "slack", Actionable: true},
+	}}
+
+	prompt := formatInboxWakePrompt("coinswitch-task", entries)
+	for _, want := range []string{
+		"slack attention_forward",
+		"from U03LK2CCE68",
+		"thread D03LH2RCZMG:1780916901.021529",
+		"Forwarded source context",
+	} {
+		if !strings.Contains(prompt, want) {
+			t.Fatalf("wake prompt missing %q:\n%s", want, prompt)
+		}
+	}
+}
+
 func TestInboxNotifyWakesSharedTaskWithFullMessage(t *testing.T) {
 	oldLook, oldCmd := sharedTerminalLookPath, sharedTerminalCommand
 	resetSharedTerminalAvailable()

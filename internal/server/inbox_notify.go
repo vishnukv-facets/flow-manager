@@ -89,15 +89,40 @@ func (s *Server) wakeTaskForInboxJSONL(ctx context.Context, slug, sender, messag
 			return err
 		}
 	}
-	entry := monitor.InboxEntry{
-		EnqueuedAt: time.Now().UTC().Format(time.RFC3339),
-		Event:      monitor.FlowTellEvent(sender, message, time.Now().UTC()),
-		Meta:       monitor.InboxEventMeta{Source: "flow", Actionable: true},
+	entry, ok, err := latestActionableInboxEntry(slug)
+	if err != nil {
+		return err
+	}
+	if !ok {
+		entry = monitor.InboxEntry{
+			EnqueuedAt: time.Now().UTC().Format(time.RFC3339),
+			Event:      monitor.FlowTellEvent(sender, message, time.Now().UTC()),
+			Meta:       monitor.InboxEventMeta{Source: "flow", Actionable: true},
+		}
 	}
 	if err := s.deliverInboxEvents(slug, []monitor.InboxEntry{entry}); err != nil {
 		return err
 	}
 	return markInboxMonitorCursorAtEnd(slug)
+}
+
+func latestActionableInboxEntry(slug string) (monitor.InboxEntry, bool, error) {
+	entries, err := monitor.ReadInboxEntries(slug)
+	if err != nil {
+		return monitor.InboxEntry{}, false, err
+	}
+	for i := len(entries) - 1; i >= 0; i-- {
+		entry := entries[i]
+		meta := entry.Meta
+		if meta.Source == "" {
+			meta = monitor.ClassifyInboxEvent(entry.Event)
+			entry.Meta = meta
+		}
+		if meta.Actionable {
+			return entry, true, nil
+		}
+	}
+	return monitor.InboxEntry{}, false, nil
 }
 
 func markInboxMonitorCursorAtEnd(slug string) error {

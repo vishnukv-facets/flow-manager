@@ -212,6 +212,8 @@ func inboxJSONLTitle(ev monitor.InboundEvent) string {
 		return "Slack message"
 	case "app_mention":
 		return "Slack mention"
+	case "attention_forward":
+		return "Attention forward"
 	case "reaction_added":
 		if ev.Reaction != "" {
 			return "Reaction :" + ev.Reaction + ":"

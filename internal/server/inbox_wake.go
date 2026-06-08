@@ -38,6 +38,12 @@ func formatInboxWakePrompt(slug string, entries []monitor.InboxEntry) string {
 			meta = monitor.ClassifyInboxEvent(entry.Event)
 		}
 		fmt.Fprintf(&b, "- %s %s", meta.Source, entry.Event.Kind)
+		if sender := inboxJSONLSender(entry.Event); sender != "" && sender != "unknown" {
+			fmt.Fprintf(&b, " from %s", sender)
+		}
+		if thread := inboxWakeThreadLabel(entry.Event, meta.Source); thread != "" {
+			fmt.Fprintf(&b, " thread %s", thread)
+		}
 		if entry.Event.URL != "" {
 			fmt.Fprintf(&b, " %s", entry.Event.URL)
 		}
@@ -47,6 +53,25 @@ func formatInboxWakePrompt(slug string, entries []monitor.InboxEntry) string {
 		b.WriteByte('\n')
 	}
 	return strings.TrimSpace(b.String())
+}
+
+func inboxWakeThreadLabel(ev monitor.InboundEvent, source string) string {
+	switch source {
+	case "slack":
+		channel := strings.TrimSpace(ev.Channel)
+		thread := strings.TrimSpace(ev.ThreadTS)
+		if thread == "" {
+			thread = strings.TrimSpace(ev.TS)
+		}
+		if channel != "" && thread != "" {
+			return channel + ":" + thread
+		}
+	case "github":
+		if c := strings.TrimSpace(ev.Channel); c != "" {
+			return c
+		}
+	}
+	return ""
 }
 
 func oneLine(s string, limit int) string {
