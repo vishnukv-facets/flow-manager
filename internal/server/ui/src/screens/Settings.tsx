@@ -1,13 +1,13 @@
 import { useEffect, useMemo, useState, type ReactNode } from 'react'
-import { Bell, CheckCircle2, Database, Loader2, MonitorCog, Moon, PlugZap, Save, Settings as SettingsIcon, SlidersHorizontal, Sun } from 'lucide-react'
-import { useAction, useHealth, useSettings, useUiData } from '../lib/query'
+import { AlertTriangle, Bell, CheckCircle2, Database, ExternalLink, Globe2, Link2, Loader2, MonitorCog, Moon, PlugZap, Save, Settings as SettingsIcon, SlidersHorizontal, Sun } from 'lucide-react'
+import { useAction, useHealth, useIngressStatus, useSettings, useUiData } from '../lib/query'
 import { useDocumentTitle } from '../lib/useDocumentTitle'
 import { getTheme, onThemeChange, toggleTheme, type Theme } from '../lib/theme'
 import { ErrorNote, Loading, ProviderIcon, SourceIcon } from '../components/ui'
 import { SlackConnect } from '../components/SlackConnect'
 import { WatchedChannels } from '../components/WatchedChannels'
 import { AutonomyPanel } from '../components/AutonomyPanel'
-import type { SettingField, ToolCapability } from '../lib/types'
+import type { IngressStatus, SettingField, ToolCapability } from '../lib/types'
 import { useMascotPrefs, setMascotPrefs, NAP_OPTIONS } from '../lib/mascot'
 
 type BrowserNotificationPermission = NotificationPermission | 'unsupported'
@@ -261,6 +261,7 @@ function ConfigPanels() {
         return (
           <SettingsPanel key={group} title={group} icon={<SlidersHorizontal size={17} />}>
             <div className="config-form">
+              {group === 'Ingress' && <IngressStatusPanel />}
               {gfields.map((f) => (
                 <ConfigField key={f.key} field={f} draft={draft[f.key]} onChange={(v) => setDraft((d) => ({ ...d, [f.key]: v }))} />
               ))}
@@ -275,6 +276,77 @@ function ConfigPanels() {
         )
       })}
     </>
+  )
+}
+
+function IngressStatusPanel() {
+  const { data: ingress, isLoading } = useIngressStatus()
+  if (isLoading && !ingress) {
+    return (
+      <div className="ingress-runtime waiting">
+        <div className="ingress-runtime-head">
+          <span className="ingress-state waiting"><Loader2 size={13} className="spin" /> checking</span>
+        </div>
+      </div>
+    )
+  }
+  if (!ingress) return null
+
+  return (
+    <div className={`ingress-runtime ${ingressRuntimeState(ingress)}`}>
+      <div className="ingress-runtime-head">
+        <div className="setting-label">Runtime status</div>
+        <span className={`ingress-state ${ingressRuntimeState(ingress)}`}>
+          {ingress.running ? <CheckCircle2 size={13} /> : ingress.last_error ? <AlertTriangle size={13} /> : <Globe2 size={13} />}
+          {ingressRuntimeLabel(ingress)}
+        </span>
+      </div>
+      <div className="ingress-kv">
+        <IngressRuntimeValue label="Provider" value={ingress.provider || 'none'} />
+        {ingress.provider === 'zrok' && <IngressRuntimeValue label="zrok env" value={ingress.env_enabled ? 'enabled' : 'not enabled'} />}
+        {ingress.share_name && <IngressRuntimeValue label="Share" value={ingress.share_name} mono />}
+        {ingress.base_url ? <IngressRuntimeLink label="Public URL" value={ingress.base_url} /> : <IngressRuntimeValue label="Public URL" value="not created yet" />}
+        {ingress.github_webhook_url && <IngressRuntimeLink label="GitHub webhook" value={ingress.github_webhook_url} />}
+        {ingress.last_error && <IngressRuntimeValue label="Last error" value={ingress.last_error} mono warn />}
+      </div>
+    </div>
+  )
+}
+
+function ingressRuntimeState(ingress: IngressStatus): 'online' | 'failed' | 'waiting' | 'off' {
+  if (ingress.running) return 'online'
+  if (ingress.last_error) return 'failed'
+  if (ingress.provider === 'none') return 'off'
+  return 'waiting'
+}
+
+function ingressRuntimeLabel(ingress: IngressStatus): string {
+  const state = ingressRuntimeState(ingress)
+  if (state === 'online') return 'public URL live'
+  if (state === 'failed') return 'share failed'
+  if (state === 'off') return 'off'
+  return 'waiting for URL'
+}
+
+function IngressRuntimeValue({ label, value, mono = false, warn = false }: { label: string; value: string; mono?: boolean; warn?: boolean }) {
+  return (
+    <div className="ingress-row">
+      <div className="setting-label">{label}</div>
+      <div className={`ingress-value${mono ? ' mono' : ''}${warn ? ' warn' : ''}`} title={value}>{value}</div>
+    </div>
+  )
+}
+
+function IngressRuntimeLink({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="ingress-row">
+      <div className="setting-label">{label}</div>
+      <a className="ingress-value link mono" href={value} target="_blank" rel="noreferrer" title={value}>
+        <Link2 size={12} />
+        <span>{value}</span>
+        <ExternalLink size={11} />
+      </a>
+    </div>
   )
 }
 

@@ -688,7 +688,7 @@ export interface SlackSetupStatus {
   user_token_set: boolean
   self_user_ids?: string
   redirect_url: string
-  callback_mode: 'localhost' | 'zrok' | 'manual'
+  callback_mode: 'localhost'
   oauth_active: boolean
   oauth_status?: string
   oauth_error?: string
@@ -710,7 +710,6 @@ export interface IngressStatus {
   share_name?: string
   share_running?: boolean
   last_error?: string
-  slack_callback_url?: string
   github_webhook_url?: string
 }
 

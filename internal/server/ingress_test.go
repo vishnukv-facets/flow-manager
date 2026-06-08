@@ -1,6 +1,9 @@
 package server
 
 import (
+	"crypto/hmac"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -17,6 +20,7 @@ func clearIngressEnv(t *testing.T) {
 	for _, k := range []string{
 		"FLOW_INGRESS_PROVIDER", "FLOW_PUBLIC_BASE_URL",
 		"FLOW_ZROK_SHARE_NAME", "FLOW_ZROK_AUTO_START",
+		"FLOW_GH_WEBHOOK_SECRET",
 	} {
 		t.Setenv(k, "")
 	}
@@ -99,68 +103,21 @@ func TestConnectorCallbackURL(t *testing.T) {
 	clearIngressEnv(t)
 
 	// Without public ingress: returns "" (caller uses its fallback).
-	if got := srv.connectorCallbackURL("/api/slack/oauth/callback"); got != "" {
+	if got := srv.connectorCallbackURL("/api/github/webhook"); got != "" {
 		t.Errorf("no ingress: want empty, got %q", got)
 	}
 
-	// With a live zrok URL: builds full URL.
+	// With a live zrok URL: builds the signed GitHub webhook URL.
 	t.Setenv("FLOW_INGRESS_PROVIDER", "zrok")
 	setZrokLive(t, srv, "https://mytoken.share.zrok.io")
 
-	if got := srv.connectorCallbackURL("/api/slack/oauth/callback"); got != "https://mytoken.share.zrok.io/api/slack/oauth/callback" {
+	if got := srv.connectorCallbackURL("/api/github/webhook"); got != "https://mytoken.share.zrok.io/api/github/webhook" {
 		t.Errorf("zrok callback = %q", got)
 	}
 	// Path without a leading slash is normalised.
 	if got := srv.connectorCallbackURL("api/github/webhook"); got != "https://mytoken.share.zrok.io/api/github/webhook" {
 		t.Errorf("no-slash path = %q", got)
 	}
-}
-
-// ---------------------------------------------------------------------------
-// callbackMode
-// ---------------------------------------------------------------------------
-
-func TestCallbackMode(t *testing.T) {
-	t.Run("none", func(t *testing.T) {
-		root, db := testRootDB(t)
-		srv := New(Config{DB: db, FlowRoot: root, CommandPath: "/bin/false"})
-		clearIngressEnv(t)
-		if got := srv.callbackMode(); got != "localhost" {
-			t.Errorf("none = %q, want localhost", got)
-		}
-	})
-
-	t.Run("zrok before share is up falls back to localhost", func(t *testing.T) {
-		root, db := testRootDB(t)
-		srv := New(Config{DB: db, FlowRoot: root, CommandPath: "/bin/false"})
-		clearIngressEnv(t)
-		t.Setenv("FLOW_INGRESS_PROVIDER", "zrok")
-		if got := srv.callbackMode(); got != "localhost" {
-			t.Errorf("zrok no share = %q, want localhost", got)
-		}
-	})
-
-	t.Run("zrok with live share", func(t *testing.T) {
-		root, db := testRootDB(t)
-		srv := New(Config{DB: db, FlowRoot: root, CommandPath: "/bin/false"})
-		clearIngressEnv(t)
-		t.Setenv("FLOW_INGRESS_PROVIDER", "zrok")
-		setZrokLive(t, srv, "https://x.share.zrok.io")
-		if got := srv.callbackMode(); got != "zrok" {
-			t.Errorf("zrok live = %q, want zrok", got)
-		}
-	})
-
-	t.Run("manual with URL", func(t *testing.T) {
-		root, db := testRootDB(t)
-		srv := New(Config{DB: db, FlowRoot: root, CommandPath: "/bin/false"})
-		clearIngressEnv(t)
-		t.Setenv("FLOW_INGRESS_PROVIDER", "manual")
-		t.Setenv("FLOW_PUBLIC_BASE_URL", "https://x.com")
-		if got := srv.callbackMode(); got != "manual" {
-			t.Errorf("manual = %q, want manual", got)
-		}
-	})
 }
 
 // ---------------------------------------------------------------------------
@@ -212,9 +169,6 @@ func TestHandleIngressStatus_ZrokLiveShare(t *testing.T) {
 	if st.ShareName != "flowshare" {
 		t.Errorf("share_name = %q", st.ShareName)
 	}
-	if st.SlackCallbackURL != "https://flowshare.share.zrok.io"+slackOAuthCallbackPath {
-		t.Errorf("slack_callback_url = %q", st.SlackCallbackURL)
-	}
 	if st.GithubWebhookURL != "https://flowshare.share.zrok.io/api/github/webhook" {
 		t.Errorf("github_webhook_url = %q", st.GithubWebhookURL)
 	}
@@ -257,8 +211,8 @@ func TestHandleIngressStatus_Manual(t *testing.T) {
 	if st.BaseURL != "https://flow.example.com" || !st.Running {
 		t.Errorf("manual ingress: %+v", st)
 	}
-	if st.SlackCallbackURL == "" || st.GithubWebhookURL == "" {
-		t.Error("derived callback URLs missing for manual ingress")
+	if st.GithubWebhookURL == "" {
+		t.Error("derived GitHub webhook URL missing for manual ingress")
 	}
 }
 
@@ -275,10 +229,10 @@ func TestHandleIngressStatus_MethodNotAllowed(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// Slack: callback URL uses public ingress when a URL is live
+// Slack: callback URL stays local even when public ingress is live
 // ---------------------------------------------------------------------------
 
-func TestSlackCallbackURL_PrefersPublicIngress(t *testing.T) {
+func TestSlackCallbackURL_AlwaysLocalhost(t *testing.T) {
 	t.Run("default localhost", func(t *testing.T) {
 		root, db := testRootDB(t)
 		srv := New(Config{DB: db, FlowRoot: root, CommandPath: "/bin/false"})
@@ -293,7 +247,7 @@ func TestSlackCallbackURL_PrefersPublicIngress(t *testing.T) {
 		}
 	})
 
-	t.Run("zrok live URL preferred", func(t *testing.T) {
+	t.Run("zrok live URL ignored for Slack", func(t *testing.T) {
 		root, db := testRootDB(t)
 		srv := New(Config{DB: db, FlowRoot: root, CommandPath: "/bin/false"})
 		clearIngressEnv(t)
@@ -301,12 +255,12 @@ func TestSlackCallbackURL_PrefersPublicIngress(t *testing.T) {
 		t.Setenv("FLOW_INGRESS_PROVIDER", "zrok")
 		setZrokLive(t, srv, "https://zrtoken.share.zrok.io")
 		got := srv.slackCallbackURL()
-		if got != "https://zrtoken.share.zrok.io"+slackOAuthCallbackPath {
-			t.Errorf("zrok callback URL = %q", got)
+		if !strings.HasPrefix(got, "https://localhost:") {
+			t.Errorf("zrok ingress should not change Slack callback URL, got %q", got)
 		}
 	})
 
-	t.Run("manual URL preferred", func(t *testing.T) {
+	t.Run("manual URL ignored for Slack", func(t *testing.T) {
 		root, db := testRootDB(t)
 		srv := New(Config{DB: db, FlowRoot: root, CommandPath: "/bin/false"})
 		clearIngressEnv(t)
@@ -314,17 +268,17 @@ func TestSlackCallbackURL_PrefersPublicIngress(t *testing.T) {
 		t.Setenv("FLOW_INGRESS_PROVIDER", "manual")
 		t.Setenv("FLOW_PUBLIC_BASE_URL", "https://my.host.com")
 		got := srv.slackCallbackURL()
-		if got != "https://my.host.com"+slackOAuthCallbackPath {
-			t.Errorf("manual callback URL = %q", got)
+		if !strings.HasPrefix(got, "https://localhost:") {
+			t.Errorf("manual ingress should not change Slack callback URL, got %q", got)
 		}
 	})
 }
 
 // ---------------------------------------------------------------------------
-// Slack: manifest uses public ingress URL when a URL is live
+// Slack: manifest never registers standing public ingress URLs
 // ---------------------------------------------------------------------------
 
-func TestSlackManifestUsesPublicIngress(t *testing.T) {
+func TestSlackManifestUsesLocalhost(t *testing.T) {
 	root, db := testRootDB(t)
 	srv := New(Config{DB: db, FlowRoot: root, CommandPath: "/bin/false"})
 	clearIngressEnv(t)
@@ -337,22 +291,21 @@ func TestSlackManifestUsesPublicIngress(t *testing.T) {
 		t.Fatalf("default manifest redirect = %v", redirects)
 	}
 
-	// With a live zrok share: manifest carries the runtime zrok URL.
+	// With a live zrok share: manifest still carries the localhost redirect URL.
 	t.Setenv("FLOW_INGRESS_PROVIDER", "zrok")
 	setZrokLive(t, srv, "https://maniftoken.share.zrok.io")
 	m2 := slackAppManifest("flow", srv.slackCallbackURL())
 	redirects2 := m2["oauth_config"].(map[string]any)["redirect_urls"].([]string)
-	want := "https://maniftoken.share.zrok.io" + slackOAuthCallbackPath
-	if len(redirects2) != 1 || redirects2[0] != want {
-		t.Fatalf("zrok manifest redirect = %v, want %q", redirects2, want)
+	if len(redirects2) != 1 || !strings.HasPrefix(redirects2[0], "https://localhost:") {
+		t.Fatalf("zrok manifest redirect = %v, want localhost", redirects2)
 	}
 }
 
 // ---------------------------------------------------------------------------
-// Slack: OAuth dance skips TLS listener in public ingress mode
+// Slack: OAuth dance always uses the short-lived local TLS listener
 // ---------------------------------------------------------------------------
 
-func TestSlackOAuthDance_PublicIngress_NoTLSListener(t *testing.T) {
+func TestSlackOAuthDance_PublicIngressStillUsesLocalTLSListener(t *testing.T) {
 	root, db := testRootDB(t)
 	srv := New(Config{DB: db, FlowRoot: root, CommandPath: "/bin/false"})
 	clearIngressEnv(t)
@@ -368,19 +321,19 @@ func TestSlackOAuthDance_PublicIngress_NoTLSListener(t *testing.T) {
 	}
 	defer dance.shutdown()
 
-	// Public ingress mode: no self-signed TLS listener.
-	if !dance.publicIngress {
-		t.Fatal("publicIngress flag not set when a public URL is live")
+	if dance.publicIngress {
+		t.Fatal("Slack OAuth must not use standing public ingress")
 	}
-	if dance.srv != nil {
-		t.Error("TLS srv should be nil in public ingress mode")
+	if dance.srv == nil {
+		t.Error("TLS srv must be non-nil for Slack OAuth")
 	}
 	if dance.addr != "" {
-		t.Errorf("addr should be empty in public ingress mode, got %q", dance.addr)
+		// port 0 in tests should still bind a local listener.
+	} else {
+		t.Error("addr must be set for local Slack OAuth")
 	}
 
-	// Authorize URL must use the zrok callback URL, not localhost.
-	expectedRedirect := "https://dancetoken.share.zrok.io" + slackOAuthCallbackPath
+	expectedRedirect := srv.slackCallbackURL()
 	if !strings.Contains(dance.authorizeURL, "redirect_uri="+urlEncodeRaw(expectedRedirect)) {
 		t.Errorf("authorize URL redirect_uri wrong: %s", dance.authorizeURL)
 	}
@@ -422,14 +375,72 @@ func TestSlackSetupStatus_CallbackMode(t *testing.T) {
 		assertCallbackMode(t, "zrok", false, "", "localhost")
 	})
 	t.Run("zrok live", func(t *testing.T) {
-		assertCallbackMode(t, "zrok", true, "", "zrok")
+		assertCallbackMode(t, "zrok", true, "", "localhost")
 	})
 	t.Run("manual no url", func(t *testing.T) {
 		assertCallbackMode(t, "manual", false, "", "localhost")
 	})
 	t.Run("manual with url", func(t *testing.T) {
-		assertCallbackMode(t, "manual", false, "https://cb.example.com", "manual")
+		assertCallbackMode(t, "manual", false, "https://cb.example.com", "localhost")
 	})
+}
+
+func TestIngressMuxExposesOnlyGitHubWebhook(t *testing.T) {
+	root, db := testRootDB(t)
+	srv := New(Config{DB: db, FlowRoot: root, CommandPath: "/bin/false"})
+	clearIngressEnv(t)
+
+	rec := httptest.NewRecorder()
+	srv.ingressMux().ServeHTTP(rec, httptest.NewRequest("GET", slackOAuthCallbackPath, nil))
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("public ingress must not expose Slack OAuth callback, status %d", rec.Code)
+	}
+
+	rec = httptest.NewRecorder()
+	srv.ingressMux().ServeHTTP(rec, httptest.NewRequest("GET", "/api/github/webhook", nil))
+	if rec.Code != http.StatusMethodNotAllowed {
+		t.Fatalf("GitHub webhook route missing from ingress mux, status %d", rec.Code)
+	}
+}
+
+func TestGitHubWebhookRequiresSecretAndSignature(t *testing.T) {
+	root, db := testRootDB(t)
+	srv := New(Config{DB: db, FlowRoot: root, CommandPath: "/bin/false"})
+	clearIngressEnv(t)
+
+	body := []byte(`{"zen":"Keep it logically awesome."}`)
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest("POST", "/api/github/webhook", strings.NewReader(string(body)))
+	srv.handleGitHubWebhook(rec, req)
+	if rec.Code != http.StatusServiceUnavailable {
+		t.Fatalf("missing secret status = %d, want 503", rec.Code)
+	}
+
+	t.Setenv("FLOW_GH_WEBHOOK_SECRET", "topsecret")
+	rec = httptest.NewRecorder()
+	req = httptest.NewRequest("POST", "/api/github/webhook", strings.NewReader(string(body)))
+	req.Header.Set("X-Hub-Signature-256", "sha256=bad")
+	srv.handleGitHubWebhook(rec, req)
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("bad signature status = %d, want 401", rec.Code)
+	}
+
+	rec = httptest.NewRecorder()
+	req = httptest.NewRequest("POST", "/api/github/webhook", strings.NewReader(string(body)))
+	req.Header.Set("X-Hub-Signature-256", githubTestSignature("topsecret", body))
+	req.Header.Set("X-GitHub-Event", "ping")
+	req.Header.Set("X-GitHub-Delivery", "delivery-1")
+	srv.handleGitHubWebhook(rec, req)
+	if rec.Code != http.StatusAccepted {
+		t.Fatalf("valid signature status = %d, want 202 body %s", rec.Code, rec.Body.String())
+	}
+}
+
+func githubTestSignature(secret string, body []byte) string {
+	mac := hmac.New(sha256.New, []byte(secret))
+	_, _ = mac.Write(body)
+	return "sha256=" + hex.EncodeToString(mac.Sum(nil))
 }
 
 func assertCallbackMode(t *testing.T, provider string, zrokLive bool, manualURL, want string) {
@@ -461,7 +472,7 @@ func assertCallbackMode(t *testing.T, provider string, zrokLive bool, manualURL,
 }
 
 // ---------------------------------------------------------------------------
-// Slack: main-server OAuth callback (public ingress mode)
+// Slack: main-server OAuth callback fallback
 // ---------------------------------------------------------------------------
 
 func TestHandleSlackSetupOAuthCallbackMain_NoDance(t *testing.T) {

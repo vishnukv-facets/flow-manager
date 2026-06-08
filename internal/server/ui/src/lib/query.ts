@@ -12,6 +12,7 @@ import type {
   HealthView,
   InboxConversation,
   InboxFeed,
+  IngressStatus,
   KBFileView,
   MemorySource,
   OverviewView,
@@ -46,7 +47,7 @@ export const queryClient = new QueryClient({
 // Live events should refresh live work data, not slow/static metadata. Quote,
 // settings, and Slack channel listing have their own refresh cadence; invalidating
 // Slack channels on every message can hammer conversations.list into rate limits.
-const liveInvalidationExclusions = new Set(['quote', 'settings', 'slack-channels', 'slack-setup', 'memory-sources'])
+const liveInvalidationExclusions = new Set(['quote', 'settings', 'slack-channels', 'slack-setup', 'memory-sources', 'ingress-status'])
 const liveData = { predicate: (q: { queryKey: readonly unknown[] }) => !liveInvalidationExclusions.has(String(q.queryKey[0])) }
 let invalidateTimer: ReturnType<typeof setTimeout> | null = null
 let pendingBroadInvalidate = false
@@ -109,6 +110,13 @@ export function useSlackSetupStatus() {
     queryKey: ['slack-setup'],
     queryFn: () => apiGet<SlackSetupStatus>('/api/slack/setup/status'),
     refetchInterval: (q) => (q.state.data?.oauth_active ? 1500 : 8000),
+  })
+}
+export function useIngressStatus() {
+  return useQuery({
+    queryKey: ['ingress-status'],
+    queryFn: () => apiGet<IngressStatus>('/api/ingress/status'),
+    refetchInterval: 5000,
   })
 }
 export function useHealth() {

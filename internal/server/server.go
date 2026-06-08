@@ -146,11 +146,11 @@ func (s *Server) registerAPIRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/search", s.handleSearch)
 	mux.HandleFunc("/api/ask-flow", s.handleAskFlow)
 	mux.HandleFunc("/api/quote", s.handleQuote)
-	// Slack OAuth callback. In public ingress mode (zrok/manual) zrok forwards
-	// the external redirect to this path on the main server. In localhost mode
-	// the ephemeral TLS listener also handles it; this route acts as a
-	// fallback that returns 404 when no install is in progress.
+	// Slack OAuth callback. The install flow uses a short-lived localhost TLS
+	// listener; this local route is only a same-process fallback and is not
+	// registered on the public ingress mux.
 	mux.HandleFunc(slackOAuthCallbackPath, s.handleSlackSetupOAuthCallbackMain)
+	mux.HandleFunc("/api/github/webhook", s.handleGitHubWebhook)
 	mux.HandleFunc("/api/ingress/status", s.handleIngressStatus)
 	mux.HandleFunc("/api/attention", s.handleAttention)
 	mux.HandleFunc("/api/attention/trace", s.handleAttentionTrace)

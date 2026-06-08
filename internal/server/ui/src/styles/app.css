@@ -431,6 +431,76 @@
   color: var(--text-3);
   line-height: 1.4;
 }
+.ingress-runtime {
+  display: grid;
+  gap: 9px;
+  padding: 10px;
+  border: 1px solid var(--border-faint);
+  border-radius: var(--r);
+  background: color-mix(in srgb, var(--bg-3) 55%, transparent);
+}
+.ingress-runtime.failed {
+  border-color: color-mix(in srgb, var(--danger) 36%, var(--border));
+  background: color-mix(in srgb, var(--danger) 8%, var(--bg-2));
+}
+.ingress-runtime.online {
+  border-color: color-mix(in srgb, var(--ok) 35%, var(--border));
+}
+.ingress-runtime-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+.ingress-state {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  flex: none;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--text-2);
+}
+.ingress-state.online {
+  color: var(--ok);
+}
+.ingress-state.failed {
+  color: var(--danger);
+}
+.ingress-kv {
+  display: grid;
+  gap: 7px;
+}
+.ingress-row {
+  display: grid;
+  grid-template-columns: minmax(92px, 0.34fr) minmax(0, 1fr);
+  gap: 10px;
+  align-items: baseline;
+}
+.ingress-value {
+  min-width: 0;
+  color: var(--text-2);
+  font-size: 12.5px;
+  line-height: 1.35;
+  overflow-wrap: anywhere;
+}
+.ingress-value.mono {
+  font-family: var(--font-mono);
+}
+.ingress-value.warn {
+  color: var(--danger);
+}
+.ingress-value.link {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 6px;
+  color: var(--accent);
+  text-decoration: none;
+}
+.ingress-value.link span {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
 .config-actions {
   display: flex;
   justify-content: flex-end;

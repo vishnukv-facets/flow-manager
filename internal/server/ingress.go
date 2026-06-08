@@ -72,23 +72,6 @@ func (s *Server) connectorCallbackURL(path string) string {
 	return base + path
 }
 
-// callbackMode returns the active Slack OAuth callback mode string. It reflects
-// actual usability: zrok/manual only when a public base URL is live, otherwise
-// "localhost" (the ephemeral self-signed TLS listener fallback).
-func (s *Server) callbackMode() string {
-	if s.publicBaseURL() == "" {
-		return "localhost"
-	}
-	switch activeIngressProvider() {
-	case ingressProviderZrok:
-		return "zrok"
-	case ingressProviderManual:
-		return "manual"
-	default:
-		return "localhost"
-	}
-}
-
 // ---------------------------------------------------------------------------
 // Status view
 // ---------------------------------------------------------------------------
@@ -103,7 +86,6 @@ type IngressStatusView struct {
 	ShareRunning bool   `json:"share_running,omitempty"`
 	LastError    string `json:"last_error,omitempty"`
 	// Derived callback URLs for connectors.
-	SlackCallbackURL string `json:"slack_callback_url,omitempty"`
 	GithubWebhookURL string `json:"github_webhook_url,omitempty"`
 }
 
@@ -132,7 +114,6 @@ func (s *Server) handleIngressStatus(w http.ResponseWriter, r *http.Request) {
 		// nothing extra; BaseURL already set
 	}
 	if st.BaseURL != "" {
-		st.SlackCallbackURL = st.BaseURL + slackOAuthCallbackPath
 		st.GithubWebhookURL = st.BaseURL + "/api/github/webhook"
 	}
 	writeJSON(w, st)
@@ -188,6 +169,10 @@ type zrokManager struct {
 // runtime; callers read it via currentBaseURL once the share is up.
 func (m *zrokManager) start() {
 	if activeIngressProvider() != ingressProviderZrok || !zrokAutoStart() {
+		return
+	}
+	if githubWebhookSecret() == "" {
+		m.setErr(errors.New("GitHub webhook secret required before public ingress can start"))
 		return
 	}
 
@@ -370,9 +355,6 @@ func lookupReservedShare(root env_core.Root, name string) (*zroksdk.Share, strin
 // or its data-plane API, which have no authentication and must stay local.
 func (s *Server) ingressMux() http.Handler {
 	mux := http.NewServeMux()
-	mux.HandleFunc(slackOAuthCallbackPath, s.handleSlackSetupOAuthCallbackMain)
-	// GitHub webhook delivery (POST /api/github/webhook) is wired by the
-	// github-webhook-ingress task; it will register here so signed deliveries
-	// arrive over the same public share.
+	mux.HandleFunc("/api/github/webhook", s.handleGitHubWebhook)
 	return mux
 }

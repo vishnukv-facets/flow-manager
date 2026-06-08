@@ -25,7 +25,7 @@ func clearSlackSetupEnv(t *testing.T) {
 		"FLOW_SLACK_USER_TOKEN", "SLACK_USER_TOKEN",
 		"FLOW_SLACK_SELF_USER_IDS", "FLOW_SLACK_OAUTH_PORT",
 		"FLOW_SLACK_API_BASE_URL",
-		// Ingress vars affect slackCallbackURL() and callbackMode().
+		// Ingress vars must not affect the localhost-only Slack callback URL.
 		"FLOW_INGRESS_PROVIDER", "FLOW_PUBLIC_BASE_URL",
 		"FLOW_ZROK_SHARE_NAME", "FLOW_ZROK_AUTO_START",
 	} {

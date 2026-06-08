@@ -85,6 +85,13 @@ func (l *GitHubListener) Stop() {
 	}
 }
 
+func (l *GitHubListener) PollOnce(ctx context.Context) {
+	if l == nil {
+		return
+	}
+	l.pollOnce(ctx)
+}
+
 func (l *GitHubListener) run(ctx context.Context) {
 	l.pollOnce(ctx)
 	interval := l.pollInterval

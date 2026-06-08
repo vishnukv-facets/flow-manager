@@ -65,6 +65,7 @@ var settingsRegistry = []settingSpec{
 	{Key: "FLOW_GH_REPOS", Label: "Repo allowlist", Group: "GitHub", Type: settingString, Help: "owner/repo,owner/repo2 — leave empty to watch all repos visible to gh."},
 	{Key: "FLOW_GH_POLL_INTERVAL", Label: "Poll interval", Group: "GitHub", Type: settingString, Help: "Go duration, e.g. 60s or 2m."},
 	{Key: "FLOW_GH_AUTOOPEN", Label: "Auto-open on event", Group: "GitHub", Type: settingBool, Default: "true", Help: "Open a session automatically when a new GitHub item is detected."},
+	{Key: "FLOW_GH_WEBHOOK_SECRET", Label: "Webhook signing secret", Group: "GitHub", Type: settingSecret, Help: "Required before public ingress starts. GitHub webhook deliveries must carry a matching X-Hub-Signature-256 HMAC."},
 	// Steering (attention router)
 	{Key: "FLOW_STEERING_WATCH_CHANNELS", Label: "Watched channels", Group: "Steering", Type: settingString, Help: "Comma-separated Slack channel IDs the attention router watches (in addition to DMs + @mentions)."},
 	{Key: "FLOW_STEERING_MUTED_CHANNELS", Label: "Muted channels", Group: "Steering", Type: settingString, Help: "Comma-separated Slack channel IDs to never surface."},
@@ -77,11 +78,12 @@ var settingsRegistry = []settingSpec{
 	{Key: "FLOW_STEERING_SEND_MODEL", Label: "Reply send model", Group: "Steering", Type: settingEnum, Options: []string{"claude-haiku-4-5", "claude-sonnet-4-6", "claude-opus-4-8"}, Default: "claude-sonnet-4-6", Help: "Model for the ephemeral session that posts your approved Slack replies. Sonnet is reliable + cheap; Haiku is cheapest but often fumbles the Slack tool call; Opus is overkill. Applies to the next send (no restart)."},
 	{Key: "FLOW_STEERING_CLASSIFIER_BUDGET_PER_HOUR", Label: "Classifier budget / hour", Group: "Steering", Type: settingInt, Default: "30", Help: "Maximum Stage 1/2 classifier subprocess turns per rolling hour. Lower this if Mission Control heats the laptop under Slack/GitHub noise."},
 	{Key: "FLOW_STEERING_CLASSIFIER_FAILURE_COOLDOWN", Label: "Classifier failure cooldown", Group: "Steering", Type: settingString, Default: "30m", Help: "Go duration for pausing classifier subprocesses after quota/auth failures, e.g. 30m or 1h."},
-	// Ingress — public callback URL for connectors that need inbound HTTPS
-	{Key: "FLOW_INGRESS_PROVIDER", Label: "Ingress provider", Group: "Ingress", Type: settingEnum, Options: []string{"none", "zrok", "manual"}, Default: "none", Help: "Public callback URL provider. 'zrok' generates the URL at runtime via the zrok SDK; 'manual' uses your own URL from FLOW_PUBLIC_BASE_URL."},
-	{Key: "FLOW_PUBLIC_BASE_URL", Label: "Public base URL (manual only)", Group: "Ingress", Type: settingString, Help: "Only for the 'manual' provider: your own public HTTPS base URL, e.g. https://flow.example.com (own reverse proxy/tunnel). Ignored for zrok, which discovers its URL at runtime."},
-	{Key: "FLOW_ZROK_SHARE_NAME", Label: "zrok reserved share name", Group: "Ingress", Type: settingString, Help: "Optional reserved share unique-name. Set it to pin a stable public URL across restarts (required for Slack/GitHub callbacks). Leave empty for an ephemeral share whose URL changes each restart."},
-	{Key: "FLOW_ZROK_AUTO_START", Label: "Auto-start zrok share", Group: "Ingress", Type: settingBool, Default: "false", Help: "Create the zrok public share and attach the SDK listener automatically when the Flow server starts (requires an enabled zrok environment: run `zrok enable` once)."},
+	// Ingress — public URL for GitHub webhook callbacks only. Slack OAuth uses
+	// a short-lived localhost callback listener during install/reinstall.
+	{Key: "FLOW_INGRESS_PROVIDER", Label: "GitHub ingress provider", Group: "Ingress", Type: settingEnum, Options: []string{"none", "zrok", "manual"}, Default: "none", Help: "Public URL provider for signed GitHub webhook callbacks only. Slack OAuth stays local and does not use standing ingress."},
+	{Key: "FLOW_PUBLIC_BASE_URL", Label: "Public base URL (manual only)", Group: "Ingress", Type: settingString, Help: "Only for the 'manual' GitHub webhook provider: your own public HTTPS base URL, e.g. https://flow.example.com (own reverse proxy/tunnel). Ignored for zrok, which discovers its URL at runtime."},
+	{Key: "FLOW_ZROK_SHARE_NAME", Label: "zrok reserved share name", Group: "Ingress", Type: settingString, Help: "Optional reserved share unique-name. Set it to pin a stable GitHub webhook URL across restarts. Leave empty for an ephemeral share whose URL changes each restart."},
+	{Key: "FLOW_ZROK_AUTO_START", Label: "Auto-start zrok share", Group: "Ingress", Type: settingBool, Default: "false", Help: "Create the zrok public share for signed GitHub webhooks automatically when Flow starts. Requires zrok enablement and FLOW_GH_WEBHOOK_SECRET."},
 	// General
 	{Key: "FLOW_STALE_DAYS", Label: "Stale threshold (days)", Group: "General", Type: settingInt, Default: "3", Help: "In-progress sessions quiet longer than this are flagged stale."},
 	{Key: "FLOW_MISSION_QUOTE", Label: "Mission Control quote", Group: "General", Type: settingBool, Default: "true", Help: "Show the rotating anime quote beside the greeting on Mission Control."},
@@ -323,7 +325,7 @@ func (s *Server) applySettingsRestart(changed []string) {
 		if strings.HasPrefix(k, "FLOW_GH_") {
 			ghTouched = true
 		}
-		if strings.HasPrefix(k, "FLOW_ZROK_") || strings.HasPrefix(k, "FLOW_INGRESS_") || k == "FLOW_PUBLIC_BASE_URL" {
+		if strings.HasPrefix(k, "FLOW_ZROK_") || strings.HasPrefix(k, "FLOW_INGRESS_") || k == "FLOW_PUBLIC_BASE_URL" || k == "FLOW_GH_WEBHOOK_SECRET" {
 			ingressTouched = true
 		}
 	}
