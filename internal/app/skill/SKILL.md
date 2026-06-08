@@ -269,10 +269,11 @@ Orchestration (parent-child agents — see §4.17)
        brief "What" section so the spawned agent starts with context.
 
   flow tell <task-slug> "<message>" [--from <slug-or-label>]
-       Append a stamped message to ~/.flow/tasks/<slug>/inbox.md. The
-       receiving agent reads new entries at its next SessionStart and
-       acts on them. Use this to nudge a sibling task without spawning
-       a new conversation.
+       Append a stamped message to ~/.flow/tasks/<slug>/inbox.md and an
+       actionable flow_tell event to inbox.jsonl. A live Flow terminal is
+       woken through the same inbox monitor used for Slack/GitHub events;
+       otherwise the receiving agent sees the message on next SessionStart.
+       Use this to nudge a sibling task without spawning a new conversation.
 
   flow wait <task-slug> --until <state> [--timeout <dur>]
        Block until the task reaches the requested state. <state> can be
@@ -1740,7 +1741,7 @@ durable filesystem channels, and signals state through the same
 | Command | Purpose | Synchronous? |
 |---|---|---|
 | `flow spawn <name> --parent <slug> --prompt "..."` | Create a child task with the parent linkage set and immediately open it in a new tab. The prompt becomes the child's brief What section. | No — fires the child off in its own tab |
-| `flow tell <slug> "..."` | Append a message to the receiving task's inbox.md; the bound agent picks it up at its next SessionStart. | No — receiver reads on next session turn |
+| `flow tell <slug> "..."` | Append a message to the receiving task's inbox.md and inbox.jsonl; a live Flow terminal wakes through the inbox monitor. | No — receiver handles it in its own session |
 | `flow wait <slug> --until <state>` | Block the caller's terminal until the named task reaches the requested state. | Yes — blocks via WS subscription |
 
 **When to use which:**
@@ -2668,7 +2669,10 @@ create tasks, or change policy.
    - `flow attention act <id> make-task` when it should become tracked work.
    - `flow attention act <id> forward` when it belongs with an existing task.
      If a matched task is shown, prefer forwarding to that task over creating a
-     duplicate task unless the match evidence is wrong.
+     duplicate task unless the match evidence is wrong. Forward writes the
+     source context into the matched task's `inbox.md` and `inbox.jsonl`; when
+     the task has a live Flow terminal, the same inbox monitor wakes that
+     session with the delivered context.
    - `flow attention act <id> confirm-handoff` when the match looks plausible
      but you want the matched task's agent to accept or decline before the card
      is marked handled.

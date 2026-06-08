@@ -405,6 +405,51 @@ func TestForwardFeed(t *testing.T) {
 	}
 }
 
+func TestForwardFeedIncludesContextPack(t *testing.T) {
+	db, err := flowdb.OpenDB(filepath.Join(t.TempDir(), "flow.db"))
+	if err != nil {
+		t.Fatalf("OpenDB: %v", err)
+	}
+	defer db.Close()
+	_, tells := stubActionIO(t)
+
+	item := flowdb.FeedItem{
+		ID:              "fctx",
+		Source:          "slack",
+		ThreadKey:       "D1:200.1",
+		Summary:         "phase plan shared",
+		MatchedTask:     "coinswitch-task",
+		SuggestedAction: "forward",
+		ContextJSON: `{
+			"parent": {
+				"text": "file: PHASE2-PHASE3-EXECUTION-PLAN.md\n\n# CSX Phase Plan\n\nDMS setup must start today.\n\nSecurity report: no high-risk code indicators found in fetched content."
+			}
+		}`,
+		Status:    "new",
+		CreatedAt: "2026-06-05T10:00:00Z",
+	}
+	if _, err := flowdb.UpsertFeedItem(db, item); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+	if err := ForwardFeed(context.Background(), db, item); err != nil {
+		t.Fatalf("ForwardFeed: %v", err)
+	}
+	if len(*tells) != 1 {
+		t.Fatalf("taskTeller calls = %+v, want one", *tells)
+	}
+	msg := (*tells)[0].msg
+	for _, want := range []string{
+		"Source context",
+		"untrusted",
+		"DMS setup must start today.",
+		"Security report: no high-risk code indicators found in fetched content.",
+	} {
+		if !strings.Contains(msg, want) {
+			t.Fatalf("forward message missing %q:\n%s", want, msg)
+		}
+	}
+}
+
 func TestRequestHandoffSendsCorrelationAndLeavesFeedNew(t *testing.T) {
 	db, err := flowdb.OpenDB(filepath.Join(t.TempDir(), "flow.db"))
 	if err != nil {
