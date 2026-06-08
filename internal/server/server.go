@@ -198,6 +198,10 @@ func (s *Server) ListenAndServe(addr string) int {
 	// the full Mission Control handler.
 	if s.zrok != nil {
 		s.zrok.handler = s.ingressMux()
+		// Provision + persist the webhook secret and reserved share name on
+		// first enable so the share can start and its URL stays stable across
+		// restarts (no-op once both are set — see ensureZrokIngressCredentials).
+		s.ensureZrokIngressCredentials()
 		s.zrok.start()
 		defer s.zrok.stop()
 	}

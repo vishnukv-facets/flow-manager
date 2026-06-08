@@ -710,6 +710,9 @@ export interface IngressStatus {
   share_name?: string
   share_running?: boolean
   last_error?: string
+  // Whether a GitHub webhook signing secret is configured. The value itself is
+  // never sent here; use the reveal-webhook-secret action to copy it.
+  webhook_secret_set?: boolean
   github_webhook_url?: string
 }
 
@@ -731,6 +734,7 @@ export interface ActionRequest {
   provider?: string
   permission_mode?: string
   mkdir?: boolean
+  no_open?: boolean
   attention_action?: string
   reply_text?: string
   reply_instructions?: string

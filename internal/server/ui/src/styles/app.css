@@ -501,6 +501,14 @@
   min-width: 0;
   overflow-wrap: anywhere;
 }
+.ingress-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  padding-top: 9px;
+  border-top: 1px solid var(--border-faint);
+  margin-top: 2px;
+}
 .config-actions {
   display: flex;
   justify-content: flex-end;
@@ -3047,6 +3055,12 @@ select.input {
   left: auto;
   right: 0;
 }
+/* Open above the trigger — for menus anchored at the bottom of a panel (e.g. a
+   modal footer's split button) where a downward popover would clip. */
+.menu-pop.up {
+  top: auto;
+  bottom: calc(100% + 6px);
+}
 .menu-item {
   display: flex;
   align-items: center;
@@ -3107,6 +3121,16 @@ select.input {
   display: flex;
   flex-direction: column;
   gap: 6px;
+}
+/* New-task split button: stacked full-width "Create task" / "Create & open" */
+.create-opts {
+  min-width: 232px;
+  padding: 6px;
+  gap: 4px;
+}
+.create-opts .btn {
+  width: 100%;
+  justify-content: flex-start;
 }
 
 .iconseg {

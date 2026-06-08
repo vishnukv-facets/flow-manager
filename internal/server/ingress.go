@@ -85,6 +85,9 @@ type IngressStatusView struct {
 	ShareName    string `json:"share_name,omitempty"`
 	ShareRunning bool   `json:"share_running,omitempty"`
 	LastError    string `json:"last_error,omitempty"`
+	// WebhookSecretSet reports whether a GitHub webhook signing secret is
+	// configured (its value is never returned here — see revealWebhookSecret).
+	WebhookSecretSet bool `json:"webhook_secret_set"`
 	// Derived callback URLs for connectors.
 	GithubWebhookURL string `json:"github_webhook_url,omitempty"`
 }
@@ -98,6 +101,7 @@ func (s *Server) handleIngressStatus(w http.ResponseWriter, r *http.Request) {
 	st := IngressStatusView{Provider: string(prov)}
 	st.BaseURL = s.publicBaseURL()
 	st.Running = st.BaseURL != ""
+	st.WebhookSecretSet = githubWebhookSecret() != ""
 	switch prov {
 	case ingressProviderZrok:
 		st.ShareName = strings.TrimSpace(os.Getenv("FLOW_ZROK_SHARE_NAME"))
@@ -234,6 +238,25 @@ func (m *zrokManager) start() {
 		m.baseURL = ""
 		m.mu.Unlock()
 	}()
+}
+
+// releaseReservedShare best-effort deletes a previously-reserved share by its
+// unique name so a rotated-away URL stops resolving and doesn't linger against
+// the zrok account's reserved-share quota. Network-bound; all errors are
+// swallowed because rotation has already switched the active name and the new
+// share is what matters from here on.
+func (m *zrokManager) releaseReservedShare(name string) {
+	name = strings.TrimSpace(name)
+	if name == "" {
+		return
+	}
+	root, err := environment.LoadRoot()
+	if err != nil || !root.IsEnabled() {
+		return
+	}
+	if shr, _, ok := lookupReservedShare(root, name); ok {
+		_ = zroksdk.DeleteShare(root, shr)
+	}
 }
 
 // stop closes the listener (ending http.Serve) and deletes the share if it was

@@ -44,6 +44,11 @@ type actionRequest struct {
 	PermissionMode string `json:"permission_mode"`
 	Mkdir          bool   `json:"mkdir"`
 
+	// NoOpen, on create-flow, creates the task in backlog without opening an
+	// agent session (no browser-terminal bridge). Defaults false → the legacy
+	// "create & open session" behaviour is preserved for callers that omit it.
+	NoOpen bool `json:"no_open,omitempty"`
+
 	// AttentionAction is the verb for the attention-act action kind:
 	// make-task | forward | dismiss | send-reply. Target carries the feed item id.
 	AttentionAction string `json:"attention_action,omitempty"`
@@ -151,6 +156,13 @@ func (s *Server) multipartActionRequest(w http.ResponseWriter, r *http.Request) 
 			return actionRequest{}, fmt.Errorf("mkdir: %w", err)
 		}
 		req.Mkdir = value
+	}
+	if raw := strings.TrimSpace(r.FormValue("no_open")); raw != "" {
+		value, err := strconv.ParseBool(raw)
+		if err != nil {
+			return actionRequest{}, fmt.Errorf("no_open: %w", err)
+		}
+		req.NoOpen = value
 	}
 	if r.MultipartForm != nil {
 		req.AttachmentFiles = r.MultipartForm.File["images"]
@@ -294,6 +306,12 @@ func (s *Server) runAction(req actionRequest) (actionResponse, int) {
 		return s.closeFloatingTerminal(req)
 	case "update-settings":
 		return s.updateSettings(req)
+	case "rotate-webhook-secret":
+		return s.rotateWebhookSecret()
+	case "rotate-ingress-url":
+		return s.rotateZrokShareName()
+	case "reveal-webhook-secret":
+		return s.revealWebhookSecret()
 	case "compact-db":
 		return s.compactFlowDB()
 	case "attention-act":
@@ -688,6 +706,10 @@ func (s *Server) createFlow(req actionRequest) (actionResponse, int) {
 			return actionResponse{OK: false, Message: err.Error(), Output: out}, http.StatusInternalServerError
 		}
 	}
+	if req.NoOpen {
+		// Create-only: leave the task in backlog, don't bridge a session.
+		return actionResponse{OK: true, Message: "created " + slug, Output: out}, http.StatusOK
+	}
 	agent, _ := s.agentForTask(slug)
 	return actionResponse{OK: true, Message: "created " + slug + "; opening browser terminal", Output: out, Agent: agent, Bridge: true}, http.StatusOK
 }
@@ -699,6 +721,9 @@ func (s *Server) createFlowFromExisting(req actionRequest, task *flowdb.Task, pr
 	if !task.ArchivedAt.Valid && !task.DeletedAt.Valid && task.Status != "done" {
 		if err := flowdb.EnsureTaskStartable(s.cfg.DB, task); err != nil {
 			return actionResponse{OK: false, Message: err.Error()}, taskStartErrorStatus(err)
+		}
+		if req.NoOpen {
+			return actionResponse{OK: true, Message: "task " + task.Slug + " already exists"}, http.StatusOK
 		}
 		agent, _ := s.agentForTask(task.Slug)
 		if agent != nil {

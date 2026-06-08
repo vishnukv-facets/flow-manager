@@ -1826,6 +1826,62 @@ func TestCreateFlowDefaultsPermissionModeAuto(t *testing.T) {
 	}
 }
 
+func TestCreateFlowNoOpenCreatesBacklogWithoutSession(t *testing.T) {
+	root, db := testRootDB(t)
+	t.Setenv("FLOW_ROOT", root)
+	srv := New(Config{DB: db, FlowRoot: root, CommandPath: testFlowBinary(t)})
+
+	resp, status := srv.runAction(actionRequest{
+		Kind:     "create-flow",
+		Slug:     "ui-no-open",
+		Name:     "UI No Open",
+		WorkDir:  root,
+		Priority: "medium",
+		Prompt:   "Create only, no session.",
+		NoOpen:   true,
+	})
+	if status != http.StatusOK || !resp.OK {
+		t.Fatalf("status = %d, resp = %+v", status, resp)
+	}
+	if resp.Bridge {
+		t.Error("NoOpen create should not bridge a session")
+	}
+	if resp.Agent != nil {
+		t.Error("NoOpen create should not return an agent")
+	}
+	task, err := flowdb.GetTask(db, "ui-no-open")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if task.Status != "backlog" {
+		t.Errorf("status = %q, want backlog", task.Status)
+	}
+	if task.SessionID.Valid {
+		t.Errorf("session_id should be empty for a create-only task, got %q", task.SessionID.String)
+	}
+}
+
+func TestCreateFlowDefaultOpensSession(t *testing.T) {
+	root, db := testRootDB(t)
+	t.Setenv("FLOW_ROOT", root)
+	srv := New(Config{DB: db, FlowRoot: root, CommandPath: testFlowBinary(t)})
+
+	resp, status := srv.runAction(actionRequest{
+		Kind:     "create-flow",
+		Slug:     "ui-open-default",
+		Name:     "UI Open Default",
+		WorkDir:  root,
+		Priority: "medium",
+		Prompt:   "Default opens a session.",
+	})
+	if status != http.StatusOK || !resp.OK {
+		t.Fatalf("status = %d, resp = %+v", status, resp)
+	}
+	if !resp.Bridge {
+		t.Error("default create should bridge a session")
+	}
+}
+
 func TestForkTaskCopiesContextAndRecordsLineage(t *testing.T) {
 	root, db := testRootDB(t)
 	t.Setenv("FLOW_ROOT", root)

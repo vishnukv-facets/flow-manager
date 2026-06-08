@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState, type ClipboardEvent, type DragEvent } from 'react'
 import { useLocation } from 'wouter'
-import { AlertTriangle, FolderGit2, ImagePlus, Loader2, X } from 'lucide-react'
+import { AlertTriangle, ChevronDown, FolderGit2, ImagePlus, Loader2, Plus, X } from 'lucide-react'
 import { Modal } from './Modal'
 import { Field } from './ui'
 import { Select } from './Select'
@@ -123,7 +123,9 @@ export function CreateTaskModal({ open, onClose }: { open: boolean; onClose: () 
     setBusy(false)
   }
 
-  const submit = async () => {
+  // openSession=false creates the task in backlog without spawning a session;
+  // the agent is started later via the task's own "open" action.
+  const submit = async (openSession: boolean) => {
     const slug = slugify(name)
     if (!name.trim() || !slug) {
       pushToast('error', 'A task name is required')
@@ -146,6 +148,7 @@ export function CreateTaskModal({ open, onClose }: { open: boolean; onClose: () 
         permission_mode: permission,
         priority,
         prompt,
+        no_open: !openSession,
       }
       if (files.length) {
         const rpcFiles = await Promise.all(files.map((f) => fileToRpcFile(f, 'images')))
@@ -160,6 +163,7 @@ export function CreateTaskModal({ open, onClose }: { open: boolean; onClose: () 
             permission_mode: permission,
             priority,
             prompt,
+            no_open: String(!openSession),
           },
           rpcFiles,
         )
@@ -170,8 +174,14 @@ export function CreateTaskModal({ open, onClose }: { open: boolean; onClose: () 
       queryClient.invalidateQueries()
       onClose()
       reset()
-      if (resp.bridge && resp.agent) navigate(`/session/${resp.agent.slug}`)
-      else navigate(`/session/${slug}`)
+      if (!openSession) {
+        // Created in backlog — land on the task list so the new task is visible.
+        navigate('/tasks')
+      } else if (resp.bridge && resp.agent) {
+        navigate(`/session/${resp.agent.slug}`)
+      } else {
+        navigate(`/session/${slug}`)
+      }
     } catch (e) {
       pushToast('error', e instanceof Error ? e.message : 'create failed')
     } finally {
@@ -194,10 +204,39 @@ export function CreateTaskModal({ open, onClose }: { open: boolean; onClose: () 
           <button className="btn" onClick={onClose}>
             Cancel
           </button>
-          <button className="btn primary" disabled={busy || noProvider} onClick={submit}>
-            {busy ? <Loader2 size={15} className="spin" /> : null}
-            Create & open session
-          </button>
+          <div className="split-run">
+            <button className="btn primary split-main" disabled={busy || noProvider} onClick={() => submit(true)}>
+              {busy ? <Loader2 size={15} className="spin" /> : null}
+              Create &amp; open session
+            </button>
+            <details className="menu">
+              <summary className="btn primary split-caret" title="Create options">
+                <ChevronDown size={15} />
+              </summary>
+              <div className="menu-pop right up create-opts">
+                <button
+                  className="btn sm"
+                  disabled={busy || noProvider}
+                  onClick={(e) => {
+                    ;(e.currentTarget as HTMLElement).closest('details')?.removeAttribute('open')
+                    submit(false)
+                  }}
+                >
+                  <Plus size={13} /> Create task
+                </button>
+                <button
+                  className="btn primary sm"
+                  disabled={busy || noProvider}
+                  onClick={(e) => {
+                    ;(e.currentTarget as HTMLElement).closest('details')?.removeAttribute('open')
+                    submit(true)
+                  }}
+                >
+                  <Plus size={13} /> Create &amp; open session
+                </button>
+              </div>
+            </details>
+          </div>
         </>
       }
     >
@@ -205,7 +244,7 @@ export function CreateTaskModal({ open, onClose }: { open: boolean; onClose: () 
         className={`col${dragging ? ' dropping' : ''}`}
         style={{ gap: 14 }}
         onKeyDown={(e) => {
-          if ((e.metaKey || e.ctrlKey) && e.key === 'Enter') submit()
+          if ((e.metaKey || e.ctrlKey) && e.key === 'Enter') submit(true)
         }}
         onPaste={onPaste}
         onDragOver={(e) => {

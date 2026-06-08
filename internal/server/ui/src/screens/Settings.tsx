@@ -1,6 +1,8 @@
 import { useEffect, useMemo, useState, type ReactNode } from 'react'
-import { AlertTriangle, Bell, CheckCircle2, Database, ExternalLink, Globe2, Link2, Loader2, MonitorCog, Moon, PlugZap, Save, Settings as SettingsIcon, SlidersHorizontal, Sun } from 'lucide-react'
+import { AlertTriangle, Bell, CheckCircle2, Copy, Database, ExternalLink, Globe2, Link2, Loader2, MonitorCog, Moon, PlugZap, RotateCw, Save, Settings as SettingsIcon, SlidersHorizontal, Sun } from 'lucide-react'
 import { useAction, useHealth, useIngressStatus, useSettings, useUiData } from '../lib/query'
+import { confirmAction } from '../lib/confirm'
+import { pushToast } from '../lib/toast'
 import { useDocumentTitle } from '../lib/useDocumentTitle'
 import { getTheme, onThemeChange, toggleTheme, type Theme } from '../lib/theme'
 import { ErrorNote, Loading, ProviderIcon, SourceIcon } from '../components/ui'
@@ -281,6 +283,45 @@ function ConfigPanels() {
 
 function IngressStatusPanel() {
   const { data: ingress, isLoading } = useIngressStatus()
+  const action = useAction()
+
+  const copyToClipboard = async (value: string, label: string) => {
+    try {
+      await navigator.clipboard.writeText(value)
+      pushToast('ok', `${label} copied to clipboard`)
+    } catch {
+      pushToast('error', `Could not copy — the value is in ~/.flow/config.json`)
+    }
+  }
+  const copySecret = () => {
+    action.mutate(
+      { kind: 'reveal-webhook-secret' },
+      { onSuccess: (data) => data.output && copyToClipboard(data.output, 'Webhook secret') },
+    )
+  }
+  const rotateSecret = async () => {
+    const ok = await confirmAction({
+      title: 'Rotate GitHub webhook secret?',
+      body: 'A new signing secret is generated, saved, and copied to your clipboard now. You must paste it into your GitHub webhook settings afterward — until you do, GitHub deliveries will fail signature verification.',
+      confirmLabel: 'Rotate secret',
+      danger: true,
+    })
+    if (ok)
+      action.mutate(
+        { kind: 'rotate-webhook-secret' },
+        { onSuccess: (data) => data.output && copyToClipboard(data.output, 'New webhook secret') },
+      )
+  }
+  const rotateUrl = async () => {
+    const ok = await confirmAction({
+      title: 'Rotate public callback URL?',
+      body: 'A new zrok reserved share (and public URL) is created and the old one released. You must update the Payload URL in your GitHub webhook to the new URL once it appears.',
+      confirmLabel: 'Rotate URL',
+      danger: true,
+    })
+    if (ok) action.mutate({ kind: 'rotate-ingress-url' })
+  }
+
   if (isLoading && !ingress) {
     return (
       <div className="ingress-runtime waiting">
@@ -307,8 +348,28 @@ function IngressStatusPanel() {
         {ingress.share_name && <IngressRuntimeValue label="Share" value={ingress.share_name} mono />}
         {ingress.base_url ? <IngressRuntimeLink label="Public URL" value={ingress.base_url} /> : <IngressRuntimeValue label="Public URL" value="not created yet" />}
         {ingress.github_webhook_url && <IngressRuntimeLink label="GitHub webhook" value={ingress.github_webhook_url} />}
+        {ingress.provider !== 'none' && (
+          <IngressRuntimeValue label="Webhook secret" value={ingress.webhook_secret_set ? 'configured' : 'not set yet'} warn={!ingress.webhook_secret_set} />
+        )}
         {ingress.last_error && <IngressRuntimeValue label="Last error" value={ingress.last_error} mono warn />}
       </div>
+      {ingress.provider !== 'none' && (
+        <div className="ingress-actions">
+          {ingress.webhook_secret_set && (
+            <button type="button" className="btn ghost sm" onClick={copySecret} disabled={action.isPending} title="Copy the GitHub webhook signing secret to paste into GitHub">
+              <Copy size={13} /> Copy webhook secret
+            </button>
+          )}
+          <button type="button" className="btn ghost sm" onClick={rotateSecret} disabled={action.isPending} title="Generate a fresh GitHub webhook signing secret">
+            <RotateCw size={13} /> Rotate webhook secret
+          </button>
+          {ingress.provider === 'zrok' && (
+            <button type="button" className="btn ghost sm" onClick={rotateUrl} disabled={action.isPending} title="Generate a fresh public callback URL">
+              <RotateCw size={13} /> Rotate public URL
+            </button>
+          )}
+        </div>
+      )}
     </div>
   )
 }

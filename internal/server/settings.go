@@ -337,8 +337,11 @@ func (s *Server) applySettingsRestart(changed []string) {
 		s.githubListener.Stop()
 		_ = s.githubListener.Start()
 	}
-	if ingressTouched && s.zrok != nil {
-		s.zrok.stop()
-		s.zrok.start()
+	if ingressTouched {
+		// Mint + persist the webhook secret / reserved share name when this
+		// change turns zrok ingress on, so the share can start and its URL
+		// stays stable across restarts. No-op once both are set.
+		s.ensureZrokIngressCredentials()
+		s.restartIngress()
 	}
 }
