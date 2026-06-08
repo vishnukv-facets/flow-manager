@@ -15,6 +15,7 @@ import { Memories } from './screens/Memories'
 import { Workdirs } from './screens/Workdirs'
 import { Trash } from './screens/Trash'
 import { Settings } from './screens/Settings'
+import { Connectors } from './screens/Connectors'
 import { EmptyState } from './components/ui'
 import { ClaudeFlowScene } from './components/ClaudeMascot'
 import { FloatingTerminalsProvider } from './lib/floatingTerminals'
@@ -37,6 +38,7 @@ export function App() {
         <Route path="/kb" component={KnowledgeBase} />
         <Route path="/memories" component={Memories} />
         <Route path="/workdirs" component={Workdirs} />
+        <Route path="/connectors" component={Connectors} />
         <Route path="/settings" component={Settings} />
         <Route path="/trash" component={Trash} />
           <Route>

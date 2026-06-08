@@ -665,6 +665,10 @@ export interface SettingField {
   key: string
   label: string
   group: string
+  // Connector taxonomy — present only for connector-owned settings (Slack,
+  // GitHub, ingress). Generic settings omit both and stay on the Settings page.
+  category?: string
+  connector?: string
   type: 'string' | 'secret' | 'bool' | 'int' | 'enum'
   default?: string
   options?: string[]
@@ -697,6 +701,28 @@ export interface SlackSetupStatus {
   listener_running: boolean
   listener_connected: boolean
   listener_suppressed: boolean
+}
+
+/** One identity `gh` is logged in as. */
+export interface GitHubAccount {
+  login: string
+  active: boolean
+  source?: string // "keyring" | "GH_TOKEN" | "GITHUB_TOKEN" | …
+}
+
+/** GET /api/github/auth/status — who flow polls GitHub as, and switch targets. */
+export interface GitHubAuthStatus {
+  installed: boolean
+  authenticated: boolean
+  path?: string
+  host?: string
+  active_login?: string
+  active_source?: string
+  // env_pinned: the active identity comes from a GH_TOKEN/GITHUB_TOKEN env var,
+  // which overrides keyring accounts — switching is a no-op until it's unset.
+  env_pinned: boolean
+  accounts: GitHubAccount[]
+  error?: string
 }
 
 export interface IngressStatus {

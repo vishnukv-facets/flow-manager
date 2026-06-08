@@ -31,6 +31,15 @@ type settingSpec struct {
 	Default string
 	Options []string
 	Help    string
+	// Category and Connector classify a setting as belonging to an external
+	// connector so the Mission Control → Connectors page can group it by
+	// category (messaging, git, network, …) and provider (slack, github,
+	// ingress, …). Both empty means the setting is generic and stays on the
+	// Settings page. Group is retained for backward-compatible flat grouping;
+	// the Connectors UI prefers Category + Connector. Adding a new provider is
+	// a metadata change here, not a UI patch.
+	Category  string
+	Connector string
 	// Hidden keeps a setting out of the /api/settings schema (and thus the
 	// Settings form) while still persisting it in config.json and exporting
 	// it to the env at boot. Used for wizard-managed credentials the
@@ -38,34 +47,47 @@ type settingSpec struct {
 	Hidden bool
 }
 
+// Connector taxonomy. Categories group connectors by purpose; connector ids are
+// the concrete providers. Kept as constants so the registry tags and any
+// future provider stay spelled consistently.
+const (
+	categoryMessaging = "messaging"
+	categoryGit       = "git"
+	categoryNetwork   = "network"
+
+	connectorSlack   = "slack"
+	connectorGitHub  = "github"
+	connectorIngress = "ingress"
+)
+
 // settingsRegistry intentionally excludes per-session / runtime / bootstrap env
 // vars (FLOW_TASK, FLOW_ROOT, HOME, CLAUDE_CODE_SESSION_ID, …) — only durable,
 // operator-tunable configuration belongs here.
 var settingsRegistry = []settingSpec{
-	// Slack
-	{Key: "FLOW_SLACK_APP_TOKEN", Label: "App-level token", Group: "Slack", Type: settingSecret, Help: "xapp- token required for Socket Mode."},
-	{Key: "FLOW_SLACK_TOKEN", Label: "Bot / read token", Group: "Slack", Type: settingSecret, Help: "xoxb-/xoxp- token for Slack Web API reads."},
-	{Key: "FLOW_SLACK_USER_TOKEN", Label: "User token", Group: "Slack", Type: settingSecret, Help: "xoxp- token used to post as you."},
-	{Key: "FLOW_SLACK_WRITE_TOKEN", Label: "Write token", Group: "Slack", Type: settingSecret, Help: "Optional separate token for posting on your behalf."},
-	{Key: "FLOW_SLACK_SOCKET_MODE", Label: "Socket Mode", Group: "Slack", Type: settingBool, Default: "true", Help: "Connect the Slack Socket Mode listener when tokens are present."},
-	{Key: "FLOW_SLACK_SELF_USER_IDS", Label: "Your Slack user IDs", Group: "Slack", Type: settingString, Help: "Comma-separated. Reactions from these IDs trigger sessions, and their messages are treated as operator coordination."},
-	{Key: "FLOW_SLACK_TRIGGER_EMOJI", Label: "Trigger emoji", Group: "Slack", Type: settingString, Default: "claude", Help: "Reaction shortname(s) that spawn a session. Comma-separated for multi-provider, e.g. claude,codex."},
-	{Key: "FLOW_SLACK_OPEN_TARGET", Label: "Open target", Group: "Slack", Type: settingEnum, Options: []string{"ui", "iterm"}, Default: "ui", Help: "Where new Slack-reply tasks open."},
-	{Key: "FLOW_SLACK_AUTOOPEN", Label: "Auto-open on trigger", Group: "Slack", Type: settingBool, Default: "true", Help: "Open a session automatically when a Slack thread is triggered."},
-	{Key: "FLOW_SLACK_WRITES_ENABLED", Label: "Allow posting to Slack", Group: "Slack", Type: settingBool, Default: "false", Help: "Off by default. Gate for posting messages back to Slack."},
+	// Slack — messaging connector
+	{Key: "FLOW_SLACK_APP_TOKEN", Label: "App-level token", Group: "Slack", Category: categoryMessaging, Connector: connectorSlack, Type: settingSecret, Help: "xapp- token required for Socket Mode."},
+	{Key: "FLOW_SLACK_TOKEN", Label: "Bot / read token", Group: "Slack", Category: categoryMessaging, Connector: connectorSlack, Type: settingSecret, Help: "xoxb-/xoxp- token for Slack Web API reads."},
+	{Key: "FLOW_SLACK_USER_TOKEN", Label: "User token", Group: "Slack", Category: categoryMessaging, Connector: connectorSlack, Type: settingSecret, Help: "xoxp- token used to post as you."},
+	{Key: "FLOW_SLACK_WRITE_TOKEN", Label: "Write token", Group: "Slack", Category: categoryMessaging, Connector: connectorSlack, Type: settingSecret, Help: "Optional separate token for posting on your behalf."},
+	{Key: "FLOW_SLACK_SOCKET_MODE", Label: "Socket Mode", Group: "Slack", Category: categoryMessaging, Connector: connectorSlack, Type: settingBool, Default: "true", Help: "Connect the Slack Socket Mode listener when tokens are present."},
+	{Key: "FLOW_SLACK_SELF_USER_IDS", Label: "Your Slack user IDs", Group: "Slack", Category: categoryMessaging, Connector: connectorSlack, Type: settingString, Help: "Comma-separated. Reactions from these IDs trigger sessions, and their messages are treated as operator coordination."},
+	{Key: "FLOW_SLACK_TRIGGER_EMOJI", Label: "Trigger emoji", Group: "Slack", Category: categoryMessaging, Connector: connectorSlack, Type: settingString, Default: "claude", Help: "Reaction shortname(s) that spawn a session. Comma-separated for multi-provider, e.g. claude,codex."},
+	{Key: "FLOW_SLACK_OPEN_TARGET", Label: "Open target", Group: "Slack", Category: categoryMessaging, Connector: connectorSlack, Type: settingEnum, Options: []string{"ui", "iterm"}, Default: "ui", Help: "Where new Slack-reply tasks open."},
+	{Key: "FLOW_SLACK_AUTOOPEN", Label: "Auto-open on trigger", Group: "Slack", Category: categoryMessaging, Connector: connectorSlack, Type: settingBool, Default: "true", Help: "Open a session automatically when a Slack thread is triggered."},
+	{Key: "FLOW_SLACK_WRITES_ENABLED", Label: "Allow posting to Slack", Group: "Slack", Category: categoryMessaging, Connector: connectorSlack, Type: settingBool, Default: "false", Help: "Off by default. Gate for posting messages back to Slack."},
 	// Wizard-managed Slack app identity (Connect Slack flow). Hidden from the
 	// Settings form: the setup wizard writes these after apps.manifest.create
 	// and the OAuth callback reads them; hand-editing only breaks the pairing.
-	{Key: "FLOW_SLACK_APP_ID", Label: "Slack app ID", Group: "Slack", Type: settingString, Hidden: true},
-	{Key: "FLOW_SLACK_CLIENT_ID", Label: "Slack client ID", Group: "Slack", Type: settingString, Hidden: true},
-	{Key: "FLOW_SLACK_CLIENT_SECRET", Label: "Slack client secret", Group: "Slack", Type: settingSecret, Hidden: true},
-	// GitHub
-	{Key: "FLOW_GH_ENABLED", Label: "GitHub polling", Group: "GitHub", Type: settingBool, Default: "false", Help: "Poll GitHub for assigned issues/PRs and route them to task inboxes."},
-	{Key: "FLOW_GH_SELF_LOGINS", Label: "Your GitHub logins", Group: "GitHub", Type: settingString, Help: "Comma-separated. Used to detect self-authored items and assignments."},
-	{Key: "FLOW_GH_REPOS", Label: "Repo allowlist", Group: "GitHub", Type: settingString, Help: "owner/repo,owner/repo2 — leave empty to watch all repos visible to gh."},
-	{Key: "FLOW_GH_POLL_INTERVAL", Label: "Poll interval", Group: "GitHub", Type: settingString, Help: "Go duration, e.g. 60s or 2m."},
-	{Key: "FLOW_GH_AUTOOPEN", Label: "Auto-open on event", Group: "GitHub", Type: settingBool, Default: "true", Help: "Open a session automatically when a new GitHub item is detected."},
-	{Key: "FLOW_GH_WEBHOOK_SECRET", Label: "Webhook signing secret", Group: "GitHub", Type: settingSecret, Help: "Required before public ingress starts. GitHub webhook deliveries must carry a matching X-Hub-Signature-256 HMAC."},
+	{Key: "FLOW_SLACK_APP_ID", Label: "Slack app ID", Group: "Slack", Category: categoryMessaging, Connector: connectorSlack, Type: settingString, Hidden: true},
+	{Key: "FLOW_SLACK_CLIENT_ID", Label: "Slack client ID", Group: "Slack", Category: categoryMessaging, Connector: connectorSlack, Type: settingString, Hidden: true},
+	{Key: "FLOW_SLACK_CLIENT_SECRET", Label: "Slack client secret", Group: "Slack", Category: categoryMessaging, Connector: connectorSlack, Type: settingSecret, Hidden: true},
+	// GitHub — git connector
+	{Key: "FLOW_GH_ENABLED", Label: "GitHub polling", Group: "GitHub", Category: categoryGit, Connector: connectorGitHub, Type: settingBool, Default: "false", Help: "Poll GitHub for assigned issues/PRs and route them to task inboxes."},
+	{Key: "FLOW_GH_SELF_LOGINS", Label: "Your GitHub logins", Group: "GitHub", Category: categoryGit, Connector: connectorGitHub, Type: settingString, Help: "Comma-separated. Used to detect self-authored items and assignments."},
+	{Key: "FLOW_GH_REPOS", Label: "Repo allowlist", Group: "GitHub", Category: categoryGit, Connector: connectorGitHub, Type: settingString, Help: "owner/repo,owner/repo2 — leave empty to watch all repos visible to gh."},
+	{Key: "FLOW_GH_POLL_INTERVAL", Label: "Poll interval", Group: "GitHub", Category: categoryGit, Connector: connectorGitHub, Type: settingString, Help: "Go duration, e.g. 60s or 2m."},
+	{Key: "FLOW_GH_AUTOOPEN", Label: "Auto-open on event", Group: "GitHub", Category: categoryGit, Connector: connectorGitHub, Type: settingBool, Default: "true", Help: "Open a session automatically when a new GitHub item is detected."},
+	{Key: "FLOW_GH_WEBHOOK_SECRET", Label: "Webhook signing secret", Group: "GitHub", Category: categoryGit, Connector: connectorGitHub, Type: settingSecret, Help: "Required before public ingress starts. GitHub webhook deliveries must carry a matching X-Hub-Signature-256 HMAC."},
 	// Steering (attention router)
 	{Key: "FLOW_STEERING_WATCH_CHANNELS", Label: "Watched channels", Group: "Steering", Type: settingString, Help: "Comma-separated Slack channel IDs the attention router watches (in addition to DMs + @mentions)."},
 	{Key: "FLOW_STEERING_MUTED_CHANNELS", Label: "Muted channels", Group: "Steering", Type: settingString, Help: "Comma-separated Slack channel IDs to never surface."},
@@ -80,10 +102,10 @@ var settingsRegistry = []settingSpec{
 	{Key: "FLOW_STEERING_CLASSIFIER_FAILURE_COOLDOWN", Label: "Classifier failure cooldown", Group: "Steering", Type: settingString, Default: "30m", Help: "Go duration for pausing classifier subprocesses after quota/auth failures, e.g. 30m or 1h."},
 	// Ingress — public URL for GitHub webhook callbacks only. Slack OAuth uses
 	// a short-lived localhost callback listener during install/reinstall.
-	{Key: "FLOW_INGRESS_PROVIDER", Label: "GitHub ingress provider", Group: "Ingress", Type: settingEnum, Options: []string{"none", "zrok", "manual"}, Default: "none", Help: "Public URL provider for signed GitHub webhook callbacks only. Slack OAuth stays local and does not use standing ingress."},
-	{Key: "FLOW_PUBLIC_BASE_URL", Label: "Public base URL (manual only)", Group: "Ingress", Type: settingString, Help: "Only for the 'manual' GitHub webhook provider: your own public HTTPS base URL, e.g. https://flow.example.com (own reverse proxy/tunnel). Ignored for zrok, which discovers its URL at runtime."},
-	{Key: "FLOW_ZROK_SHARE_NAME", Label: "zrok reserved share name", Group: "Ingress", Type: settingString, Help: "Optional reserved share unique-name. Set it to pin a stable GitHub webhook URL across restarts. Leave empty for an ephemeral share whose URL changes each restart."},
-	{Key: "FLOW_ZROK_AUTO_START", Label: "Auto-start zrok share", Group: "Ingress", Type: settingBool, Default: "false", Help: "Create the zrok public share for signed GitHub webhooks automatically when Flow starts. Requires zrok enablement and FLOW_GH_WEBHOOK_SECRET."},
+	{Key: "FLOW_INGRESS_PROVIDER", Label: "GitHub ingress provider", Group: "Ingress", Category: categoryNetwork, Connector: connectorIngress, Type: settingEnum, Options: []string{"none", "zrok", "manual"}, Default: "none", Help: "Public URL provider for signed GitHub webhook callbacks only. Slack OAuth stays local and does not use standing ingress."},
+	{Key: "FLOW_PUBLIC_BASE_URL", Label: "Public base URL (manual only)", Group: "Ingress", Category: categoryNetwork, Connector: connectorIngress, Type: settingString, Help: "Only for the 'manual' GitHub webhook provider: your own public HTTPS base URL, e.g. https://flow.example.com (own reverse proxy/tunnel). Ignored for zrok, which discovers its URL at runtime."},
+	{Key: "FLOW_ZROK_SHARE_NAME", Label: "zrok reserved share name", Group: "Ingress", Category: categoryNetwork, Connector: connectorIngress, Type: settingString, Help: "Optional reserved share unique-name. Set it to pin a stable GitHub webhook URL across restarts. Leave empty for an ephemeral share whose URL changes each restart."},
+	{Key: "FLOW_ZROK_AUTO_START", Label: "Auto-start zrok share", Group: "Ingress", Category: categoryNetwork, Connector: connectorIngress, Type: settingBool, Default: "false", Help: "Create the zrok public share for signed GitHub webhooks automatically when Flow starts. Requires zrok enablement and FLOW_GH_WEBHOOK_SECRET."},
 	// General
 	{Key: "FLOW_STALE_DAYS", Label: "Stale threshold (days)", Group: "General", Type: settingInt, Default: "3", Help: "In-progress sessions quiet longer than this are flagged stale."},
 	{Key: "FLOW_MISSION_QUOTE", Label: "Mission Control quote", Group: "General", Type: settingBool, Default: "true", Help: "Show the rotating anime quote beside the greeting on Mission Control."},
@@ -203,16 +225,21 @@ func (s *Server) seedConfigFromEnv() {
 }
 
 type uiSettingField struct {
-	Key     string   `json:"key"`
-	Label   string   `json:"label"`
-	Group   string   `json:"group"`
-	Type    string   `json:"type"`
-	Default string   `json:"default,omitempty"`
-	Options []string `json:"options,omitempty"`
-	Help    string   `json:"help,omitempty"`
-	Value   string   `json:"value"`  // current value; ALWAYS "" for secrets
-	Set     bool     `json:"set"`    // is an explicit (non-default) value present?
-	Source  string   `json:"source"` // "config" | "env" | "default"
+	Key   string `json:"key"`
+	Label string `json:"label"`
+	Group string `json:"group"`
+	// Category and Connector are additive: present only for connector-owned
+	// settings (omitted for generic ones), so existing consumers that group by
+	// Group keep working while the Connectors UI groups by category/connector.
+	Category  string   `json:"category,omitempty"`
+	Connector string   `json:"connector,omitempty"`
+	Type      string   `json:"type"`
+	Default   string   `json:"default,omitempty"`
+	Options   []string `json:"options,omitempty"`
+	Help      string   `json:"help,omitempty"`
+	Value     string   `json:"value"`  // current value; ALWAYS "" for secrets
+	Set       bool     `json:"set"`    // is an explicit (non-default) value present?
+	Source    string   `json:"source"` // "config" | "env" | "default"
 }
 
 func (s *Server) handleSettings(w http.ResponseWriter, r *http.Request) {
@@ -234,7 +261,8 @@ func (s *Server) handleSettings(w http.ResponseWriter, r *http.Request) {
 			source = "env"
 		}
 		f := uiSettingField{
-			Key: sp.Key, Label: sp.Label, Group: sp.Group, Type: string(sp.Type),
+			Key: sp.Key, Label: sp.Label, Group: sp.Group,
+			Category: sp.Category, Connector: sp.Connector, Type: string(sp.Type),
 			Default: sp.Default, Options: sp.Options, Help: sp.Help, Source: source,
 			Set: raw != "",
 		}

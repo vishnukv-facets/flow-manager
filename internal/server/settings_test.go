@@ -1,6 +1,7 @@
 package server
 
 import (
+	"encoding/json"
 	"net/http/httptest"
 	"os"
 	"strings"
@@ -86,6 +87,81 @@ func TestSettingsExposeAutonomyPolicyForDedicatedPanel(t *testing.T) {
 	}
 	if strings.Contains(body, "FLOW_SLACK_CLIENT_SECRET") || strings.Contains(body, "hidden-client-secret") {
 		t.Fatalf("hidden Slack app secret surfaced in GET /api/settings: %s", body)
+	}
+}
+
+// TestSettingsExposeConnectorMetadata proves /api/settings carries the
+// category/connector taxonomy the Connectors page groups by, that the values
+// are stable for each provider, that non-connector settings (General) omit the
+// taxonomy, that hidden Slack app credentials never leak, and that secrets stay
+// masked. This is the contract the Connectors UI depends on — it must not
+// regress to flat Group-only grouping.
+func TestSettingsExposeConnectorMetadata(t *testing.T) {
+	root, db := testRootDB(t)
+	srv := New(Config{DB: db, FlowRoot: root, CommandPath: "/bin/false"})
+
+	// A secret value present in the env must still be masked in the response.
+	t.Setenv("FLOW_SLACK_TOKEN", "xoxb-should-stay-masked")
+
+	rec := httptest.NewRecorder()
+	srv.handleSettings(rec, httptest.NewRequest("GET", "/api/settings", nil))
+	if rec.Code != 200 {
+		t.Fatalf("status = %d", rec.Code)
+	}
+
+	var resp struct {
+		Fields []struct {
+			Key       string `json:"key"`
+			Group     string `json:"group"`
+			Category  string `json:"category"`
+			Connector string `json:"connector"`
+			Type      string `json:"type"`
+			Value     string `json:"value"`
+		} `json:"fields"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode settings: %v", err)
+	}
+	byKey := map[string]struct{ category, connector, value, typ string }{}
+	for _, f := range resp.Fields {
+		byKey[f.Key] = struct{ category, connector, value, typ string }{f.Category, f.Connector, f.Value, f.Type}
+	}
+
+	wantTaxonomy := map[string][2]string{
+		"FLOW_SLACK_TRIGGER_EMOJI": {"messaging", "slack"},
+		"FLOW_SLACK_SELF_USER_IDS": {"messaging", "slack"},
+		"FLOW_GH_ENABLED":          {"git", "github"},
+		"FLOW_GH_SELF_LOGINS":      {"git", "github"},
+		"FLOW_INGRESS_PROVIDER":    {"network", "ingress"},
+	}
+	for key, want := range wantTaxonomy {
+		got, ok := byKey[key]
+		if !ok {
+			t.Fatalf("%s missing from /api/settings", key)
+		}
+		if got.category != want[0] || got.connector != want[1] {
+			t.Fatalf("%s taxonomy = %q/%q, want %q/%q", key, got.category, got.connector, want[0], want[1])
+		}
+	}
+
+	// Non-connector settings carry no taxonomy (so Settings still owns them).
+	if got := byKey["FLOW_STALE_DAYS"]; got.category != "" || got.connector != "" {
+		t.Fatalf("FLOW_STALE_DAYS should have empty taxonomy, got %q/%q", got.category, got.connector)
+	}
+
+	// Hidden Slack app credentials must not appear at all.
+	for _, k := range []string{"FLOW_SLACK_APP_ID", "FLOW_SLACK_CLIENT_ID", "FLOW_SLACK_CLIENT_SECRET"} {
+		if _, ok := byKey[k]; ok {
+			t.Fatalf("hidden credential %s leaked into /api/settings", k)
+		}
+	}
+
+	// Secret values stay masked even when set in the env.
+	if got := byKey["FLOW_SLACK_TOKEN"]; got.value != "" {
+		t.Fatalf("secret FLOW_SLACK_TOKEN value should be masked, got %q", got.value)
+	}
+	if strings.Contains(rec.Body.String(), "xoxb-should-stay-masked") {
+		t.Fatalf("secret leaked in /api/settings body")
 	}
 }
 

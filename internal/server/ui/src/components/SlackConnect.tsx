@@ -23,7 +23,11 @@ function deriveStep(st: SlackSetupStatus): StepKey | 'done' {
   return 'done'
 }
 
-export function SlackConnect() {
+// SlackConnect renders the three-step Connect-Slack wizard. By default it draws
+// its own settings-card frame (used standalone). Pass framed={false} to render
+// just the wizard body — the Connectors page wraps it in a connector card and
+// supplies its own header + status badge, so the frame would double up.
+export function SlackConnect({ framed = true }: { framed?: boolean } = {}) {
   const { data: st, refetch } = useSlackSetupStatus()
   if (!st) return null
 
@@ -33,6 +37,36 @@ export function SlackConnect() {
 
   const step = deriveStep(st)
 
+  const body = (
+    <>
+      {manualSetup ? (
+        <div className="slack-wizard-done">
+          <Check size={15} />
+          <div>
+            Slack is configured from hand-entered tokens. The wizard can take over
+            by creating a flow-managed app — paste a config token below if you
+            want that; otherwise there's nothing to do.
+          </div>
+        </div>
+      ) : step === 'done' ? (
+        <FinishedSummary st={st} onRefetch={refetch} />
+      ) : null}
+
+      {(step !== 'done' || !st.bot_token_set) && !manualSetup && (
+        <div className="slack-wizard-steps">
+          <StepCreateApp st={st} active={step === 'app'} onDone={refetch} />
+          <StepAppToken st={st} active={step === 'token'} onDone={refetch} />
+          <StepInstall st={st} active={step === 'install'} onDone={refetch} />
+        </div>
+      )}
+    </>
+  )
+
+  if (!framed) {
+    // The connector card owns the frame + status badge; just emit the body.
+    return <div className="slack-wizard slack-wizard-bare">{body}</div>
+  }
+
   return (
     <section className="settings-card slack-wizard">
       <div className="settings-card-head">
@@ -41,28 +75,7 @@ export function SlackConnect() {
         <span className="spacer" />
         <ListenerChip st={st} />
       </div>
-      <div className="settings-card-body">
-        {manualSetup ? (
-          <div className="slack-wizard-done">
-            <Check size={15} />
-            <div>
-              Slack is configured from hand-entered tokens. The wizard can take over
-              by creating a flow-managed app — paste a config token below if you
-              want that; otherwise there's nothing to do.
-            </div>
-          </div>
-        ) : step === 'done' ? (
-          <FinishedSummary st={st} onRefetch={refetch} />
-        ) : null}
-
-        {(step !== 'done' || !st.bot_token_set) && !manualSetup && (
-          <div className="slack-wizard-steps">
-            <StepCreateApp st={st} active={step === 'app'} onDone={refetch} />
-            <StepAppToken st={st} active={step === 'token'} onDone={refetch} />
-            <StepInstall st={st} active={step === 'install'} onDone={refetch} />
-          </div>
-        )}
-      </div>
+      <div className="settings-card-body">{body}</div>
     </section>
   )
 }
