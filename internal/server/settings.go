@@ -89,6 +89,16 @@ var settingsRegistry = []settingSpec{
 	{Key: "FLOW_GH_POLL_INTERVAL", Label: "Poll interval", Group: "GitHub", Category: categoryGit, Connector: connectorGitHub, Type: settingString, Help: "Go duration, e.g. 60s or 2m."},
 	{Key: "FLOW_GH_AUTOOPEN", Label: "Auto-open on event", Group: "GitHub", Category: categoryGit, Connector: connectorGitHub, Type: settingBool, Default: "true", Help: "Open a session automatically when a new GitHub item is detected."},
 	{Key: "FLOW_GH_WEBHOOK_SECRET", Label: "Webhook signing secret", Group: "GitHub", Category: categoryGit, Connector: connectorGitHub, Type: settingSecret, Help: "Required before public ingress starts. GitHub webhook deliveries must carry a matching X-Hub-Signature-256 HMAC."},
+	// Wizard-managed GitHub App identity (Connect GitHub flow). Hidden from the
+	// Settings form: the wizard writes these after the App-manifest conversion
+	// and the install callback; hand-editing only breaks the pairing. The App's
+	// private key (PEM), OAuth client secret, and webhook secret are kept out of
+	// config.json entirely — they live in the OS keyring (see secret_store.go).
+	{Key: "FLOW_GH_APP_ID", Label: "GitHub App ID", Group: "GitHub", Category: categoryGit, Connector: connectorGitHub, Type: settingString, Hidden: true},
+	{Key: "FLOW_GH_APP_SLUG", Label: "GitHub App slug", Group: "GitHub", Category: categoryGit, Connector: connectorGitHub, Type: settingString, Hidden: true},
+	{Key: "FLOW_GH_CLIENT_ID", Label: "GitHub client ID", Group: "GitHub", Category: categoryGit, Connector: connectorGitHub, Type: settingString, Hidden: true},
+	{Key: "FLOW_GH_HTML_URL", Label: "GitHub App URL", Group: "GitHub", Category: categoryGit, Connector: connectorGitHub, Type: settingString, Hidden: true},
+	{Key: "FLOW_GH_INSTALLATION_IDS", Label: "GitHub installation IDs", Group: "GitHub", Category: categoryGit, Connector: connectorGitHub, Type: settingString, Hidden: true},
 	// Steering (attention router)
 	{Key: "FLOW_STEERING_WATCH_CHANNELS", Label: "Watched channels", Group: "Steering", Type: settingString, Help: "Comma-separated Slack channel IDs the attention router watches (in addition to DMs + @mentions)."},
 	{Key: "FLOW_STEERING_MUTED_CHANNELS", Label: "Muted channels", Group: "Steering", Type: settingString, Help: "Comma-separated Slack channel IDs to never surface."},

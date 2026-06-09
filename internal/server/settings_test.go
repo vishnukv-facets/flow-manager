@@ -90,6 +90,44 @@ func TestSettingsExposeAutonomyPolicyForDedicatedPanel(t *testing.T) {
 	}
 }
 
+// TestGitHubAppMetadataKeysHiddenAndRegistered proves the wizard-managed
+// GitHub App metadata keys are registered under the git/github taxonomy, marked
+// Hidden, and therefore never surface in the Settings form / /api/settings —
+// the operator must not hand-edit credentials the Connect-GitHub wizard owns.
+func TestGitHubAppMetadataKeysHiddenAndRegistered(t *testing.T) {
+	root, db := testRootDB(t)
+	srv := New(Config{DB: db, FlowRoot: root, CommandPath: "/bin/false"})
+
+	appKeys := []string{
+		"FLOW_GH_APP_ID",
+		"FLOW_GH_APP_SLUG",
+		"FLOW_GH_CLIENT_ID",
+		"FLOW_GH_HTML_URL",
+		"FLOW_GH_INSTALLATION_IDS",
+	}
+	for _, k := range appKeys {
+		sp, ok := settingSpecFor(k)
+		if !ok {
+			t.Fatalf("%s not registered in settingsRegistry", k)
+		}
+		if !sp.Hidden {
+			t.Errorf("%s should be Hidden (wizard-managed)", k)
+		}
+		if sp.Category != categoryGit || sp.Connector != connectorGitHub {
+			t.Errorf("%s taxonomy = %q/%q, want git/github", k, sp.Category, sp.Connector)
+		}
+	}
+
+	rec := httptest.NewRecorder()
+	srv.handleSettings(rec, httptest.NewRequest("GET", "/api/settings", nil))
+	body := rec.Body.String()
+	for _, k := range appKeys {
+		if strings.Contains(body, k) {
+			t.Errorf("hidden App metadata key %s leaked into /api/settings", k)
+		}
+	}
+}
+
 // TestSettingsExposeConnectorMetadata proves /api/settings carries the
 // category/connector taxonomy the Connectors page groups by, that the values
 // are stable for each provider, that non-connector settings (General) omit the

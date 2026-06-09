@@ -40,6 +40,11 @@ func New(cfg Config) *Server {
 	// so it survives a restart launched without those exports (otherwise e.g.
 	// GitHub polling silently reverts to off).
 	s.seedConfigFromEnv()
+	// Hydrate GitHub App credentials (PEM, client + webhook secrets) from the OS
+	// keyring into the process env. Runs after applyConfigToEnv so the keyring —
+	// the authoritative at-rest store — wins over a stale config/shell value,
+	// while an absent entry preserves the env fallback.
+	loadGitHubSecretsFromKeyring()
 	s.terminals = newTerminalHub(s)
 	// Restore adhoc floating sessions whose tmux PTYs outlived a prior server
 	// process, so the Ask Flow tray survives a flow-server restart.
@@ -164,6 +169,13 @@ func (s *Server) registerAPIRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/slack/setup/oauth/cancel", s.handleSlackSetupOAuthCancel)
 	mux.HandleFunc("/api/github/auth/status", s.handleGitHubAuthStatus)
 	mux.HandleFunc("/api/github/auth/switch", s.handleGitHubAuthSwitch)
+	mux.HandleFunc("/api/github/setup/status", s.handleGitHubSetupStatus)
+	mux.HandleFunc("/api/github/setup/create-app", s.handleGitHubSetupCreateApp)
+	// The manifest conversion callback is also registered on the public ingress
+	// mux (ingressMux) — GitHub redirects the operator's browser to it on the
+	// public URL. This local route is the same-process fallback.
+	mux.HandleFunc(githubSetupCallbackPath, s.handleGitHubSetupCallback)
+	mux.HandleFunc("/api/github/setup/backfill", s.handleGitHubSetupBackfill)
 }
 
 // apiHandler lazily builds and caches the data-plane mux used by the

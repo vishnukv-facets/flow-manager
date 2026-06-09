@@ -22,6 +22,7 @@ import type {
   ProjectView,
   QuoteView,
   SearchResponse,
+  GitHubSetupStatus,
   SettingsResponse,
   SlackChannel,
   SlackSetupStatus,
@@ -138,6 +139,21 @@ export function useGitHubWebhookStatus() {
       const st = q.state.data
       if (st && (st.transport === 'webhook' || st.transport === 'hybrid') && !st.receiving) return 5000
       return 20000
+    },
+  })
+}
+// Connect-GitHub App-manifest wizard status. Polls quickly while the App isn't
+// fully connected+installed yet, so the create→install transitions (which
+// complete in a separate browser tab on github.com) surface without a reload;
+// settles to a slow poll once done.
+export function useGitHubSetupStatus() {
+  return useQuery({
+    queryKey: ['github-setup'],
+    queryFn: () => apiGet<GitHubSetupStatus>('/api/github/setup/status'),
+    refetchInterval: (q) => {
+      const st = q.state.data
+      if (st && (!st.app_created || !st.installed)) return 2500
+      return 15000
     },
   })
 }

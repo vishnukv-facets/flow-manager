@@ -708,6 +708,25 @@ export interface SlackSetupStatus {
   listener_suppressed: boolean
 }
 
+// GitHubSetupStatus drives the resumable Connect-GitHub (App-manifest) wizard,
+// mirroring the GitHubSetupStatus struct served at GET /api/github/setup/status.
+export interface GitHubSetupStatus {
+  ingress_ready: boolean
+  webhook_url?: string
+  redirect_url?: string
+  app_created: boolean
+  app_id?: string
+  app_slug?: string
+  html_url?: string
+  pem_set: boolean
+  webhook_secret_set: boolean
+  install_url?: string
+  installation_ids?: string
+  installed: boolean
+  transport: string
+  summary: string
+}
+
 /** One identity `gh` is logged in as. */
 export interface GitHubAccount {
   login: string

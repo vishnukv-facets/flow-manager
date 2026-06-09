@@ -661,18 +661,17 @@ The Connect Slack wizard reports its callback mode (`localhost` \| `zrok` \|
 
 flow ingests GitHub activity — assigned issues, assigned/review-requested
 pull requests, review comments, top-level reviews, head updates, merges,
-and closes — and turns it into flow work. Two transports feed the **same**
-`GitHubDispatcher`:
+and closes — and turns it into flow work, via **signed webhook deliveries from a
+GitHub App**. GitHub POSTs to `POST /api/github/webhook` the instant an event
+happens; flow verifies the `X-Hub-Signature-256` HMAC, records the delivery for
+idempotency, normalizes the payload into a `GitHubEvent`, and feeds it to the
+`GitHubDispatcher` — **no GitHub API call on the hot path**, and **no `gh` CLI**.
 
-- **Webhook-first (recommended).** GitHub POSTs signed deliveries to
-  `POST /api/github/webhook` the instant an event happens. flow verifies the
-  `X-Hub-Signature-256` HMAC, records the delivery for idempotency, normalizes
-  the payload into a `GitHubEvent`, and dispatches it — **no GitHub API call** is
-  needed to act on the event. This is the live path and it does not use `gh`.
-- **Legacy polling (fallback / off-install discovery).** The older path
-  searches GitHub through the authenticated `gh` CLI on a timer. It is no longer
-  the primary transport; keep it only for installations without a webhook, or to
-  surface `@`-mentions / involvement in repos where no webhook is installed.
+The App is what makes this turnkey: it carries auth (a JWT signed with the App
+private key → installation tokens for the native `google/go-github` calls that
+remain), declares its own webhook URL + signing secret at creation time, and
+unlocks redelivery backfill for gap recovery. The legacy `gh`-CLI search-poller
+has been removed.
 
 ```
    GitHub  ──signed POST──▶  POST /api/github/webhook
@@ -681,7 +680,7 @@ and closes — and turns it into flow work. Two transports feed the **same**
                                 │  • normalize payload → GitHubEvent(s)
                                 ▼
    ┌─────────────────────────────────────────────────┐
-   │  GitHubDispatcher (shared by webhook + polling) │
+   │  GitHubDispatcher (webhook ingress + backfill)  │
    │   • find task by gh-pr:<owner>/<repo>#<n>        │
    │     or gh-issue:<owner>/<repo>#<n>               │
    │   • create one if absent                        │
@@ -691,24 +690,29 @@ and closes — and turns it into flow work. Two transports feed the **same**
    └─────────────────────────────────────────────────┘
 ```
 
-**Webhook setup.** The receiver needs (1) a public HTTPS URL GitHub can reach —
-flow's [public ingress](#public-ingress--public-callback-urls-for-connectors) (zrok)
-exposes `<public-base>/api/github/webhook` — and (2) a shared signing secret in
-`FLOW_GH_WEBHOOK_SECRET`. Point a GitHub repo/org/App webhook (events: `issues`,
-`issue_comment`, `pull_request`, `pull_request_review`,
-`pull_request_review_comment`) at that URL with that secret. A one-click
-"Connect GitHub" wizard (GitHub App manifest) that registers the App and wires
-the URL + secret automatically is tracked as follow-on work; until then the
-webhook is configured manually or via `gh`.
+**Setup — the Connect GitHub wizard.** Mission Control → **Connectors → GitHub**
+is one click: it builds a GitHub App **manifest** (the webhook URL, a generated
+signing secret, and the `issues`/`issue_comment`/`pull_request`/
+`pull_request_review`/`pull_request_review_comment` events + issue/PR write
+permissions), POSTs it to github.com, and on confirmation receives the app id,
+private key (PEM), and webhook secret in one shot — **the PEM, webhook secret, and
+client secret go to the OS keyring; nothing is pasted by hand.** It then guides
+installation and captures the installation id from the post-install redirect. The
+wizard requires a running [public ingress](#public-ingress--public-callback-urls-for-connectors)
+(zrok) first, since the App's webhook URL must be a public HTTPS URL at
+creation time. Personal-account and organization install targets are both
+supported.
 
-**Same event keys across transports.** Webhook and poll paths produce identical
-`event_key`s (e.g. `review-comment:<node_id>`, `pr-head:<owner>/<repo>#<n>:<sha>`),
-so the shared `github_event_log` dedupes an event even if it arrives by both
-paths — running webhook + polling together never double-appends.
+**Gap recovery — redelivery backfill.** If flow or the public ingress was down,
+the wizard's **Replay missed deliveries** button (and `POST /api/github/setup/backfill`)
+lists the App's hook deliveries (`GET /app/hook/deliveries`) and replays the
+missed ones through the same normalize→dispatch pipeline, deduped by the delivery
+GUID (`github_webhook_deliveries`). This is the correct recovery path — redelivery
+replay, not re-polling.
 
-**All repos by default (polling).** When the legacy poller runs, GitHub search
-is not limited to the current checkout. Set `FLOW_GH_REPOS=owner/repo,owner/repo2`
-when you want a smaller allowlist.
+**Install the App on the repos you want watched.** Webhooks are delivered only for
+repos the App is installed on; off-install `@`-mention/involvement discovery
+(which required user-level search) is no longer performed.
 
 **One GitHub item, one task.** PR tasks are tagged
 `gh-pr:<owner>/<repo>#<number>` and issue tasks are tagged
@@ -735,23 +739,24 @@ Without either label, flow defaults to Claude.
 
 **Configuration.**
 
-| Env var                 | Purpose                                                                                                                |
-| ----------------------- | ---------------------------------------------------------------------------------------------------------------------- |
-| `FLOW_GH_TRANSPORT`     | `webhook` (live, recommended), `polling` (legacy gh-api search), `hybrid` (both), `off`, or `auto` (derive from below) |
-| `FLOW_GH_WEBHOOK_SECRET`| Shared HMAC secret for `X-Hub-Signature-256`; required for the webhook receiver to accept deliveries                    |
-| `FLOW_GH_ENABLED`       | Legacy on/off for gh-api polling; used only when transport is `auto`/`polling`/`hybrid`                                |
-| `FLOW_GH_SELF_LOGINS`   | Comma-separated GitHub logins that count as you                                                                        |
-| `FLOW_GH_REPOS`         | Optional repo allowlist (polling); unset means search all repos visible to `gh`                                        |
-| `FLOW_GH_POLL_INTERVAL` | Poll interval such as `60s`, `2m`, or `120`; default is `1m` (polling only)                                            |
-| `FLOW_GH_AUTOOPEN`      | `0` to create tasks without opening a Mission Control terminal immediately                                             |
+Almost everything is wizard-managed; the table below is for reference and edge
+cases. The App credentials are stored in the OS keyring (`FLOW_GH_APP_PEM`,
+webhook secret, client secret) and as Hidden settings (`FLOW_GH_APP_ID`,
+`FLOW_GH_APP_SLUG`, `FLOW_GH_CLIENT_ID`, `FLOW_GH_HTML_URL`,
+`FLOW_GH_INSTALLATION_IDS`) — you never hand-edit them.
 
-Webhook mode needs no `gh` auth — only a public ingress URL and
-`FLOW_GH_WEBHOOK_SECRET`. The legacy polling path still uses `gh`: run
-`gh auth login` first, or provide the usual `GH_TOKEN` / `GITHUB_TOKEN`
-environment that `gh api` supports. With transport `off` (or `auto` while
-`FLOW_GH_ENABLED` is unset), the rest of flow works unchanged — GitHub is
-opt-in. **Mission Control → Connectors → GitHub** shows the live webhook
-transport status (configured / receiving / last delivery) and lets you edit
+| Env var                 | Purpose                                                                                                |
+| ----------------------- | ------------------------------------------------------------------------------------------------------ |
+| `FLOW_GH_TRANSPORT`     | `webhook` (set by the wizard) or `off` to disable ingress. The legacy `polling`/`hybrid` modes no longer schedule a poller |
+| `FLOW_GH_WEBHOOK_SECRET`| HMAC secret for `X-Hub-Signature-256`. Wizard-set (keyring); env is a back-compat override for manual webhooks |
+| `FLOW_GH_SELF_LOGINS`   | Comma-separated GitHub logins that count as you (used to recognize self-authored items)                |
+| `FLOW_GH_AUTOOPEN`      | `0` to create tasks without opening a Mission Control terminal immediately                             |
+
+GitHub ingress needs no `gh` auth for the monitor — the GitHub App carries its
+own auth via the private key in the keyring. With transport `off` (or before the
+wizard has run), the rest of flow works unchanged — GitHub is opt-in. **Mission
+Control → Connectors → GitHub** runs the Connect GitHub wizard and shows the live
+webhook transport status (configured / receiving / last delivery) and lets you edit
 these `FLOW_GH_*` settings in one place.
 
 ## Settings & configuration

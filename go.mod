@@ -3,12 +3,15 @@ module flow
 go 1.25.0
 
 require (
+	github.com/bradleyfalzon/ghinstallation/v2 v2.18.0
 	github.com/creack/pty v1.1.24
+	github.com/google/go-github/v84 v84.0.0
 	github.com/google/uuid v1.6.0
 	github.com/gorilla/websocket v1.5.3
 	github.com/mattn/go-isatty v0.0.20
 	github.com/openziti/zrok v1.1.11
 	github.com/slack-go/slack v0.23.1
+	github.com/zalando/go-keyring v0.2.8
 	modernc.org/sqlite v1.48.2
 	rsc.io/pdf v0.1.1
 )
@@ -16,6 +19,7 @@ require (
 require (
 	github.com/asaskevich/govalidator v0.0.0-20230301143203-a9d515a09cc2 // indirect
 	github.com/cenkalti/backoff/v4 v4.3.0 // indirect
+	github.com/danieljoos/wincred v1.2.3 // indirect
 	github.com/dustin/go-humanize v1.0.1 // indirect
 	github.com/emirpasic/gods v1.18.1 // indirect
 	github.com/fsnotify/fsnotify v1.9.0 // indirect
@@ -47,7 +51,10 @@ require (
 	github.com/go-openapi/validate v0.25.0 // indirect
 	github.com/go-resty/resty/v2 v2.16.5 // indirect
 	github.com/go-viper/mapstructure/v2 v2.4.0 // indirect
+	github.com/godbus/dbus/v5 v5.2.2 // indirect
+	github.com/golang-jwt/jwt/v4 v4.5.2 // indirect
 	github.com/golang-jwt/jwt/v5 v5.3.0 // indirect
+	github.com/google/go-querystring v1.2.0 // indirect
 	github.com/gorilla/mux v1.8.1 // indirect
 	github.com/gorilla/securecookie v1.1.2 // indirect
 	github.com/kataras/go-events v0.0.3 // indirect
