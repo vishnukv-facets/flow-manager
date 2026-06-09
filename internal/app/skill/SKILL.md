@@ -2509,34 +2509,39 @@ under the `tags:` line), follow this bootstrap:
 
 ## 10c. GitHub PR and issue tasks (monitor pipeline)
 
-`flow ui serve` ingests GitHub activity through one of two transports, both
-feeding the same dispatcher (task creation, inbox append, attention routing,
-reopen/mark-done). The transport is set by `FLOW_GH_TRANSPORT`:
+`flow ui serve` ingests GitHub activity through **signed webhook deliveries from
+a GitHub App**, fed to the dispatcher (task creation, inbox append, attention
+routing, reopen/mark-done). Set it up in one click on the Mission Control
+**Connectors** page → **Connect GitHub** wizard: it registers a GitHub App via
+GitHub's App-manifest flow, captures the app id + private key + webhook secret
+(secrets go to the **OS keyring**, never config.json), and guides installation —
+no manual `FLOW_GH_WEBHOOK_SECRET` paste and no `gh` CLI auth for the monitor. The
+wizard requires a running **public ingress** (zrok) first, since the App's
+webhook URL must be public at App-creation time.
 
-- **`webhook` (webhook-first, recommended).** GitHub POSTs signed deliveries to
-  `POST /api/github/webhook`. flow verifies the `X-Hub-Signature-256` HMAC
-  (`FLOW_GH_WEBHOOK_SECRET`), records the delivery for idempotency, normalizes
-  the payload into a `GitHubEvent`, and dispatches it — no `gh` API call is
-  needed to act on the event. Needs a public ingress URL (zrok) + the secret.
-- **`polling` / `hybrid` (legacy).** The older path searches GitHub through the
-  `gh` CLI on a timer (`FLOW_GH_ENABLED=1` + `FLOW_GH_SELF_LOGINS`). `hybrid`
-  runs the search-poller alongside the webhook to also catch mentions/involvement
-  in repos where no webhook is installed. `auto` (default) derives polling from
-  the legacy `FLOW_GH_ENABLED` toggle.
+On a delivery to `POST /api/github/webhook`, flow verifies the
+`X-Hub-Signature-256` HMAC, records the delivery for idempotency, normalizes the
+payload into a `GitHubEvent`, and dispatches it — **no GitHub API call on the hot
+path**. `FLOW_GH_TRANSPORT` is `webhook` once the wizard runs (`off` disables
+ingress); the legacy `gh`-CLI search-poller has been **removed**. App auth (a JWT
+signed with the private key → an installation token) powers the native
+`google/go-github` calls that remain — issue↔PR cross-reference linking and
+delivery backfill — so the monitor no longer shells out to `gh`.
 
-Either transport turns open assigned issues, open assigned PRs, open PRs
-requesting the user's review, **open issues/PRs that @-mention the user**, PR
-review comments, top-level PR reviews, PR head updates, and PR merges into flow
-inbox events. (`FLOW_GH_REPOS=owner/repo,...` narrows the polling allowlist.)
+The App delivers events for every repo it is installed on: open assigned issues,
+assigned PRs, PRs requesting your review, PR/issue comments, top-level PR reviews,
+PR head updates, PR merges, and PR closes become inbox events. **Direct asks** —
+assignment or review-request — create a task AND auto-open a session (you're
+expected to act). Comments, reviews, head updates, and merges route to the
+existing tagged task. (Off-install `@-mention`/involvement discovery, which
+required user-level search, is no longer performed — install the App on the repos
+you want Flow to watch.)
 
-Discovery has two tiers. **Direct asks** — assignment, review-request, or
-an @-mention — create a task AND auto-open a session (you're expected to
-act). **Involvement** — items you authored, were assigned, commented on,
-or were mentioned in (`involves:`) — creates a notify-only task that shows
-in Tasks/Inbox but does NOT auto-open a session; open it yourself if it
-matters. The mention/involves queries are gated by a persisted watermark
-(`gh_discovery_watermark` in `schema_meta`) so enabling them never drains
-the historical backlog — only activity after first-enable surfaces.
+**Gap recovery is redelivery backfill, not re-polling.** If Flow or the public
+ingress was down, the wizard's **Replay missed deliveries** button (and
+`POST /api/github/setup/backfill`) lists the App's hook deliveries
+(`GET /app/hook/deliveries`) and replays the missed ones through the same
+normalize→dispatch pipeline, deduped by the delivery GUID.
 
 GitHub-origin tasks are tagged `github` plus either
 `gh-pr:<owner>/<repo>#<number>` or `gh-issue:<owner>/<repo>#<number>`.
@@ -2546,14 +2551,14 @@ or GitHub URL when the tag exists.
 If your task carries a `gh-pr:` or `gh-issue:` tag (`flow show task`
 lists tags under the `tags:` line), follow this bootstrap:
 
-1. **Confirm the ingress is live when follow-up matters.** If you expect new
-   review comments, commits, or merge notifications while working, make sure
-   `flow ui serve` is running with a working GitHub transport: for `webhook`
-   mode, a public ingress URL + `FLOW_GH_WEBHOOK_SECRET` (check
-   `GET /api/github/webhook/status` — it reports transport, secret-configured,
-   and whether deliveries are being received); for `polling`/`hybrid`, set
-   `FLOW_GH_ENABLED=1` and `FLOW_GH_SELF_LOGINS`. If the user wants only a
-   one-time review and no live follow-up, note that choice.
+1. **Confirm the webhook ingress is live when follow-up matters.** If you expect
+   new review comments, commits, or merge notifications while working, make sure
+   `flow ui serve` is running with the GitHub App connected and a public ingress
+   up — check `GET /api/github/webhook/status` (transport, secret-configured,
+   deliveries-received) or `GET /api/github/setup/status` (app connected +
+   installed). If deliveries were missed during downtime, use the wizard's
+   **Replay missed deliveries**. If the user wants only a one-time review and no
+   live follow-up, note that choice.
 2. **Read your brief.** It is a snapshot of the PR/issue at task
    creation time: title, URL, author, labels, milestone, base/head refs,
    and the initial GitHub body. Treat it as initial context, not the

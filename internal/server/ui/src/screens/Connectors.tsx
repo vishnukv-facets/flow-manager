@@ -7,6 +7,7 @@ import { confirmAction } from '../lib/confirm'
 import { useDocumentTitle } from '../lib/useDocumentTitle'
 import { ErrorNote, Loading, SourceIcon } from '../components/ui'
 import { ConfigField, SettingsSection, useConfigDraft } from '../components/SettingsPanels'
+import { GitHubConnect } from '../components/GitHubConnect'
 import { SlackConnect } from '../components/SlackConnect'
 import { CONNECTORS, CONNECTOR_CATEGORIES, type ConnectorDef } from '../lib/connectors'
 import type { IngressStatus, SettingField, ToolCapability } from '../lib/types'
@@ -261,10 +262,12 @@ function ConnectorForm({
 function ConnectorSetup({ def }: { def: ConnectorDef }) {
   if (def.id === 'slack') return <SlackConnect framed={false} />
   if (def.id === 'github') {
-    // Webhook transport status first (gh-independent — webhook mode needs no gh
-    // auth), then the gh-CLI identity used by the legacy polling path.
+    // The App-manifest wizard is the primary path (App auth + auto webhook
+    // config). Live webhook transport status sits below it; the gh-CLI identity
+    // panel remains for the legacy polling path until it's retired.
     return (
       <>
+        <GitHubConnect framed={false} />
         <GitHubWebhookTransport />
         <GitHubAuth />
       </>

@@ -47,7 +47,10 @@ func GitHubTransport() GitHubTransportMode {
 	return GitHubTransportOff
 }
 
-// SchedulesPolling reports whether this mode runs the scheduled poll loop.
+// SchedulesPolling always reports false: the legacy gh-api search-poller has
+// been retired in favor of App-based webhook ingress. The mode constants are
+// retained for config back-compat (and the off/on summary), but no mode starts
+// a scheduled poll loop anymore.
 func (m GitHubTransportMode) SchedulesPolling() bool {
-	return m == GitHubTransportPolling || m == GitHubTransportHybrid
+	return false
 }

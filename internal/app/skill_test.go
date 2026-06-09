@@ -686,9 +686,11 @@ func TestSkillDocumentsGitHubMonitorBootstrap(t *testing.T) {
 	got := string(embeddedSkill)
 	for _, want := range []string{
 		"GitHub PR and issue tasks",
-		"FLOW_GH_ENABLED=1",
-		"FLOW_GH_SELF_LOGINS",
-		"FLOW_GH_REPOS",
+		// App-based webhook ingress (the legacy gh search-poller was removed).
+		"Connect GitHub",
+		"App-manifest flow",
+		"OS keyring",
+		"/app/hook/deliveries",
 		"gh-pr:<owner>/<repo>#<number>",
 		"inbox.jsonl",
 		"tail -F ~/.flow/tasks/<your-slug>/inbox.jsonl",

@@ -33,18 +33,17 @@ func TestGitHubTransport(t *testing.T) {
 	}
 }
 
+// The search-poller has been retired in favor of App-based webhook ingress, so
+// NO transport mode schedules a poll loop anymore — even the legacy
+// polling/hybrid values (kept only for config back-compat) resolve to no
+// scheduled polling.
 func TestGitHubTransportSchedulesPolling(t *testing.T) {
-	if !GitHubTransportPolling.SchedulesPolling() {
-		t.Error("polling mode should schedule the poll loop")
-	}
-	if !GitHubTransportHybrid.SchedulesPolling() {
-		t.Error("hybrid mode should schedule the poll loop (webhook + backfill)")
-	}
-	if GitHubTransportWebhook.SchedulesPolling() {
-		t.Error("webhook mode must NOT schedule the poll loop")
-	}
-	if GitHubTransportOff.SchedulesPolling() {
-		t.Error("off mode must NOT schedule the poll loop")
+	for _, m := range []GitHubTransportMode{
+		GitHubTransportPolling, GitHubTransportHybrid, GitHubTransportWebhook, GitHubTransportOff,
+	} {
+		if m.SchedulesPolling() {
+			t.Errorf("%s must not schedule the poll loop — the search-poller is retired", m)
+		}
 	}
 }
 

@@ -8,6 +8,13 @@ import (
 	"time"
 )
 
+// GitHubListener owns two things in the webhook-first world: it dispatches
+// normalized webhook events (Dispatch, called by the server's webhook
+// receiver), and it runs a lightweight "linker-tick" that tags in-progress
+// tasks with the PRs opened on their branch / cross-referencing their issue.
+// The tick exists because GitHub emits no webhook event for a self-authored PR
+// being opened, so cross-ref linking can't be event-driven. The expensive
+// gh-api search-poller it replaced is gone.
 type GitHubListener struct {
 	dispatcher *GitHubDispatcher
 
@@ -16,8 +23,7 @@ type GitHubListener struct {
 	cancel  context.CancelFunc
 	done    chan struct{}
 
-	pollFn       func(context.Context) ([]GitHubEvent, error)
-	pollInterval time.Duration
+	linkInterval time.Duration
 	logFn        func(string, ...any)
 }
 
@@ -27,13 +33,17 @@ func NewGitHubListener(d *GitHubDispatcher) *GitHubListener {
 	}
 	return &GitHubListener{
 		dispatcher:   d,
-		pollInterval: GitHubPollInterval(),
+		linkInterval: GitHubPollInterval(),
 		logFn: func(format string, args ...any) {
 			fmt.Fprintf(os.Stderr, "[github listener] "+format+"\n", args...)
 		},
 	}
 }
 
+// Start schedules the PR-linker tick. It runs only when GitHub ingress is not
+// off AND an App is connected+installed (the tick uses the App's installation
+// token to resolve cross-references); otherwise it is a no-op and the webhook
+// receiver alone handles live events.
 func (l *GitHubListener) Start() error {
 	if l == nil {
 		return nil
@@ -43,12 +53,12 @@ func (l *GitHubListener) Start() error {
 	if l.running {
 		return nil
 	}
-	if mode := GitHubTransport(); !mode.SchedulesPolling() {
-		l.logFn("scheduled polling off (transport=%s); webhook receiver handles live GitHub events", mode)
+	if GitHubTransport() == GitHubTransportOff {
+		l.logFn("github ingress off")
 		return nil
 	}
-	if !GitHubPollingEnabled() {
-		l.logFn("not starting: set FLOW_GH_ENABLED=1 and FLOW_GH_SELF_LOGINS")
+	if _, ok := gitHubAppCredentials(); !ok {
+		l.logFn("no GitHub App connected/installed; webhook receiver idle, PR-linker tick not scheduled")
 		return nil
 	}
 	ctx, cancel := context.WithCancel(context.Background())
@@ -57,7 +67,7 @@ func (l *GitHubListener) Start() error {
 	l.running = true
 	go func() {
 		defer close(l.done)
-		l.run(ctx)
+		l.linkLoop(ctx)
 	}()
 	return nil
 }
@@ -84,22 +94,14 @@ func (l *GitHubListener) Stop() {
 		select {
 		case <-done:
 		case <-time.After(5 * time.Second):
-			l.logFn("stop: timeout waiting for listener goroutine to exit")
+			l.logFn("stop: timeout waiting for linker goroutine to exit")
 		}
 	}
 }
 
-func (l *GitHubListener) PollOnce(ctx context.Context) {
-	if l == nil {
-		return
-	}
-	l.pollOnce(ctx)
-}
-
-// Dispatch routes a single already-normalized event through the dispatcher. The
-// webhook receiver uses this to push parsed deliveries into the same pipeline
-// the poller feeds — task creation, inbox append, attention routing, reopen/
-// mark-done — without making any GitHub API call.
+// Dispatch routes one already-normalized webhook event through the dispatcher
+// (task creation, inbox append, attention routing, reopen/mark-done) with no
+// GitHub API call. Unchanged from before.
 func (l *GitHubListener) Dispatch(ctx context.Context, ev GitHubEvent) error {
 	if l == nil || l.dispatcher == nil {
 		return nil
@@ -107,9 +109,9 @@ func (l *GitHubListener) Dispatch(ctx context.Context, ev GitHubEvent) error {
 	return l.dispatcher.Dispatch(ctx, ev)
 }
 
-func (l *GitHubListener) run(ctx context.Context) {
-	l.pollOnce(ctx)
-	interval := l.pollInterval
+func (l *GitHubListener) linkLoop(ctx context.Context) {
+	l.linkPass(ctx)
+	interval := l.linkInterval
 	if interval <= 0 {
 		interval = time.Minute
 	}
@@ -120,36 +122,16 @@ func (l *GitHubListener) run(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
-			l.pollOnce(ctx)
+			l.linkPass(ctx)
 		}
 	}
 }
 
-func (l *GitHubListener) pollOnce(ctx context.Context) {
-	events, err := l.poll(ctx)
-	if err != nil {
-		// A poll may fail partway through (e.g. one flaky tracked-PR fetch)
-		// yet still return the events it collected before the error. Log the
-		// failure but DON'T discard those events — otherwise a single failing
-		// PR starves every other event, including newly-assigned issues.
-		l.logFn("poll: %v", err)
+func (l *GitHubListener) linkPass(ctx context.Context) {
+	if l.dispatcher == nil {
+		return
 	}
-	for _, ev := range events {
-		if err := l.dispatcher.Dispatch(ctx, ev); err != nil {
-			l.logFn("dispatch %s: %v", ev.EventKeyValue(), err)
-		}
-	}
-}
-
-func (l *GitHubListener) poll(ctx context.Context) ([]GitHubEvent, error) {
-	if l.pollFn != nil {
-		return l.pollFn(ctx)
-	}
-	p := GitHubPoller{
-		DB:         l.dispatcher.DB,
-		Client:     ghAPIClient{},
-		SelfLogins: GitHubSelfLogins(),
-		Repos:      GitHubRepos(),
-	}
-	return p.Poll(ctx)
+	db := l.dispatcher.DB
+	linkInProgressTaskPRs(ctx, db)
+	linkInProgressIssuePRs(ctx, db, GitHubSelfLogins())
 }

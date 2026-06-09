@@ -65,6 +65,13 @@ type Server struct {
 	slackSetupMu sync.Mutex
 	slackOAuth   *slackOAuthDance
 
+	// githubSetup is the in-flight Connect-GitHub App-manifest attempt: the
+	// state nonce and chosen install target, kept server-side so the manifest
+	// conversion callback can validate the redirect. Guarded by githubSetupMu;
+	// nil when no setup is in progress.
+	githubSetupMu sync.Mutex
+	githubSetup   *githubManifestPending
+
 	// quote{Mu,Key,Val} cache the Mission Control anime quote per
 	// (date + greeting bucket) so the external animechan API is called at most
 	// once per greeting change — see handleQuote.

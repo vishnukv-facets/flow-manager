@@ -379,5 +379,9 @@ func lookupReservedShare(root env_core.Root, name string) (*zroksdk.Share, strin
 func (s *Server) ingressMux() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/api/github/webhook", s.handleGitHubWebhook)
+	// The Connect-GitHub App-manifest flow registers a public redirect_url; the
+	// operator's browser lands here after GitHub creates the App. State-nonce
+	// validated; no UI or data-plane is exposed.
+	mux.HandleFunc(githubSetupCallbackPath, s.handleGitHubSetupCallback)
 	return mux
 }

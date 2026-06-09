@@ -66,7 +66,7 @@ export const CONNECTORS: ConnectorDef[] = [
     label: 'GitHub',
     source: 'github',
     capabilityId: 'gh',
-    powers: 'Polls assigned/mentioned issues & PRs and review requests into task inboxes.',
+    powers: 'A GitHub App delivers assigned/mentioned issues & PRs and review requests over signed webhooks into task inboxes.',
   },
   {
     id: 'ingress',
