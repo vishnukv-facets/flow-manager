@@ -866,6 +866,51 @@ func (s *Server) handleSlackSetupOAuthStart(w http.ResponseWriter, r *http.Reque
 	writeJSON(w, map[string]any{"ok": true, "authorize_url": authorizeURL, "redirect_url": s.slackRedirectURL()})
 }
 
+// slackAppConfigKeys are the app-specific Slack config keys a reset clears so
+// the wizard returns to step 1 (create app). The operator's own Slack user IDs
+// (FLOW_SLACK_SELF_USER_IDS) are intentionally preserved — that's identity, not
+// app config, and the next install repopulates it anyway.
+var slackAppConfigKeys = []string{
+	"FLOW_SLACK_APP_ID", "FLOW_SLACK_CLIENT_ID", "FLOW_SLACK_CLIENT_SECRET",
+	"FLOW_SLACK_TOKEN", "FLOW_SLACK_USER_TOKEN", "FLOW_SLACK_APP_TOKEN",
+}
+
+// handleSlackSetupReset clears the connected Slack app's credentials so the
+// operator can recreate it from scratch — the only way to change the registered
+// OAuth redirect URL (e.g. localhost → public ingress), since Slack pins the
+// redirect at app-creation time and a plain Reinstall can't switch it.
+func (s *Server) handleSlackSetupReset(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		w.WriteHeader(http.StatusMethodNotAllowed)
+		return
+	}
+	// Cancel any in-flight install first.
+	s.slackSetupMu.Lock()
+	dance := s.slackOAuth
+	s.slackOAuth = nil
+	s.slackSetupMu.Unlock()
+	if dance != nil {
+		dance.shutdown()
+	}
+
+	cfg := loadConfigFile(s.configPath())
+	var changed []string
+	for _, k := range slackAppConfigKeys {
+		if _, ok := cfg[k]; ok {
+			delete(cfg, k)
+			changed = append(changed, k)
+		}
+		os.Unsetenv(k)
+	}
+	if err := saveConfigFile(s.configPath(), cfg); err != nil {
+		writeJSONStatus(w, map[string]any{"ok": false, "error": err.Error()}, http.StatusInternalServerError)
+		return
+	}
+	s.applySettingsRestart(changed)
+	s.publishUIChange("slack-setup")
+	writeJSON(w, map[string]any{"ok": true})
+}
+
 func (s *Server) handleSlackSetupOAuthCancel(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		w.WriteHeader(http.StatusMethodNotAllowed)

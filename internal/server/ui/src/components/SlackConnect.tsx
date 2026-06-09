@@ -1,6 +1,7 @@
 import { useState } from 'react'
-import { Check, ExternalLink, Loader2, RefreshCw, Slack, X } from 'lucide-react'
+import { Check, ExternalLink, Loader2, RefreshCw, RotateCcw, Slack, X } from 'lucide-react'
 import { apiPost } from '../lib/api'
+import { confirmAction } from '../lib/confirm'
 import { useSlackSetupStatus } from '../lib/query'
 import { pushToast } from '../lib/toast'
 import type { SlackSetupStatus } from '../lib/types'
@@ -316,6 +317,7 @@ function StepInstall({ st, active, onDone }: { st: SlackSetupStatus; active: boo
 
 function FinishedSummary({ st, onRefetch }: { st: SlackSetupStatus; onRefetch: () => void }) {
   const [busy, setBusy] = useState(false)
+  const [resetting, setResetting] = useState(false)
 
   const reinstall = async () => {
     setBusy(true)
@@ -330,31 +332,68 @@ function FinishedSummary({ st, onRefetch }: { st: SlackSetupStatus; onRefetch: (
     }
   }
 
+  // Recreate: clear the app's credentials so the wizard walks from step 1 with a
+  // fresh app. The ONLY way to change the registered OAuth redirect URL (e.g. to
+  // the public ingress) — Slack pins the redirect at creation, so Reinstall
+  // alone can't switch it.
+  const recreate = async () => {
+    const ok = await confirmAction({
+      title: 'Recreate the Slack app?',
+      body: 'Clears this app’s credentials so you can create a fresh one (the only way to switch the OAuth redirect to the public URL). You’ll paste a new config token and re-approve the install. The old app stays on Slack until you delete it there.',
+      confirmLabel: 'Recreate',
+      danger: true,
+    })
+    if (!ok) return
+    setResetting(true)
+    try {
+      await apiPost('/api/slack/setup/reset', {})
+      pushToast('ok', 'Slack app cleared — start the wizard to create a fresh one')
+      onRefetch()
+    } catch (err) {
+      pushToast('error', err instanceof Error ? err.message : 'recreate failed')
+    } finally {
+      setResetting(false)
+    }
+  }
+
   return (
     <div className="slack-wizard-done">
-      <Check size={15} />
-      <div>
-        Slack is connected{st.oauth_team ? <> to <strong>{st.oauth_team}</strong></> : null}
-        {st.self_user_ids ? <> as <code>{st.self_user_ids}</code></> : null}. React to any
-        message with <code>:claude:</code> to spawn a session.
-        {!st.user_token_set && (
-          <div className="slack-error">
-            No user token came back — DM following won't work. Reinstall and approve the
-            user-scope prompt.
-          </div>
-        )}
+      <div className="slack-wizard-done-head">
+        <Check size={15} />
+        <div>
+          Slack is connected{st.oauth_team ? <> to <strong>{st.oauth_team}</strong></> : null}
+          {st.self_user_ids ? <> as <code>{st.self_user_ids}</code></> : null}. React to any
+          message with <code>:claude:</code> to spawn a session.
+          {!st.user_token_set && (
+            <div className="slack-error">
+              No user token came back — DM following won't work. Reinstall and approve the
+              user-scope prompt.
+            </div>
+          )}
+        </div>
       </div>
-      <span className="spacer" />
-      <button
-        type="button"
-        className="btn"
-        disabled={busy}
-        onClick={reinstall}
-        title="Re-run the OAuth install (needed after scope changes)"
-      >
-        {busy ? <Loader2 size={14} className="spin" /> : <RefreshCw size={13} />}
-        Reinstall
-      </button>
+      <div className="slack-wizard-done-actions">
+        <button
+          type="button"
+          className="btn"
+          disabled={busy}
+          onClick={reinstall}
+          title="Re-run the OAuth install (needed after scope changes)"
+        >
+          {busy ? <Loader2 size={14} className="spin" /> : <RefreshCw size={13} />}
+          Reinstall
+        </button>
+        <button
+          type="button"
+          className="btn danger"
+          disabled={resetting}
+          onClick={recreate}
+          title="Clear this app and create a fresh one — required to switch the OAuth redirect to the public URL"
+        >
+          {resetting ? <Loader2 size={14} className="spin" /> : <RotateCcw size={13} />}
+          Recreate app
+        </button>
+      </div>
     </div>
   )
 }

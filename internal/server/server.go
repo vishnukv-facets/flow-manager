@@ -167,6 +167,7 @@ func (s *Server) registerAPIRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/slack/setup/app-token", s.handleSlackSetupAppToken)
 	mux.HandleFunc("/api/slack/setup/oauth/start", s.handleSlackSetupOAuthStart)
 	mux.HandleFunc("/api/slack/setup/oauth/cancel", s.handleSlackSetupOAuthCancel)
+	mux.HandleFunc("/api/slack/setup/reset", s.handleSlackSetupReset)
 	mux.HandleFunc("/api/github/auth/status", s.handleGitHubAuthStatus)
 	mux.HandleFunc("/api/github/auth/switch", s.handleGitHubAuthSwitch)
 	mux.HandleFunc("/api/github/setup/status", s.handleGitHubSetupStatus)
