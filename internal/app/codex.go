@@ -58,7 +58,7 @@ func hasSessionID(v sql.NullString) bool {
 	return v.Valid && strings.TrimSpace(v.String) != ""
 }
 
-func buildCodexRunCommand(taskSlug, mode, sessionID, prompt, permissionMode string) (string, string, error) {
+func buildCodexRunCommand(taskSlug, mode, sessionID, prompt, permissionMode, model string) (string, string, error) {
 	var promptFile string
 	if mode == codexModeFresh {
 		var err error
@@ -72,6 +72,9 @@ func buildCodexRunCommand(taskSlug, mode, sessionID, prompt, permissionMode stri
 		"--task " + spawner.ShellQuote(taskSlug),
 		"--mode " + spawner.ShellQuote(mode),
 		"--permission-mode " + spawner.ShellQuote(permissionMode),
+	}
+	if strings.TrimSpace(model) != "" {
+		parts = append(parts, "--model "+spawner.ShellQuote(model))
 	}
 	if promptFile != "" {
 		parts = append(parts, "--prompt-file "+spawner.ShellQuote(promptFile))
@@ -169,6 +172,15 @@ func shellQuoteArg(arg string) string {
 	return spawner.ShellQuote(arg)
 }
 
+// claudeModelArgs returns the `--model <m>` flag for the Claude CLI, or nil
+// when no model was resolved (let the provider use its own default).
+func claudeModelArgs(model string) []string {
+	if strings.TrimSpace(model) == "" {
+		return nil
+	}
+	return []string{"--model", model}
+}
+
 func claudePermissionArgs(mode string) []string {
 	switch strings.TrimSpace(mode) {
 	case "auto":
@@ -209,6 +221,7 @@ func cmdHookCodexRun(args []string) int {
 	prompt := fs.String("prompt", "", "bootstrap prompt")
 	promptFile := fs.String("prompt-file", "", "path to bootstrap prompt file")
 	permissionModeFlag := fs.String("permission-mode", flowdb.DefaultPermissionMode, "agent permission mode: default|auto|bypass")
+	modelFlag := fs.String("model", "", "codex model to launch with (empty = codex default)")
 	dangerSkip := fs.Bool("dangerously-skip-permissions", false, "pass --dangerously-bypass-approvals-and-sandbox to codex")
 	if err := fs.Parse(args); err != nil {
 		return 2
@@ -258,7 +271,7 @@ func cmdHookCodexRun(args []string) int {
 		return 1
 	}
 	started := time.Now().Add(-2 * time.Second)
-	codexArgs, err := codexCLIArgs(*mode, *sessionID, *prompt, cwd, root, permissionMode)
+	codexArgs, err := codexCLIArgs(*mode, *sessionID, *prompt, cwd, root, permissionMode, *modelFlag)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
 		return 1
@@ -298,13 +311,14 @@ func cmdHookCodexRun(args []string) int {
 	return 0
 }
 
-func codexCLIArgs(mode, sessionID, prompt, cwd, flowRootPath, permissionMode string) ([]string, error) {
+func codexCLIArgs(mode, sessionID, prompt, cwd, flowRootPath, permissionMode, model string) ([]string, error) {
 	if mode == codexModeFresh {
 		args := []string{"--no-alt-screen"}
 		if cwd != "" {
 			args = append(args, "-C", cwd)
 		}
 		args = appendCodexWritableRoots(args, cwd, flowRootPath)
+		args = append(args, codexModelArgs(model)...)
 		args = append(args, codexPermissionArgs(permissionMode)...)
 		return append(args, prompt), nil
 	}
@@ -316,8 +330,18 @@ func codexCLIArgs(mode, sessionID, prompt, cwd, flowRootPath, permissionMode str
 		args = append(args, "-C", cwd)
 	}
 	args = appendCodexWritableRoots(args, cwd, flowRootPath)
+	args = append(args, codexModelArgs(model)...)
 	args = append(args, codexPermissionArgs(permissionMode)...)
 	return append(args, sessionID), nil
+}
+
+// codexModelArgs returns the `--model <m>` flag for the Codex CLI, or nil when
+// no model was resolved (let Codex use its own default).
+func codexModelArgs(model string) []string {
+	if strings.TrimSpace(model) == "" {
+		return nil
+	}
+	return []string{"--model", model}
 }
 
 func appendCodexWritableRoots(args []string, cwd, flowRootPath string) []string {

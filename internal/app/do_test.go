@@ -89,6 +89,97 @@ func seedTask(t *testing.T, slug string) {
 	}
 }
 
+// writeTaskBrief overwrites a task's brief.md so model-resolution tests can
+// control the descriptiveness heuristic deterministically.
+func writeTaskBrief(t *testing.T, slug, content string) {
+	t.Helper()
+	root, err := flowRoot()
+	if err != nil {
+		t.Fatalf("flowRoot: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "tasks", slug, "brief.md"), []byte(content), 0o644); err != nil {
+		t.Fatalf("write brief: %v", err)
+	}
+}
+
+const doTestDescriptiveBrief = `# Add OAuth login
+
+## What
+Add OAuth login to the budgeting app so users can sign in with Google.
+
+## Why
+Users keep asking for single sign-on. Maintaining our own password store is a
+liability and a support burden, and Google login is the most requested provider
+by a wide margin across the last two quarters of customer feedback.
+
+## Where
+work_dir: /tmp/budget
+
+## Done when
+- Users can sign in with Google from the login screen
+- Sessions persist across browser restarts via secure cookies
+- Existing password accounts can link a Google identity without losing data
+`
+
+const doTestThinBrief = `# Thin
+
+## What
+Do the thing.
+
+## Why
+*Deferred — fill in at task start.*
+
+## Done when
+*Deferred — fill in at task start.*
+`
+
+func TestCmdDoPassesExplicitModelToClaude(t *testing.T) {
+	setupFlowRoot(t)
+	if rc := cmdAdd([]string{"task", "Explicit model", "--slug", "explicit-model", "--model", "opus", "--agent", "claude"}); rc != 0 {
+		t.Fatalf("add rc=%d", rc)
+	}
+	_, getScript := stubITerm(t)
+	if rc := cmdDo([]string{"explicit-model"}); rc != 0 {
+		t.Fatalf("do rc=%d", rc)
+	}
+	script := readWrapper(t, getScript())
+	if !strings.Contains(script, "--model opus") {
+		t.Errorf("explicit model should pass --model opus, got:\n%s", script)
+	}
+}
+
+func TestCmdDoDefaultsToMediumModelTier(t *testing.T) {
+	setupFlowRoot(t)
+	t.Setenv("FLOW_MODEL_TIER", "")
+	t.Setenv("FLOW_MODEL_AUTODOWNSHIFT", "on")
+	seedTask(t, "thin-task")
+	writeTaskBrief(t, "thin-task", doTestThinBrief)
+	_, getScript := stubITerm(t)
+	if rc := cmdDo([]string{"thin-task"}); rc != 0 {
+		t.Fatalf("do rc=%d", rc)
+	}
+	script := readWrapper(t, getScript())
+	if !strings.Contains(script, "--model sonnet") {
+		t.Errorf("a thin brief with no explicit model should default to --model sonnet, got:\n%s", script)
+	}
+}
+
+func TestCmdDoAutoDownshiftsDescriptiveBrief(t *testing.T) {
+	setupFlowRoot(t)
+	t.Setenv("FLOW_MODEL_TIER", "")
+	t.Setenv("FLOW_MODEL_AUTODOWNSHIFT", "on")
+	seedTask(t, "rich-task")
+	writeTaskBrief(t, "rich-task", doTestDescriptiveBrief)
+	_, getScript := stubITerm(t)
+	if rc := cmdDo([]string{"rich-task"}); rc != 0 {
+		t.Fatalf("do rc=%d", rc)
+	}
+	script := readWrapper(t, getScript())
+	if !strings.Contains(script, "--model haiku") {
+		t.Errorf("a descriptive brief should auto-downshift to --model haiku, got:\n%s", script)
+	}
+}
+
 func TestCmdDoHelpReturnsZero(t *testing.T) {
 	out := captureStdout(t, func() {
 		if rc := cmdDo([]string{"--help"}); rc != 0 {
@@ -652,7 +743,7 @@ func TestCmdDoCodexFreshUsesInteractiveWrapper(t *testing.T) {
 }
 
 func TestCodexCLIArgsUseInteractiveCodex(t *testing.T) {
-	fresh, err := codexCLIArgs(codexModeFresh, "", "bootstrap", "/tmp/work", "/tmp/flow-root", "bypass")
+	fresh, err := codexCLIArgs(codexModeFresh, "", "bootstrap", "/tmp/work", "/tmp/flow-root", "bypass", "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -665,7 +756,7 @@ func TestCodexCLIArgsUseInteractiveCodex(t *testing.T) {
 		}
 	}
 
-	resume, err := codexCLIArgs(codexModeResume, "abc-session", "", "/tmp/work", "/tmp/flow-root", "auto")
+	resume, err := codexCLIArgs(codexModeResume, "abc-session", "", "/tmp/work", "/tmp/flow-root", "auto", "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -674,7 +765,7 @@ func TestCodexCLIArgsUseInteractiveCodex(t *testing.T) {
 		t.Fatalf("resume args = %#v, want %#v", resume, wantResume)
 	}
 
-	defaultFresh, err := codexCLIArgs(codexModeFresh, "", "bootstrap", "/tmp/work", "/tmp/flow-root", "default")
+	defaultFresh, err := codexCLIArgs(codexModeFresh, "", "bootstrap", "/tmp/work", "/tmp/flow-root", "default", "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -683,6 +774,42 @@ func TestCodexCLIArgsUseInteractiveCodex(t *testing.T) {
 		if !testContainsString(defaultFresh, want) {
 			t.Fatalf("default fresh args missing %q: %#v", want, defaultFresh)
 		}
+	}
+}
+
+func TestCodexCLIArgsIncludesModel(t *testing.T) {
+	containsModel := func(args []string, val string) bool {
+		for i := 0; i+1 < len(args); i++ {
+			if args[i] == "--model" && args[i+1] == val {
+				return true
+			}
+		}
+		return false
+	}
+
+	fresh, err := codexCLIArgs(codexModeFresh, "", "bootstrap", "/tmp/work", "/tmp/flow-root", "auto", "gpt-5.4")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !containsModel(fresh, "gpt-5.4") {
+		t.Errorf("fresh codex args missing --model gpt-5.4: %#v", fresh)
+	}
+
+	resume, err := codexCLIArgs(codexModeResume, "abc", "", "/tmp/work", "/tmp/flow-root", "auto", "gpt-5.5")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !containsModel(resume, "gpt-5.5") {
+		t.Errorf("resume codex args missing --model gpt-5.5: %#v", resume)
+	}
+
+	// No model resolved -> no --model flag at all.
+	none, err := codexCLIArgs(codexModeFresh, "", "bootstrap", "/tmp/work", "/tmp/flow-root", "auto", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if testContainsString(none, "--model") {
+		t.Errorf("empty model should omit --model: %#v", none)
 	}
 }
 

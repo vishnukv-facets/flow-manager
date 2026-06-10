@@ -437,20 +437,30 @@ func cmdDo(args []string) int {
 		fmt.Fprintf(os.Stderr, "installed local agent hooks in %s\n", cwd)
 	}
 
+	// Resolve the session model. On bootstrap, an explicit per-task model wins,
+	// otherwise flow picks a tier (default medium, downshifted to a smaller model
+	// when the brief is descriptive enough). On resume we never re-run the
+	// heuristic — the session keeps the model it bootstrapped with — so we pass
+	// only an explicit override (mid-session model switching is out of scope).
+	sessionModel := resolveLaunchModel(provider, task, needsBootstrap)
+
 	var command string
 	var codexPromptFile string
 	if provider == sessionProviderClaude {
 		if needsBootstrap {
-			command = agentShellCommand("claude", append(append([]string{"--session-id", sessionID}, claudePermissionArgs(permissionMode)...), prompt))
+			args := append([]string{"--session-id", sessionID}, claudeModelArgs(sessionModel)...)
+			args = append(args, claudePermissionArgs(permissionMode)...)
+			command = agentShellCommand("claude", append(args, prompt))
 		} else {
-			command = agentShellCommand("claude", append([]string{"--resume", sessionID}, claudePermissionArgs(permissionMode)...))
+			args := append([]string{"--resume", sessionID}, claudeModelArgs(sessionModel)...)
+			command = agentShellCommand("claude", append(args, claudePermissionArgs(permissionMode)...))
 		}
 	} else {
 		mode := codexModeFresh
 		if !needsBootstrap {
 			mode = codexModeResume
 		}
-		command, codexPromptFile, err = buildCodexRunCommand(task.Slug, mode, sessionID, prompt, permissionMode)
+		command, codexPromptFile, err = buildCodexRunCommand(task.Slug, mode, sessionID, prompt, permissionMode, sessionModel)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "error: build codex command: %v\n", err)
 			return 1
@@ -559,6 +569,41 @@ func cmdDo(args []string) int {
 // first-run variant when relevant.
 func buildBootstrapPromptForKind(slug, kind, playbookSlug string) string {
 	return buildBootstrapPromptForKindV2(slug, kind, playbookSlug, false)
+}
+
+// resolveLaunchModel determines the value passed to `--model` for a session
+// launch. On bootstrap it runs flow's tier resolution — an explicit per-task
+// model wins, otherwise the baseline tier (default medium) is downshifted one
+// rung when the brief is descriptive enough for a smaller model. On resume it
+// returns only an explicit override, never re-running the heuristic, so a live
+// session never silently switches models. An empty return means "pass no
+// --model" (let the provider use its own default).
+func resolveLaunchModel(provider string, task *flowdb.Task, needsBootstrap bool) string {
+	explicit := ""
+	if task.Model.Valid {
+		explicit = task.Model.String
+	}
+	if !needsBootstrap {
+		return flowdb.NormalizeModel(explicit)
+	}
+	briefText := ""
+	if root, err := flowRoot(); err == nil {
+		if b, rerr := os.ReadFile(filepath.Join(root, "tasks", task.Slug, "brief.md")); rerr == nil {
+			briefText = string(b)
+		}
+	}
+	r := flowdb.ResolveSessionModel(provider, explicit, briefText)
+	switch {
+	case r.Model == "":
+		// no resolution (shouldn't happen with a non-biggest default tier)
+	case r.Explicit:
+		fmt.Fprintf(os.Stderr, "flow: session model %s (explicit)\n", r.Model)
+	case r.Downshifted:
+		fmt.Fprintf(os.Stderr, "flow: session model %s (auto-downshifted to %s tier — descriptive brief)\n", r.Model, r.Tier)
+	default:
+		fmt.Fprintf(os.Stderr, "flow: session model %s (default %s tier)\n", r.Model, r.Tier)
+	}
+	return r.Model
 }
 
 // buildBootstrapPromptForKindV2 is the kind-aware dispatcher with first-

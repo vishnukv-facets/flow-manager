@@ -63,6 +63,7 @@ CREATE TABLE IF NOT EXISTS tasks (
     due_date              TEXT,
     assignee              TEXT,
     permission_mode       TEXT NOT NULL DEFAULT 'auto' CHECK (permission_mode IN ('default','auto','bypass')),
+    model                 TEXT,
     status_changed_at     TEXT,
     session_provider      TEXT NOT NULL DEFAULT 'claude' CHECK (session_provider IN ('claude','codex')),
     session_id            TEXT,
@@ -418,6 +419,7 @@ type Task struct {
 	DueDate            sql.NullString
 	Assignee           sql.NullString
 	PermissionMode     string
+	Model              sql.NullString // explicit per-task model; empty = resolve at launch
 	StatusChangedAt    sql.NullString
 	SessionProvider    string
 	SessionID          sql.NullString
@@ -1218,6 +1220,16 @@ func runMigrations(db *sql.DB) error {
 		}
 	}
 
+	has, err = columnExists(db, "tasks", "model")
+	if err != nil {
+		return err
+	}
+	if !has {
+		if _, err := db.Exec(`ALTER TABLE tasks ADD COLUMN model TEXT`); err != nil {
+			return fmt.Errorf("add tasks.model: %w", err)
+		}
+	}
+
 	has, err = columnExists(db, "tasks", "session_provider")
 	if err != nil {
 		return err
@@ -1811,6 +1823,7 @@ func migrateTasksSessionInvariant(db *sql.DB) error {
 			due_date              TEXT,
 			assignee              TEXT,
 			permission_mode       TEXT NOT NULL DEFAULT 'auto' CHECK (permission_mode IN ('default','auto','bypass')),
+			model                 TEXT,
 			status_changed_at     TEXT,
 			session_provider      TEXT NOT NULL DEFAULT 'claude' CHECK (session_provider IN ('claude','codex')),
 			session_id            TEXT,
@@ -1831,13 +1844,13 @@ func migrateTasksSessionInvariant(db *sql.DB) error {
 	if _, err := tx.Exec(`
 		INSERT INTO tasks_new (
 			slug, name, project_slug, status, kind, playbook_slug, parent_slug, forked_from_slug, fork_reason, priority,
-			work_dir, waiting_on, due_date, assignee, permission_mode, status_changed_at,
+			work_dir, waiting_on, due_date, assignee, permission_mode, model, status_changed_at,
 			session_provider, session_id, session_started, session_last_resumed,
 			session_path, worktree_path, inbox_seen_at, created_at, updated_at, archived_at, deleted_at
 		)
 		SELECT
 			slug, name, project_slug, status, kind, playbook_slug, parent_slug, forked_from_slug, fork_reason, priority,
-			work_dir, waiting_on, due_date, assignee, permission_mode, status_changed_at,
+			work_dir, waiting_on, due_date, assignee, permission_mode, model, status_changed_at,
 			COALESCE(NULLIF(session_provider, ''), 'claude'), session_id, session_started, session_last_resumed,
 			session_path, worktree_path, inbox_seen_at, created_at, updated_at, archived_at, deleted_at
 		FROM tasks`); err != nil {
@@ -2082,14 +2095,14 @@ func ListProjects(db *sql.DB, filter ProjectFilter) ([]*Project, error) {
 
 // ---------- task queries ----------
 
-const TaskCols = "slug, name, project_slug, status, kind, playbook_slug, parent_slug, forked_from_slug, fork_reason, priority, work_dir, waiting_on, due_date, assignee, permission_mode, status_changed_at, session_provider, session_id, session_started, session_last_resumed, session_path, worktree_path, inbox_seen_at, created_at, updated_at, archived_at, deleted_at"
+const TaskCols = "slug, name, project_slug, status, kind, playbook_slug, parent_slug, forked_from_slug, fork_reason, priority, work_dir, waiting_on, due_date, assignee, permission_mode, model, status_changed_at, session_provider, session_id, session_started, session_last_resumed, session_path, worktree_path, inbox_seen_at, created_at, updated_at, archived_at, deleted_at"
 
 func ScanTask(row interface{ Scan(dest ...any) error }) (*Task, error) {
 	var t Task
 	err := row.Scan(
 		&t.Slug, &t.Name, &t.ProjectSlug, &t.Status, &t.Kind, &t.PlaybookSlug, &t.ParentSlug, &t.ForkedFromSlug, &t.ForkReason,
 		&t.Priority, &t.WorkDir,
-		&t.WaitingOn, &t.DueDate, &t.Assignee, &t.PermissionMode, &t.StatusChangedAt, &t.SessionProvider, &t.SessionID,
+		&t.WaitingOn, &t.DueDate, &t.Assignee, &t.PermissionMode, &t.Model, &t.StatusChangedAt, &t.SessionProvider, &t.SessionID,
 		&t.SessionStarted, &t.SessionLastResumed, &t.SessionPath, &t.WorktreePath, &t.InboxSeenAt, &t.CreatedAt, &t.UpdatedAt, &t.ArchivedAt, &t.DeletedAt,
 	)
 	if err != nil {
