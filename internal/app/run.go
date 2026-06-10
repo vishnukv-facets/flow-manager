@@ -34,6 +34,9 @@ func cmdRunPlaybook(args []string) int {
 	codexAgent := fs.Bool("codex", false, "shortcut for --agent codex")
 	claudeAgent := fs.Bool("claude", false, "shortcut for --agent claude")
 	dangerSkip := fs.Bool("dangerously-skip-permissions", false, "pass low-friction permissions flag through to the selected agent")
+	auto := fs.Bool("auto", false, "run headlessly (no tab; claude-only)")
+	withInstr := fs.String("with", "", "one-off instruction appended to autonomous prompt (requires --auto)")
+	withFile := fs.String("with-file", "", "file whose contents are appended to autonomous prompt (requires --auto)")
 	if leadingHelpArg(args) {
 		fs.Usage()
 		return 0
@@ -132,6 +135,15 @@ func cmdRunPlaybook(args []string) int {
 	}
 	if *dangerSkip {
 		doArgs = append(doArgs, "--dangerously-skip-permissions")
+	}
+	if *auto {
+		doArgs = append(doArgs, "--auto")
+	}
+	if *withInstr != "" {
+		doArgs = append(doArgs, "--with", *withInstr)
+	}
+	if *withFile != "" {
+		doArgs = append(doArgs, "--with-file", *withFile)
 	}
 	return cmdDo(doArgs)
 }

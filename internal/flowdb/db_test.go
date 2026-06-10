@@ -49,6 +49,26 @@ func TestOpenDBCreatesSchema(t *testing.T) {
 	}
 }
 
+func TestMigrationAddsAutoRunColumns(t *testing.T) {
+	db := openTempDB(t)
+	insertTask(t, db, "auto-slug", "Auto task", "backlog", "medium", t.TempDir(), nil)
+	if _, err := db.Exec(
+		`UPDATE tasks SET auto_run_status='running', auto_run_pid=4242 WHERE slug='auto-slug'`,
+	); err != nil {
+		t.Fatalf("set auto_run_status: %v", err)
+	}
+	task, err := GetTask(db, "auto-slug")
+	if err != nil {
+		t.Fatalf("GetTask: %v", err)
+	}
+	if !task.AutoRunStatus.Valid || task.AutoRunStatus.String != "running" {
+		t.Errorf("AutoRunStatus = %v, want running", task.AutoRunStatus)
+	}
+	if !task.AutoRunPID.Valid || task.AutoRunPID.Int64 != 4242 {
+		t.Errorf("AutoRunPID = %v, want 4242", task.AutoRunPID)
+	}
+}
+
 func TestOpenDBIdempotent(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "flow.db")
 	db1, err := OpenDB(path)

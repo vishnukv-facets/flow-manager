@@ -383,6 +383,30 @@ func printTaskMetadata(db *sql.DB, t *flowdb.Task, root string) {
 	if t.WorktreePath.Valid && t.WorktreePath.String != "" {
 		fmt.Printf("worktree:      %s  [branch flow/%s]\n", t.WorktreePath.String, t.Slug)
 	}
+	reconcileAutoRun(db, t)
+	if t.AutoRunStatus.Valid && t.AutoRunStatus.String != "" {
+		switch t.AutoRunStatus.String {
+		case "running":
+			detail := ""
+			if t.AutoRunPID.Valid {
+				detail = fmt.Sprintf(" (pid %d", t.AutoRunPID.Int64)
+				if t.AutoRunStarted.Valid && t.AutoRunStarted.String != "" {
+					detail += fmt.Sprintf(", since %s", t.AutoRunStarted.String)
+				}
+				detail += ")"
+			}
+			fmt.Printf("auto_run:      %s%s\n", t.AutoRunStatus.String, detail)
+		default:
+			fin := ""
+			if t.AutoRunFinished.Valid && t.AutoRunFinished.String != "" {
+				fin = fmt.Sprintf(" (finished %s)", t.AutoRunFinished.String)
+			}
+			fmt.Printf("auto_run:      %s%s\n", t.AutoRunStatus.String, fin)
+		}
+		if t.AutoRunLog.Valid && t.AutoRunLog.String != "" {
+			fmt.Printf("auto_run_log:  %s\n", t.AutoRunLog.String)
+		}
+	}
 
 	fmt.Printf("created:       %s\n", t.CreatedAt)
 	fmt.Printf("updated:       %s\n", t.UpdatedAt)
