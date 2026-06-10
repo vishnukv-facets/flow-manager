@@ -212,7 +212,7 @@ You are scoring one incoming message for an operator. Using the message and the 
 
 Allowed suggested_action values: make_task, forward, reply, afk_reply, digest_only, drop.
 - make_task: this should become a tracked task.
-- forward: it belongs to an existing task (set matched_task to that slug).
+- forward: it belongs to an existing task (set matched_task to that slug). Forward ONLY on concrete linkage — same thread/DM, same participants, or an explicit reference to that task's specific work. A shared topic alone ("a migration", "a release", "a deploy") is NOT a match; when the link is only thematic, use digest_only or make_task instead.
 - reply: it needs a reply from the operator.
 - digest_only: noteworthy but not actionable now.
 - drop: not worth surfacing.

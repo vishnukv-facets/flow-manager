@@ -319,7 +319,10 @@ func (c *Cascade) finishItem(ctx context.Context, in ClassifyInput, tr *flowdb.S
 			c.emitTrace(tr, start)
 			return nil
 		}
-		c.applyExistingTaskMatch(&v2, ev)
+		det2 := c.applyExistingTaskMatch(&v2, ev)
+		if note := gateWeakSemanticForward(&v2, det2); note != "" {
+			tr.Error = appendCascadeError(tr.Error, note)
+		}
 		id, surfaced, werr := c.writeFeed(v2, ev, pack)
 		if werr == nil && !surfaced {
 			tr.Disposition, tr.StageReached = "dropped", "stage2"
@@ -348,7 +351,10 @@ func (c *Cascade) finishItem(ctx context.Context, in ClassifyInput, tr *flowdb.S
 		tr.StageReached = "stage3"
 	}
 	c.cache.mark(cacheKey, c.now())
-	c.applyExistingTaskMatch(&v3, ev)
+	det3 := c.applyExistingTaskMatch(&v3, ev)
+	if note := gateWeakSemanticForward(&v3, det3); note != "" {
+		tr.Error = appendCascadeError(tr.Error, note)
+	}
 	// A deep-triage 'drop' verdict is noise the cascade itself rejected — it
 	// belongs in the trace (for transparency), never as a feed card nagging the
 	// operator. Stage 2 is advisory while budget is available; it only becomes
@@ -427,15 +433,56 @@ func slackTaskKeys(ev monitor.InboundEvent) []string {
 	return keys
 }
 
-// applyExistingTaskMatch sets MatchedTask when a task already tracks this
-// thread, and rewrites a would-be duplicate make_task into a forward.
-func (c *Cascade) applyExistingTaskMatch(v *Verdict, ev monitor.InboundEvent) {
+// applyExistingTaskMatch sets MatchedTask when a task already tracks this thread
+// (a deterministic thread-tag / PR-link match), and rewrites a would-be
+// duplicate make_task into a forward. Returns true when a deterministic match
+// was applied — callers use this to distinguish a trusted thread link from the
+// classifier's *semantic* guess, which is gated separately (see
+// gateWeakSemanticForward).
+func (c *Cascade) applyExistingTaskMatch(v *Verdict, ev monitor.InboundEvent) bool {
 	if slug, ok := matchExistingTask(c.DB, ev); ok {
 		v.MatchedTask = slug
 		if v.SuggestedAction == ActionMakeTask {
 			v.SuggestedAction = ActionForward
 		}
+		return true
 	}
+	return false
+}
+
+// forwardMatchFloor is the minimum confidence for surfacing a *semantic* forward
+// into an existing task — a match the classifier inferred from topic, with no
+// deterministic thread/PR link. Below it, a thematic-only match ("both are
+// migrations") retrofits unrelated threads onto the wrong task, so the cascade
+// downgrades it to a digest_only FYI. Tunable via
+// FLOW_STEERING_FORWARD_MIN_CONFIDENCE (default 0.6).
+func forwardMatchFloor() float64 {
+	if v := strings.TrimSpace(os.Getenv("FLOW_STEERING_FORWARD_MIN_CONFIDENCE")); v != "" {
+		if f, err := strconv.ParseFloat(v, 64); err == nil && f >= 0 && f <= 1 {
+			return f
+		}
+	}
+	return 0.6
+}
+
+// gateWeakSemanticForward stops the steerer from retrofitting loosely-related
+// threads onto existing tasks. A forward whose match is the classifier's
+// semantic guess (no deterministic thread/PR link) and whose confidence is below
+// forwardMatchFloor is downgraded to a digest_only FYI with the match cleared —
+// it still surfaces, but as "noteworthy", not as "forward to <wrong task>".
+// Deterministic thread matches are always trusted and never gated. Returns a
+// short audit note when it fired, else "".
+func gateWeakSemanticForward(v *Verdict, deterministic bool) string {
+	if deterministic || v.SuggestedAction != ActionForward {
+		return ""
+	}
+	if strings.TrimSpace(v.MatchedTask) == "" || v.Confidence >= forwardMatchFloor() {
+		return ""
+	}
+	prev := v.MatchedTask
+	v.SuggestedAction = ActionDigestOnly
+	v.MatchedTask = ""
+	return fmt.Sprintf("weak semantic forward to %q (confidence %.2f < %.2f floor) downgraded to digest_only", prev, v.Confidence, forwardMatchFloor())
 }
 
 // ObserveBatch triages a batch of events with a SINGLE batched Stage 1
