@@ -202,6 +202,35 @@ export interface BriefingLink {
   url?: string
 }
 
+// Live steering-cascade view: a CI-style pipeline of stage events per observed
+// event. run_id equals the persisted trace id.
+export interface SteeringStageEvent {
+  run_id: string
+  thread_key?: string
+  source?: string
+  stage: string // received | stage0 | stage1 | stage2 | stage3 | verdict
+  status: string // running | passed | surfaced | dropped | error
+  detail?: string
+  stream?: string // accumulated model output for a live-streamed stage
+  at: string
+  elapsed_ms: number
+}
+
+export interface SteeringRun {
+  run_id: string
+  thread_key?: string
+  source?: string
+  stages: SteeringStageEvent[]
+  status: string
+  done: boolean
+  started_at: string
+  updated_at: string
+}
+
+export interface SteeringRunsResponse {
+  runs: SteeringRun[]
+}
+
 export type WorkEventBucket =
   | 'needs_action'
   | 'closeout'

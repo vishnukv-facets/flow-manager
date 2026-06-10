@@ -1,18 +1,18 @@
-import { useEffect, useMemo, useState, type ReactNode } from 'react'
+import { Fragment, useEffect, useMemo, useState, type ReactNode } from 'react'
 import { useLocation, useSearch } from 'wouter'
-import { AlertTriangle, ArrowRight, AtSign, BellOff, Check, ChevronDown, ExternalLink, Filter, Github, Handshake, Hash, Inbox, Info, ListPlus, Lock, MessageSquare, Play, RefreshCw, Send, Share2 } from 'lucide-react'
-import { useAction, useAttention, useAttentionDecision, useAttentionTrace, useWorkEvents } from '../lib/query'
+import { Activity, AlertTriangle, ArrowRight, AtSign, BellOff, Check, ChevronDown, ExternalLink, Filter, Github, Handshake, Hash, Inbox, Info, ListPlus, Lock, MessageSquare, Play, RefreshCw, Send, Share2 } from 'lucide-react'
+import { useAction, useAttention, useAttentionDecision, useAttentionTrace, useSteeringRuns, useWorkEvents } from '../lib/query'
 import { useDocumentTitle } from '../lib/useDocumentTitle'
 import { EmptyState, ErrorNote, Loading, SourceIcon } from '../components/ui'
 import { WorkEventRow } from '../components/WorkEventRow'
 import { Modal } from '../components/Modal'
 import { SteeringConfig } from '../components/SteeringConfig'
-import { dateTimeFull, dateTimeSec, titleCase } from '../lib/format'
+import { ago, dateTimeFull, dateTimeSec, titleCase } from '../lib/format'
 import { nextTraceWindowAnchor, traceSinceForWindow } from '../lib/traceWindow'
-import type { AttentionItem, SteeringFunnel, SteeringTrace, WorkEvent } from '../lib/types'
+import type { AttentionItem, SteeringFunnel, SteeringRun, SteeringStageEvent, SteeringTrace, WorkEvent } from '../lib/types'
 
 const STATUSES = ['new', 'acted', 'dismissed', 'all'] as const
-const VIEWS = ['feed', 'trace', 'config'] as const
+const VIEWS = ['feed', 'live', 'trace', 'config'] as const
 type View = (typeof VIEWS)[number]
 
 export function Attention() {
@@ -21,7 +21,7 @@ export function Attention() {
   const [, navigate] = useLocation()
   const params = useMemo(() => new URLSearchParams(search), [search])
   const viewParam = params.get('view')
-  const routedView: View = viewParam === 'trace' ? 'trace' : viewParam === 'config' ? 'config' : 'feed'
+  const routedView: View = (VIEWS as readonly string[]).includes(viewParam ?? '') ? (viewParam as View) : 'feed'
   const routedItem = routedView === 'feed' ? params.get('item') : null
   const routedTrace = routedView === 'trace' ? params.get('trace') : null
   const view = routedView
@@ -57,10 +57,116 @@ export function Attention() {
 
       {view === 'feed' ? (
         <FeedView selectedItemId={routedItem} onClearDeepLink={clearDeepLink} />
+      ) : view === 'live' ? (
+        <LiveTriageView />
       ) : view === 'trace' ? (
         <TraceView selectedTraceId={routedTrace} onClearDeepLink={clearDeepLink} />
       ) : (
         <SteeringConfig />
+      )}
+    </div>
+  )
+}
+
+// ----- live steering cascade (CI-style stage view) -----------------------
+// The real-time counterpart to the trace view: each observed event's journey
+// through the cascade, updating live. run_id == the trace id, so a finished run
+// is the same object you'll find under the trace tab.
+
+const STAGE_ORDER = ['received', 'stage0', 'stage1', 'stage2', 'stage3', 'verdict']
+const STAGE_LABEL: Record<string, string> = {
+  received: 'received',
+  stage0: 'scope',
+  stage1: 'relevance',
+  stage2: 'score',
+  stage3: 'deep triage',
+  verdict: 'verdict',
+}
+
+function LiveTriageView() {
+  const { data } = useSteeringRuns()
+  const [open, setOpen] = useState<string | null>(null)
+  const runs = data?.runs ?? []
+  const active = runs.filter((r) => !r.done).length
+  return (
+    <div>
+      <div className="section-head" style={{ marginBottom: 12 }}>
+        <span className="eyebrow"><Activity size={13} /> Live triage</span>
+        {active > 0 ? (
+          <span className="briefing-alert">{active} running</span>
+        ) : (
+          <span className="faint mono" style={{ fontSize: 11 }}>idle</span>
+        )}
+        <div className="spacer" />
+        <span className="faint" style={{ fontSize: 12 }}>steerer cascade · newest first · run id = trace id</span>
+      </div>
+      {runs.length === 0 ? (
+        <EmptyState
+          icon={<Activity size={26} />}
+          title="No triage activity yet"
+          hint="As the steerer observes new Slack/GitHub events, each one's cascade appears here live — scope, relevance, score, deep triage, verdict."
+        />
+      ) : (
+        <div className="srun-list">
+          {runs.map((run) => (
+            <SteeringRunRow key={run.run_id} run={run} open={open} setOpen={setOpen} />
+          ))}
+        </div>
+      )}
+    </div>
+  )
+}
+
+function SteeringRunRow({ run, open, setOpen }: { run: SteeringRun; open: string | null; setOpen: (k: string | null) => void }) {
+  // Last event per stage (a stage can be re-emitted as it streams; latest wins).
+  const byStage = new Map<string, SteeringStageEvent>()
+  for (const s of run.stages) byStage.set(s.stage, s)
+  const present = STAGE_ORDER.filter((s) => byStage.has(s))
+  const openEvent = present.map((s) => `${run.run_id}:${s}`).includes(open ?? '')
+    ? byStage.get((open ?? '').slice(run.run_id.length + 1))
+    : undefined
+  return (
+    <div className={`srun${run.done ? '' : ' active'}`}>
+      <div className="srun-head">
+        <SourceIcon source={run.source} size={13} />
+        <span className="srun-thread clip">{run.thread_key || 'untracked event'}</span>
+        <div className="spacer" />
+        <span className={`srun-status ${run.done ? run.status : 'running'}`}>{run.done ? run.status : 'running'}</span>
+        <span className="faint mono" style={{ fontSize: 10.5 }}>{ago(run.updated_at)}</span>
+      </div>
+      <div className="sstrip">
+        {present.map((stage, i) => {
+          const e = byStage.get(stage)!
+          const key = `${run.run_id}:${stage}`
+          const isOpen = open === key
+          return (
+            <Fragment key={stage}>
+              {i > 0 && <span className="sstrip-arrow">›</span>}
+              <button
+                type="button"
+                className={`sstage st-${e.status}${isOpen ? ' open' : ''}`}
+                onClick={() => setOpen(isOpen ? null : key)}
+              >
+                {STAGE_LABEL[stage] || stage}
+              </button>
+            </Fragment>
+          )
+        })}
+      </div>
+      {openEvent && (
+        <div className={`sstage-detail${openEvent.stream ? ' streaming' : ''}`}>
+          <div className="sstage-detail-row">
+            <span className="sstage-detail-stage mono">{STAGE_LABEL[openEvent.stage] || openEvent.stage} · {openEvent.status}</span>
+            {!openEvent.stream && <span className="sstage-detail-text">{openEvent.detail || '—'}</span>}
+            <span className="faint mono" style={{ fontSize: 11 }}>{openEvent.elapsed_ms}ms</span>
+          </div>
+          {openEvent.stream && (
+            <pre className="sstage-stream">
+              {openEvent.stream}
+              {openEvent.status === 'running' && <span className="sstage-cursor" />}
+            </pre>
+          )}
+        </div>
       )}
     </div>
   )

@@ -6068,3 +6068,167 @@ a.orch-pr:hover {
 .autonomy-pct.faint {
   color: var(--text-3);
 }
+
+/* ---- live steering cascade: CI-style stage view (Attention › live tab) ---- */
+.srun-list {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  background: var(--border-faint);
+  border: 1px solid var(--border);
+  border-radius: var(--r);
+  overflow: hidden;
+}
+.srun {
+  background: var(--bg-2);
+  padding: 9px 12px;
+}
+/* In-flight runs get a faint warm wash so the eye lands on what's running. */
+.srun.active {
+  background: color-mix(in srgb, var(--warn) 6%, var(--bg-2));
+}
+.srun-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.srun-thread {
+  min-width: 0;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  color: var(--text-2);
+}
+.srun-status {
+  flex: 0 0 auto;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  padding: 2px 6px;
+  border-radius: var(--r-pill);
+  border: 1px solid var(--border);
+  color: var(--text-3);
+}
+.srun-status.running {
+  color: var(--warn);
+  border-color: color-mix(in srgb, var(--warn) 45%, var(--border));
+}
+.srun-status.surfaced {
+  color: var(--ok);
+  border-color: color-mix(in srgb, var(--ok) 45%, var(--border));
+}
+.srun-status.dropped {
+  color: var(--text-3);
+}
+.srun-status.error {
+  color: var(--danger);
+  border-color: color-mix(in srgb, var(--danger) 45%, var(--border));
+}
+.sstrip {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 5px;
+  margin-top: 8px;
+}
+.sstrip-arrow {
+  color: var(--text-3);
+  font-size: 12px;
+}
+.sstage {
+  border: 1px solid var(--border);
+  border-radius: var(--r-pill);
+  background: var(--bg);
+  color: var(--text-2);
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  line-height: 1;
+  padding: 4px 8px;
+  cursor: pointer;
+  transition: border-color var(--dur-1) var(--ease), color var(--dur-1) var(--ease);
+}
+.sstage:hover {
+  border-color: var(--accent-hi);
+}
+.sstage.open {
+  border-color: var(--accent-hi);
+  color: var(--text);
+}
+.sstage.st-running {
+  color: var(--warn);
+  border-color: color-mix(in srgb, var(--warn) 50%, var(--border));
+}
+.sstage.st-passed {
+  color: var(--text-2);
+}
+.sstage.st-surfaced {
+  color: var(--ok);
+  border-color: color-mix(in srgb, var(--ok) 50%, var(--border));
+}
+.sstage.st-dropped {
+  color: var(--text-3);
+}
+.sstage.st-error {
+  color: var(--danger);
+  border-color: color-mix(in srgb, var(--danger) 50%, var(--border));
+}
+.sstage-detail {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 8px;
+  padding: 8px 10px;
+  border: 1px solid var(--border-faint);
+  border-radius: var(--r);
+  background: var(--bg);
+}
+.sstage-detail.streaming {
+  border-color: color-mix(in srgb, var(--warn) 35%, var(--border));
+}
+.sstage-detail-row {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+}
+.sstage-detail-stage {
+  flex: 0 0 auto;
+  font-size: 10.5px;
+  color: var(--text-3);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+.sstage-detail-text {
+  flex: 1 1 auto;
+  min-width: 0;
+  font-size: 12.5px;
+  color: var(--text);
+}
+.sstage-detail-row .faint {
+  margin-left: auto;
+}
+/* Live model output: monospace, wrapped, capped so a long verdict scrolls. */
+.sstage-stream {
+  margin: 0;
+  max-height: 220px;
+  overflow: auto;
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-family: var(--font-mono);
+  font-size: 11.5px;
+  line-height: 1.5;
+  color: var(--text-2);
+}
+.sstage-cursor {
+  display: inline-block;
+  width: 6px;
+  height: 1em;
+  margin-left: 1px;
+  vertical-align: text-bottom;
+  background: var(--warn);
+  animation: sstage-blink 1s steps(2, start) infinite;
+}
+@keyframes sstage-blink {
+  to {
+    visibility: hidden;
+  }
+}

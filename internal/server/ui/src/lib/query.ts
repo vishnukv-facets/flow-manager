@@ -28,6 +28,7 @@ import type {
   SettingsResponse,
   SlackChannel,
   SlackSetupStatus,
+  SteeringRunsResponse,
   SteeringTrace,
   TaskView,
   TranscriptResponse,
@@ -198,6 +199,12 @@ export function useIngressStatus() {
 }
 export function useOverview() {
   return useQuery({ queryKey: ['overview'], queryFn: () => apiGet<OverviewView>('/api/overview') })
+}
+
+// Recent + in-flight steering cascade runs (the live CI-style stage view).
+// Refetched on each steering_stage WS delta via focusedLiveInvalidationKeys.
+export function useSteeringRuns() {
+  return useQuery({ queryKey: ['steering-runs'], queryFn: () => apiGet<SteeringRunsResponse>('/api/steering/runs') })
 }
 
 export interface TaskFilters {
