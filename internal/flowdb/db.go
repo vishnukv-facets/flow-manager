@@ -76,6 +76,11 @@ CREATE TABLE IF NOT EXISTS tasks (
     updated_at            TEXT NOT NULL,
     archived_at           TEXT,
     deleted_at            TEXT,
+    auto_run_status       TEXT,
+    auto_run_pid          INTEGER,
+    auto_run_started      TEXT,
+    auto_run_finished     TEXT,
+    auto_run_log          TEXT,
     CHECK (status IN ('backlog','done') OR session_id IS NOT NULL OR (session_provider = 'codex' AND status = 'in-progress'))
 );
 
@@ -432,6 +437,14 @@ type Task struct {
 	UpdatedAt          string
 	ArchivedAt         sql.NullString
 	DeletedAt          sql.NullString
+	// Autonomous-run bookkeeping (set by `flow do --auto`). AutoRunStatus
+	// is one of 'running' | 'completed' | 'dead'. AutoRunPID is the
+	// detached supervisor pid while running.
+	AutoRunStatus   sql.NullString
+	AutoRunPID      sql.NullInt64
+	AutoRunStarted  sql.NullString
+	AutoRunFinished sql.NullString
+	AutoRunLog      sql.NullString
 }
 
 // PendingParent is one parent task that is preventing the child from
@@ -1380,6 +1393,29 @@ func runMigrations(db *sql.DB) error {
 	if err := migrateSearchDocsTranscriptFTS(db); err != nil {
 		return fmt.Errorf("migrate search docs transcript fts: %w", err)
 	}
+	// Autonomous-run bookkeeping columns (feat: flow do --auto). Added
+	// AFTER the session-invariant rebuild so that rebuild (which only
+	// copies the pre-existing column set) doesn't need to know about
+	// them — they land here via plain ALTER on the rebuilt table. All
+	// nullable, no CHECK (SQLite can't add CHECK via ALTER; status enum
+	// is validated in application code).
+	for _, col := range []struct{ name, ddl string }{
+		{"auto_run_status", "ALTER TABLE tasks ADD COLUMN auto_run_status TEXT"},
+		{"auto_run_pid", "ALTER TABLE tasks ADD COLUMN auto_run_pid INTEGER"},
+		{"auto_run_started", "ALTER TABLE tasks ADD COLUMN auto_run_started TEXT"},
+		{"auto_run_finished", "ALTER TABLE tasks ADD COLUMN auto_run_finished TEXT"},
+		{"auto_run_log", "ALTER TABLE tasks ADD COLUMN auto_run_log TEXT"},
+	} {
+		has, err := columnExists(db, "tasks", col.name)
+		if err != nil {
+			return err
+		}
+		if !has {
+			if _, err := db.Exec(col.ddl); err != nil {
+				return fmt.Errorf("add tasks.%s: %w", col.name, err)
+			}
+		}
+	}
 	return nil
 }
 
@@ -2095,7 +2131,7 @@ func ListProjects(db *sql.DB, filter ProjectFilter) ([]*Project, error) {
 
 // ---------- task queries ----------
 
-const TaskCols = "slug, name, project_slug, status, kind, playbook_slug, parent_slug, forked_from_slug, fork_reason, priority, work_dir, waiting_on, due_date, assignee, permission_mode, model, status_changed_at, session_provider, session_id, session_started, session_last_resumed, session_path, worktree_path, inbox_seen_at, created_at, updated_at, archived_at, deleted_at"
+const TaskCols = "slug, name, project_slug, status, kind, playbook_slug, parent_slug, forked_from_slug, fork_reason, priority, work_dir, waiting_on, due_date, assignee, permission_mode, model, status_changed_at, session_provider, session_id, session_started, session_last_resumed, session_path, worktree_path, inbox_seen_at, created_at, updated_at, archived_at, deleted_at, auto_run_status, auto_run_pid, auto_run_started, auto_run_finished, auto_run_log"
 
 func ScanTask(row interface{ Scan(dest ...any) error }) (*Task, error) {
 	var t Task
@@ -2104,6 +2140,7 @@ func ScanTask(row interface{ Scan(dest ...any) error }) (*Task, error) {
 		&t.Priority, &t.WorkDir,
 		&t.WaitingOn, &t.DueDate, &t.Assignee, &t.PermissionMode, &t.Model, &t.StatusChangedAt, &t.SessionProvider, &t.SessionID,
 		&t.SessionStarted, &t.SessionLastResumed, &t.SessionPath, &t.WorktreePath, &t.InboxSeenAt, &t.CreatedAt, &t.UpdatedAt, &t.ArchivedAt, &t.DeletedAt,
+		&t.AutoRunStatus, &t.AutoRunPID, &t.AutoRunStarted, &t.AutoRunFinished, &t.AutoRunLog,
 	)
 	if err != nil {
 		return nil, err

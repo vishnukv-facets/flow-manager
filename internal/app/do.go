@@ -67,6 +67,9 @@ func cmdDo(args []string) int {
 	force := fs.Bool("force", false, "open even if the task's Claude session is already running elsewhere")
 	here := fs.Bool("here", false, "bind THIS Claude/Codex session to the task (no new tab); requires running inside an agent session")
 	noWorktree := fs.Bool("no-worktree", false, "spawn the agent in the task's work_dir directly instead of a per-task git worktree")
+	auto := fs.Bool("auto", false, "run headlessly in the background (no tab, no human; claude-only). The session self-completes via `flow done`. Implies permission bypass")
+	withInstr := fs.String("with", "", "one-off instruction appended to the autonomous prompt (requires --auto)")
+	withFile := fs.String("with-file", "", "file whose contents are appended to the autonomous prompt (requires --auto)")
 	// Two-pass parse so the slug positional may appear before OR after
 	// the flags: first absorb any leading flags, then take the next
 	// non-flag as the slug, then absorb any trailing flags.
@@ -89,6 +92,27 @@ func cmdDo(args []string) int {
 	if *noWorktree {
 		fmt.Fprintln(os.Stderr, "error: --no-worktree is no longer supported; task sessions must run in per-task worktrees when the work_dir is a git repository")
 		return 2
+	}
+	if *auto && *here {
+		fmt.Fprintln(os.Stderr, "error: --auto cannot be used with --here (--auto launches its own detached session; --here binds the current one)")
+		return 2
+	}
+	if (*withInstr != "" || *withFile != "") && !*auto {
+		fmt.Fprintln(os.Stderr, "error: --with/--with-file currently require --auto")
+		return 2
+	}
+	if *withInstr != "" && *withFile != "" {
+		fmt.Fprintln(os.Stderr, "error: use --with or --with-file, not both")
+		return 2
+	}
+	injectionText := *withInstr
+	if *withFile != "" {
+		b, err := os.ReadFile(*withFile)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "error: read --with-file %s: %v\n", *withFile, err)
+			return 1
+		}
+		injectionText = string(b)
 	}
 
 	if *here {
@@ -132,6 +156,12 @@ func cmdDo(args []string) int {
 		}
 	}
 
+	// D1: --auto is Claude-only for v1.
+	if *auto && provider == sessionProviderCodex {
+		fmt.Fprintln(os.Stderr, "error: --auto is claude-only for now; codex headless (codex exec) is a follow-up")
+		return 1
+	}
+
 	// Live-session guard: if this task's session_id is already running
 	// in another claude process (e.g., the user has a tab open for it),
 	// try to focus that tab. If the focus succeeds, exit 0 — the user
@@ -150,7 +180,7 @@ func cmdDo(args []string) int {
 	// Provider gate: the focus path is Claude-specific (drives iTerm/
 	// zellij through claude-side ps detection); Codex has its own
 	// session model and skips this entirely.
-	if provider == sessionProviderClaude && !*force && task.SessionID.Valid && task.SessionID.String != "" {
+	if provider == sessionProviderClaude && !*force && !*auto && task.SessionID.Valid && task.SessionID.String != "" {
 		if live, err := liveClaudeSessions(); err == nil {
 			if live[strings.ToLower(task.SessionID.String)] {
 				if n := countClaudeProcessesForSession(task.SessionID.String); n > 1 {
@@ -171,6 +201,20 @@ func cmdDo(args []string) int {
 					task.Slug, task.SessionID.String)
 				return 1
 			}
+		}
+	}
+
+	// Auto "already in flight" guard: refuse a second --auto launch while a
+	// prior autonomous run is still running (after reconciling a crashed
+	// supervisor first). --force overrides — it abandons tracking of the
+	// prior run and launches a fresh supervisor.
+	if *auto && !*force {
+		reconcileAutoRun(db, task)
+		if task.AutoRunStatus.Valid && task.AutoRunStatus.String == "running" {
+			fmt.Fprintf(os.Stderr,
+				"error: task %q already has an autonomous run in progress (pid %d) — wait for it to finish, or pass --force to launch another\n",
+				task.Slug, task.AutoRunPID.Int64)
+			return 1
 		}
 	}
 
@@ -428,6 +472,9 @@ func cmdDo(args []string) int {
 	if *dangerSkip {
 		permissionMode = "bypass"
 	}
+	if *auto {
+		permissionMode = "bypass"
+	}
 	if changed, err := agenthooks.InstallLocalWithOptions(cwd, agenthooks.InstallOptions{
 		CommandPath: flowCommandPathForSpawn(),
 		HookURL:     os.Getenv("FLOW_HOOK_URL"),
@@ -443,6 +490,27 @@ func cmdDo(args []string) int {
 	// heuristic — the session keeps the model it bootstrapped with — so we pass
 	// only an explicit override (mid-session model switching is out of scope).
 	sessionModel := resolveLaunchModel(provider, task, needsBootstrap)
+
+	if *auto {
+		root, err := flowRoot()
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "error: %v\n", err)
+			return 1
+		}
+		pid, logPath, err := launchAutoRun(task, root, cwd, injectionText)
+		if err != nil {
+			if needsBootstrap {
+				rollbackPreallocatedSession(db, task.Slug, sessionID)
+			}
+			fmt.Fprintf(os.Stderr, "error: %v\n", err)
+			return 1
+		}
+		if err := recordAutoRunLaunched(db, task.Slug, pid, logPath); err != nil {
+			fmt.Fprintf(os.Stderr, "warning: record auto run: %v\n", err)
+		}
+		fmt.Printf("Launched autonomous run for %s (pid %d)\n  log: %s\n", task.Slug, pid, logPath)
+		return 0
+	}
 
 	var command string
 	var codexPromptFile string
@@ -549,6 +617,26 @@ func cmdDo(args []string) int {
 		fmt.Printf("Resumed %s (%s session %s)\n", task.Slug, provider, sessionID)
 	}
 	return 0
+}
+
+// rollbackPreallocatedSession undoes the session claim + status flip written
+// in the pre-alloc TX when a subsequent launch fails (auto path: no tab was
+// spawned yet). The WHERE clause guards against a concurrent `flow do` having
+// mutated session_id between commit and now — only rolls back if we still own
+// the session. Claude-only; the auto path is always Claude (D1).
+func rollbackPreallocatedSession(db *sql.DB, slug, sessionID string) {
+	if _, err := db.Exec(
+		`UPDATE tasks SET
+			session_id        = NULL,
+			session_started   = NULL,
+			status            = 'backlog',
+			status_changed_at = NULL,
+			updated_at        = ?
+		 WHERE slug=? AND session_id=?`,
+		flowdb.NowISO(), slug, sessionID,
+	); err != nil {
+		fmt.Fprintf(os.Stderr, "warning: rollback pre-allocated session: %v\n", err)
+	}
 }
 
 // buildBootstrapPromptForKind dispatches to the right prompt variant

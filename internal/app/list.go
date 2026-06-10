@@ -255,12 +255,12 @@ func listTasksCmd(args []string) int {
 		return 1
 	}
 
-	headers := []string{"STATUS", "PRIORITY", "SLUG", "PROJECT", "AGE", "DUE", "NOTES"}
+	headers := []string{"STATUS", "PRIORITY", "SLUG", "PROJECT", "AGE", "DUE", "AUTO", "NOTES"}
 	tsvHeaders := []string{
 		"slug", "status", "priority", "project",
 		"age_days", "due_in_days", "due_label",
 		"stale", "stale_days", "waiting_on", "assignee", "live",
-		"archived", "tags",
+		"archived", "tags", "auto_run", "auto_run_pid",
 	}
 	if len(tasks) == 0 {
 		return emptyResult(fmtKind, "tasks", tsvHeaders)
@@ -336,6 +336,13 @@ func listTasksCmd(args []string) int {
 		if tags, ok := tagsByTask[t.Slug]; ok {
 			r.Tags = tags
 		}
+		if t.AutoRunStatus.Valid && t.AutoRunStatus.String != "" {
+			reconcileAutoRun(db, t)
+			r.AutoRun = t.AutoRunStatus.String
+			if t.AutoRunPID.Valid {
+				r.AutoRunPID = t.AutoRunPID.Int64
+			}
+		}
 		rows = append(rows, r)
 	}
 
@@ -360,6 +367,8 @@ func listTasksCmd(args []string) int {
 				boolStr(r.Live),
 				boolStr(r.Archived),
 				strings.Join(r.Tags, ","),
+				r.AutoRun,
+				int64OrEmpty(r.AutoRunPID),
 			}
 		}
 		_ = listfmt.RenderTSV(os.Stdout, tsvHeaders, tsvRows)
@@ -377,6 +386,7 @@ func listTasksCmd(args []string) int {
 			projectCell(r.Project),
 			ageString(r.AgeDays),
 			painter.Wrap(r.DueLabel, dueColor(r)),
+			autoRunCell(painter, r.AutoRun),
 			notesCell(painter, r, opts.waitMax()),
 		}
 	}
@@ -445,6 +455,27 @@ type taskListRow struct {
 	Archived  bool     `json:"archived,omitempty"`
 	Deleted   bool     `json:"deleted,omitempty"`
 	Tags      []string `json:"tags,omitempty"`
+	AutoRun   string   `json:"auto_run,omitempty"`
+	AutoRunPID int64   `json:"auto_run_pid,omitempty"`
+}
+
+func int64OrEmpty(n int64) string {
+	if n == 0 {
+		return ""
+	}
+	return fmt.Sprintf("%d", n)
+}
+
+func autoRunCell(p listfmt.Painter, status string) string {
+	switch status {
+	case "running":
+		return p.Wrap("[auto]", listfmt.Cyan)
+	case "completed":
+		return p.Wrap("[done]", listfmt.Green)
+	case "dead":
+		return p.Wrap("[dead]", listfmt.Red)
+	}
+	return ""
 }
 
 func dueColor(r taskListRow) string {

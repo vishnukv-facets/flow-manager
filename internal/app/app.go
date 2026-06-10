@@ -25,7 +25,7 @@ func Run(args []string) int {
 	// and `--version` — those manage the skill themselves or need to
 	// run before any install state exists. See maybeAutoUpgradeSkill.
 	switch cmd {
-	case "init", "skill", "--version", "-v", "version", "-h", "--help", "help":
+	case "init", "skill", "--version", "-v", "version", "-h", "--help", "help", "__auto-exec":
 		// no auto-upgrade
 	default:
 		maybeAutoUpgradeSkill()
@@ -85,6 +85,8 @@ func Run(args []string) int {
 		return cmdWait(rest)
 	case "attention":
 		return cmdAttention(rest)
+	case "__auto-exec":
+		return cmdAutoExec(rest)
 	case "-h", "--help", "help":
 		printUsage()
 		return 0
@@ -109,6 +111,7 @@ Create:
 
 Sessions:
   flow do                <ref> [--agent claude|codex] [--fresh] [--dangerously-skip-permissions]
+  flow do --auto         <ref> [--with "<instruction>"|--with-file <path>]  (headless autonomous run; no tab; claude-only)
   flow done              <ref>
   flow hook session-start                      (SessionStart hook handler — wire via ~/.claude/settings.json)
   flow hook agent-event --provider claude|codex (forwards lifecycle hooks to the local UI)
@@ -154,7 +157,7 @@ Workdirs:
 
 Playbooks:
   flow add playbook   "<name>" --work-dir <path> [--slug <s>] [--project <slug>] [--mkdir]
-  flow run playbook   <slug> [--agent claude|codex] [--dangerously-skip-permissions]
+  flow run playbook   <slug> [--agent claude|codex] [--dangerously-skip-permissions] [--auto] [--with "<instruction>"|--with-file <path>]
   flow show playbook  <ref>
   flow list playbooks [--project <slug>] [--include-archived] [--include-deleted|--deleted]`)
 }

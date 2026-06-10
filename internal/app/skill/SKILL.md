@@ -670,17 +670,34 @@ its own, it's the start of a two-or-more-step workflow.
        header: "Session mode",
        options: [
          { label: "Regular",          description: "Normal agent session with tool-approval prompts (safer)" },
-         { label: "Skip permissions", description: "Pass --dangerously-skip-permissions (faster, no prompts)" }
+         { label: "Skip permissions", description: "Pass --dangerously-skip-permissions (faster, no prompts)" },
+         { label: "Autonomous",       description: "Headless background run — no tab, no human; agent works end-to-end and calls flow done itself (--auto; claude-only)" }
        ],
        multiSelect: false
      }]
    })
    ```
 
+   Trigger phrases for Autonomous: "run X headlessly", "background run", "autonomous", "unattended", "fire and forget".
+   If Autonomous is chosen and the task provider is codex, offer Regular or Skip instead (--auto is claude-only).
+
    If the user already specified a mode in their request (e.g. "do X
    with skip permissions", "do X normally", "auto mode"), use that —
    don't re-ask. If they explicitly ask for Codex, append `--agent codex`;
    otherwise default to the task's stored provider or Claude.
+
+   **Special case: Autonomous mode (`--auto`)**
+   ```
+   flow do <slug> --auto
+   flow do <slug> --auto --with "<one-off instruction>"
+   flow do <slug> --auto --with-file <path>
+   ```
+   - Returns immediately; prints the supervisor PID and log path.
+   - Supervisor runs `flow __auto-exec <slug>` detached; claude runs headlessly with `--dangerously-skip-permissions`.
+   - Run lifecycle: `auto_run_status` ∈ {running, completed, dead}. Check progress with `flow show task <slug>`.
+   - Block on completion with `flow wait <slug> --until done`.
+   - Constraints: claude-only (D1); no `--here`; in-flight guard (use `--force` to override).
+   - After it returns, report the log path. Do NOT tail the log — leave that to the user.
 2. Run: `flow do <user's ref>`. Pass the slug the user gave as one
    positional argument. Resolution is exact slug match. Append
    `--dangerously-skip-permissions` if the user chose skip-permissions;

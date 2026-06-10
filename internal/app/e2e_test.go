@@ -6,6 +6,7 @@ import (
 	"flow/internal/spawner"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
@@ -408,4 +409,154 @@ func TestE2EDependencyVsHierarchySplit(t *testing.T) {
 	}
 	// Blocker is nil (verified above) even though epic is in-progress — the
 	// hierarchy parent is never a blocker.
+}
+
+func TestE2EAutoRunRoundtrip(t *testing.T) {
+	tmp := t.TempDir()
+	t.Setenv("FLOW_ROOT", filepath.Join(tmp, "flow"))
+	t.Setenv("HOME", tmp)
+	t.Setenv("CODEX_HOME", filepath.Join(tmp, ".codex"))
+
+	repo := filepath.Join(tmp, "code", "auto-repo")
+	if err := os.MkdirAll(repo, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	oldOverride := spawner.Override
+	spawner.Override = spawner.BackendITerm
+	t.Cleanup(func() { spawner.Override = oldOverride })
+
+	oldOsa := iterm.Runner
+	iterm.Runner = func(args []string) error { return nil }
+	t.Cleanup(func() { iterm.Runner = oldOsa })
+
+	oldClaude := claudeRunner
+	claudeRunner = func(slug, prompt string) error { return nil }
+	t.Cleanup(func() { claudeRunner = oldClaude })
+
+	const fixedSID = "e2e-auto-session-uuid"
+	oldNewUUID := newUUID
+	newUUID = func() (string, error) { return fixedSID, nil }
+	t.Cleanup(func() { newUUID = oldNewUUID })
+
+	const fakePID = 19191
+	var launchedSlug, launchedLog string
+	tabCount := 0
+	oldLauncher := autoLauncher
+	autoLauncher = func(slug, workDir, logPath, injection string, env []string) (int, error) {
+		launchedSlug = slug
+		launchedLog = logPath
+		return fakePID, nil
+	}
+	t.Cleanup(func() { autoLauncher = oldLauncher })
+
+	alive := true
+	oldAlive := processAlive
+	processAlive = func(pid int) bool { return alive }
+	t.Cleanup(func() { processAlive = oldAlive })
+
+	_ = tabCount // iterm.Runner stub already prevents real tabs
+
+	step := func(name string, rc int) {
+		t.Helper()
+		if rc != 0 {
+			t.Fatalf("%s: rc=%d", name, rc)
+		}
+	}
+
+	// 1. init
+	step("init", cmdInit(nil))
+
+	// 2. add task
+	step("add task", cmdAdd([]string{"task", "Fix Slow Query", "--slug", "fix-slow-query", "--agent", "claude", "--work-dir", repo}))
+
+	// 3. flow do --auto
+	step("do --auto", cmdDo([]string{"--auto", "fix-slow-query"}))
+	if launchedSlug != "fix-slow-query" {
+		t.Fatalf("launchedSlug = %q, want fix-slow-query", launchedSlug)
+	}
+	if !strings.Contains(launchedLog, "auto-runs") {
+		t.Fatalf("launchedLog %q should contain 'auto-runs'", launchedLog)
+	}
+
+	// 4. verify DB state
+	dbPath, _ := flowDBPath()
+	db, err := flowdb.OpenDB(dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+
+	task, err := flowdb.GetTask(db, "fix-slow-query")
+	if err != nil {
+		t.Fatalf("GetTask: %v", err)
+	}
+	if task.Status != "in-progress" {
+		t.Errorf("status = %q, want in-progress", task.Status)
+	}
+	if !task.SessionID.Valid || task.SessionID.String != fixedSID {
+		t.Errorf("session_id = %v, want %s", task.SessionID, fixedSID)
+	}
+	if !task.AutoRunStatus.Valid || task.AutoRunStatus.String != "running" {
+		t.Errorf("auto_run_status = %v, want running", task.AutoRunStatus)
+	}
+	if !task.AutoRunPID.Valid || task.AutoRunPID.Int64 != fakePID {
+		t.Errorf("auto_run_pid = %v, want %d", task.AutoRunPID, fakePID)
+	}
+
+	// 5. show while running
+	out := captureStdout(t, func() { cmdShow([]string{"task", "fix-slow-query"}) })
+	if !strings.Contains(out, "auto_run:") {
+		t.Errorf("show output missing auto_run:, got:\n%s", out)
+	}
+	if !strings.Contains(out, "running") {
+		t.Errorf("show output should show running, got:\n%s", out)
+	}
+
+	// 6. list while running
+	out = captureStdout(t, func() { cmdList([]string{"tasks"}) })
+	if !strings.Contains(out, "[auto]") {
+		t.Errorf("list output missing [auto], got:\n%s", out)
+	}
+
+	// 7. simulate supervisor completing
+	if err := finalizeAutoRun(db, "fix-slow-query", "completed"); err != nil {
+		t.Fatalf("finalizeAutoRun: %v", err)
+	}
+	step("done", cmdDone([]string{"fix-slow-query"}))
+
+	// 8. mark pid dead
+	alive = false
+
+	// 9. verify DB
+	task, _ = flowdb.GetTask(db, "fix-slow-query")
+	if !task.AutoRunStatus.Valid || task.AutoRunStatus.String != "completed" {
+		t.Errorf("auto_run_status = %v, want completed", task.AutoRunStatus)
+	}
+	if task.AutoRunPID.Valid {
+		t.Errorf("auto_run_pid should be NULL after finalize")
+	}
+
+	// 10. show after completion
+	out = captureStdout(t, func() { cmdShow([]string{"task", "fix-slow-query"}) })
+	if !strings.Contains(out, "completed") {
+		t.Errorf("show should say completed, got:\n%s", out)
+	}
+
+	// 11. list done
+	out = captureStdout(t, func() { cmdList([]string{"tasks", "--status", "done"}) })
+	if !strings.Contains(out, "[done]") {
+		t.Errorf("list should show [done], got:\n%s", out)
+	}
+
+	// 12. reconcile: stale running pid → dead
+	if _, err := db.Exec(
+		`UPDATE tasks SET auto_run_status='running', auto_run_pid=99999, auto_run_finished=NULL WHERE slug='fix-slow-query'`,
+	); err != nil {
+		t.Fatalf("seed stale row: %v", err)
+	}
+	out = captureStdout(t, func() { cmdShow([]string{"task", "fix-slow-query"}) })
+	if !strings.Contains(out, "dead") {
+		t.Errorf("reconcile should promote to dead, show output:\n%s", out)
+	}
 }
