@@ -209,6 +209,40 @@ func TestCmdAddTaskPermissionMode(t *testing.T) {
 	}
 }
 
+func TestCmdAddTaskWithModel(t *testing.T) {
+	setupFlowRoot(t)
+
+	rc := cmdAdd([]string{"task", "Big task", "--model", "opus", "--agent", "claude"})
+	if rc != 0 {
+		t.Fatalf("rc=%d", rc)
+	}
+	db := openFlowDB(t)
+	task, err := flowdb.GetTask(db, "big-task")
+	if err != nil {
+		t.Fatalf("GetTask: %v", err)
+	}
+	if !task.Model.Valid || task.Model.String != "opus" {
+		t.Fatalf("model = %+v, want valid opus", task.Model)
+	}
+}
+
+func TestCmdAddTaskNoModelLeavesNull(t *testing.T) {
+	setupFlowRoot(t)
+
+	rc := cmdAdd([]string{"task", "Unset model task", "--agent", "claude"})
+	if rc != 0 {
+		t.Fatalf("rc=%d", rc)
+	}
+	db := openFlowDB(t)
+	task, err := flowdb.GetTask(db, "unset-model-task")
+	if err != nil {
+		t.Fatalf("GetTask: %v", err)
+	}
+	if task.Model.Valid && task.Model.String != "" {
+		t.Fatalf("model = %+v, want NULL (resolved at launch)", task.Model)
+	}
+}
+
 func TestCmdAddTaskDefaultsPermissionModeAuto(t *testing.T) {
 	setupFlowRoot(t)
 

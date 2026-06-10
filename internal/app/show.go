@@ -337,6 +337,29 @@ func printTaskMetadata(db *sql.DB, t *flowdb.Task, root string) {
 		fmt.Printf("tags:          %s\n", strings.Join(parts, " "))
 	}
 
+	// Session model: the explicit per-task override, or a preview of what a
+	// fresh launch would auto-resolve, so the operator can see (and trust) the
+	// tier/downshift decision before opening the session.
+	{
+		explicitModel := ""
+		if t.Model.Valid {
+			explicitModel = t.Model.String
+		}
+		briefText := ""
+		if b, rerr := os.ReadFile(filepath.Join(root, "tasks", t.Slug, "brief.md")); rerr == nil {
+			briefText = string(b)
+		}
+		rm := flowdb.ResolveSessionModel(t.SessionProvider, explicitModel, briefText)
+		switch {
+		case rm.Explicit:
+			fmt.Printf("model:         %s  [explicit]\n", rm.Model)
+		case rm.Downshifted:
+			fmt.Printf("model:         %s  [auto: %s tier — descriptive brief]\n", rm.Model, rm.Tier)
+		default:
+			fmt.Printf("model:         %s  [auto: %s tier]\n", rm.Model, rm.Tier)
+		}
+	}
+
 	sid := "(not bootstrapped)"
 	if t.SessionID.Valid && t.SessionID.String != "" {
 		sid = t.SessionID.String

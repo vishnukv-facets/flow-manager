@@ -40,6 +40,7 @@ func cmdSpawn(args []string) int {
 	codexAgent := fs.Bool("codex", false, "shortcut for --agent codex")
 	claudeAgent := fs.Bool("claude", false, "shortcut for --agent claude")
 	permission := fs.String("permission-mode", flowdb.DefaultPermissionMode, "default|auto|bypass")
+	modelFlag := fs.String("model", "", "session model override (e.g. opus|sonnet|haiku, gpt-5.4-mini|gpt-5.4|gpt-5.5); default: auto-resolved at launch")
 	dangerSkip := fs.Bool("dangerously-skip-permissions", false, "pass low-friction permissions flag through to the agent")
 	noOpen := fs.Bool("no-open", false, "create the task but don't spawn a session yet")
 	var dependsOn stringSliceFlag
@@ -83,6 +84,9 @@ func cmdSpawn(args []string) int {
 	// Re-use cmdAdd's task creation path so naming, slugging, work_dir
 	// resolution, brief stub, and workdir registry all stay consistent.
 	addArgs := []string{"task", name, "--priority", *priority, "--permission-mode", *permission}
+	if strings.TrimSpace(*modelFlag) != "" {
+		addArgs = append(addArgs, "--model", *modelFlag)
+	}
 	if *slugFlag != "" {
 		addArgs = append(addArgs, "--slug", *slugFlag)
 	}

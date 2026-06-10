@@ -114,6 +114,45 @@ func TestCmdShowTaskHappyPath(t *testing.T) {
 	}
 }
 
+func TestCmdShowTaskExplicitModel(t *testing.T) {
+	root, db := showListEditDB(t)
+	insertTask(t, db, "model-show", "Model show", "backlog", "high", filepath.Join(root, "repo"), nil)
+	if _, err := db.Exec(`UPDATE tasks SET model=? WHERE slug=?`, "opus", "model-show"); err != nil {
+		t.Fatal(err)
+	}
+	out := captureStdout(t, func() {
+		if rc := cmdShow([]string{"task", "model-show"}); rc != 0 {
+			t.Errorf("rc=%d", rc)
+		}
+	})
+	if !strings.Contains(out, "model:") || !strings.Contains(out, "opus") {
+		t.Errorf("missing explicit model line; out=%q", out)
+	}
+	if !strings.Contains(out, "explicit") {
+		t.Errorf("explicit model should be labeled explicit; out=%q", out)
+	}
+}
+
+func TestCmdShowTaskAutoModel(t *testing.T) {
+	t.Setenv("FLOW_MODEL_TIER", "")
+	t.Setenv("FLOW_MODEL_AUTODOWNSHIFT", "on")
+	root, db := showListEditDB(t)
+	insertTask(t, db, "auto-show", "Auto show", "backlog", "high", filepath.Join(root, "repo"), nil)
+	// No explicit model and no descriptive brief on disk -> default medium tier
+	// previews as sonnet (claude default).
+	out := captureStdout(t, func() {
+		if rc := cmdShow([]string{"task", "auto-show"}); rc != 0 {
+			t.Errorf("rc=%d", rc)
+		}
+	})
+	if !strings.Contains(out, "model:") || !strings.Contains(out, "sonnet") {
+		t.Errorf("auto model should preview sonnet; out=%q", out)
+	}
+	if !strings.Contains(out, "auto") {
+		t.Errorf("auto model should be labeled auto; out=%q", out)
+	}
+}
+
 func TestCmdShowTaskFloating(t *testing.T) {
 	root, db := showListEditDB(t)
 	insertTask(t, db, "readme-pass", "Read", "backlog", "low", filepath.Join(root, "tasks", "readme-pass", "workspace"), nil)

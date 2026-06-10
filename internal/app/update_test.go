@@ -999,6 +999,67 @@ func TestUpdateTaskAgentBacklogOnly(t *testing.T) {
 	}
 }
 
+func TestUpdateTaskModelBacklogOnly(t *testing.T) {
+	setupFlowRoot(t)
+	repo := t.TempDir()
+	if rc := cmdAdd([]string{"task", "Model Switch", "--slug", "model-switch", "--work-dir", repo, "--agent", "claude"}); rc != 0 {
+		t.Fatalf("add rc=%d", rc)
+	}
+	db := openFlowDB(t)
+
+	// A backlog task with no session can set the model.
+	if rc := cmdUpdate([]string{"task", "model-switch", "--model", "opus"}); rc != 0 {
+		t.Fatalf("set model rc=%d", rc)
+	}
+	task, err := flowdb.GetTask(db, "model-switch")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !task.Model.Valid || task.Model.String != "opus" {
+		t.Fatalf("model = %+v, want opus", task.Model)
+	}
+
+	// --clear-model removes the explicit choice.
+	if rc := cmdUpdate([]string{"task", "model-switch", "--clear-model"}); rc != 0 {
+		t.Fatalf("clear model rc=%d", rc)
+	}
+	if task, err = flowdb.GetTask(db, "model-switch"); err != nil {
+		t.Fatal(err)
+	}
+	if task.Model.Valid && task.Model.String != "" {
+		t.Fatalf("model after clear = %+v, want NULL", task.Model)
+	}
+
+	// Once a session has started, the model is locked (mirrors --agent).
+	now := flowdb.NowISO()
+	if _, err := db.Exec(
+		`UPDATE tasks SET session_id=?, session_started=?, status='in-progress' WHERE slug=?`,
+		"22222222-2222-4222-8222-222222222222", now, "model-switch",
+	); err != nil {
+		t.Fatal(err)
+	}
+	if rc := cmdUpdate([]string{"task", "model-switch", "--model", "haiku"}); rc != 1 {
+		t.Fatalf("set model on started task rc=%d, want 1 (locked)", rc)
+	}
+	if task, err = flowdb.GetTask(db, "model-switch"); err != nil {
+		t.Fatal(err)
+	}
+	if task.Model.Valid {
+		t.Fatalf("model after rejected set = %+v, want NULL (unchanged)", task.Model)
+	}
+}
+
+func TestUpdateTaskModelMutuallyExclusive(t *testing.T) {
+	setupFlowRoot(t)
+	if rc := cmdAdd([]string{"task", "Mx", "--slug", "mx-model", "--agent", "claude"}); rc != 0 {
+		t.Fatalf("add rc=%d", rc)
+	}
+	// --model and --clear-model together is a usage error.
+	if rc := cmdUpdate([]string{"task", "mx-model", "--model", "opus", "--clear-model"}); rc != 2 {
+		t.Fatalf("rc=%d, want 2 (mutually exclusive)", rc)
+	}
+}
+
 func TestUpdateTaskDependsOnAndSubtaskOf(t *testing.T) {
 	setupFlowRoot(t)
 	db := openFlowDB(t)

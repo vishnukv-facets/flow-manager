@@ -193,7 +193,7 @@ Create
   flow add task    "<name>" --agent claude|codex   (--agent is REQUIRED — no default)
                            [--slug <s>] [--project <slug>] [--work-dir <path>] [--mkdir]
                            [--priority high|medium|low] [--due <date>] [--assignee <name>]
-                           [--permission-mode default|auto|bypass]   (--codex / --claude are shortcuts)
+                           [--permission-mode default|auto|bypass] [--model <m>]   (--codex / --claude are shortcuts)
   flow add playbook "<name>" --work-dir <path> [--slug <s>] [--project <slug>] [--mkdir]
 
 Sessions
@@ -244,6 +244,7 @@ Edit / mutate
                             [--parent <task>] [--clear-parent]
                             [--waiting "<who or what>"] [--clear-waiting]
                             [--project <slug>] [--clear-project]
+                            [--model <m>] [--clear-model]   (backlog tasks only)
                             [--brief-status "<1–3 lines>"]   (refresh brief Current state; "-" = stdin)
   flow update project <ref> [--priority high|medium|low]
   flow update playbook <ref> [--slug <s>] [--name <n>] [--work-dir <path>] [--mkdir]
@@ -756,6 +757,50 @@ Macros for this: do not invent more candidate apps to toggle, do not
 suggest the user reinstall flow, do not attempt to grant Accessibility
 yourself. macOS guards Accessibility deliberately — there is no CLI to
 self-grant it, and Claude cannot bypass that.
+
+### 4.4a Which model a session launches with
+
+Every task launches its Claude/Codex session with a specific model. You do
+**not** need to ask the user which model during intake — model selection is
+optional and resolved automatically at launch. Surface it only when the user
+brings it up ("run this on opus", "use a cheaper model", "why did this open on
+haiku?").
+
+**How the model is resolved at `flow do` / `flow run playbook` time:**
+
+1. **Explicit per-task model wins.** If the task carries a model (set via
+   `flow add task --model <m>` or `flow update task --model <m>` while in
+   backlog), flow passes exactly that to the CLI and stops. The value can be a
+   tier alias the provider resolves to its latest (Claude: `opus` / `sonnet` /
+   `haiku`) or any raw model id (`claude-opus-4-8`, a Codex model id, etc.) —
+   flow passes it through verbatim.
+2. **Otherwise flow picks a tier.** The baseline is a **default tier**
+   (`FLOW_MODEL_TIER`, default **medium**) mapped per provider:
+
+   | Tier | Claude | Codex |
+   |------|--------|-------|
+   | large | `opus` | `gpt-5.5` |
+   | medium (default) | `sonnet` | `gpt-5.4` |
+   | small | `haiku` | `gpt-5.4-mini` |
+
+   The default is deliberately **not** the biggest model — most tasks don't
+   need it.
+3. **Auto-downshift.** When `FLOW_MODEL_AUTODOWNSHIFT` is on (the default) and
+   the task's brief is **descriptive enough**, flow downshifts one rung
+   (large→medium, medium→small) — a well-specified brief leaves little for the
+   model to figure out, so a smaller/cheaper model suffices. "Descriptive
+   enough" means: no `*Deferred*` sections, a filled-out brief (≥80 words), and
+   ≥2 concrete `Done when` bullets. Set `FLOW_MODEL_AUTODOWNSHIFT=off` to
+   disable, or pin an explicit `--model` to override per task.
+
+Auto-downshift runs **only at bootstrap**, never on resume — a live session
+keeps the model it started with (no mid-session switching). The model is
+**locked once a session starts** (like the agent): change it only while the
+task is in backlog.
+
+`flow show task` surfaces a `model:` line — either `<m>  [explicit]` or a
+preview of the auto-resolution (`<m>  [auto: <tier> tier]`, noting when a
+descriptive brief downshifted it) — so the user can see what a launch will use.
 
 ### 4.5 Save a progress note
 
@@ -2244,6 +2289,7 @@ flow update task <ref>
     [--status backlog|in-progress|done]
     [--priority high|medium|low]
     [--agent claude|codex]   (backlog tasks only — locked once a session starts)
+    [--model <m>] [--clear-model]   (backlog tasks only — locked once a session starts)
     [--assignee <name>] [--clear-assignee]
     [--due-date <date>]   [--clear-due]
     [--parent <task>] [--clear-parent]
@@ -2280,7 +2326,14 @@ When to use which flag:
   session has started**; once a session exists (running, idle, or done)
   the agent is locked and the command errors. This is the CLI twin of
   the UI's inline agent picker, which only appears for backlog tasks.
-- **`--assignee <name>` / `--clear-assignee`** — set or clear the task
+- **`--model <m>` / `--clear-model`** — set or clear the session model
+  override. Allowed **only while the task is in backlog and no session has
+  started** (same lock as `--agent`; mid-session model switching is out of
+  scope). `--model` accepts a tier alias the provider resolves
+  (Claude: `opus`/`sonnet`/`haiku`; Codex: `gpt-5.4-mini`/`gpt-5.4`/`gpt-5.5`)
+  or any raw model id the CLI accepts — flow passes it through verbatim.
+  `--clear-model` drops the override so the model is auto-resolved at launch
+  (see §4.4a). The two flags are mutually exclusive.
   assignee. Convention: NULL = "self" (default); any other value =
   "assigned to that name". The list/show output surfaces the assignee
   only when it's non-null.

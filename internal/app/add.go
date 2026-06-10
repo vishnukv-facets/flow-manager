@@ -151,6 +151,7 @@ func addTask(args []string) int {
 	dueFlag := fs.String("due", "", "due date (YYYY-MM-DD, today, tomorrow, monday, 3d)")
 	assigneeFlag := fs.String("assignee", "", "optional assignee (default: self)")
 	permissionModeFlag := fs.String("permission-mode", flowdb.DefaultPermissionMode, "agent permission mode: default|auto|bypass")
+	modelFlag := fs.String("model", "", "session model override (e.g. opus|sonnet|haiku, gpt-5.4-mini|gpt-5.4|gpt-5.5); default: auto-resolved at launch")
 	agentFlag := fs.String("agent", "", "session agent: claude or codex (REQUIRED)")
 	codexAgent := fs.Bool("codex", false, "shortcut for --agent codex")
 	claudeAgent := fs.Bool("claude", false, "shortcut for --agent claude")
@@ -284,11 +285,18 @@ func addTask(args []string) int {
 		assignee = a
 	}
 
+	// Explicit model override (empty = resolve a tier at launch). Stored NULL
+	// when unset so flow's launch-time resolution stays in control.
+	var model any = nil
+	if m := flowdb.NormalizeModel(*modelFlag); m != "" {
+		model = m
+	}
+
 	now := flowdb.NowISO()
 	if _, err := db.Exec(
-		`INSERT INTO tasks (slug, name, project_slug, status, priority, work_dir, due_date, assignee, permission_mode, session_provider, status_changed_at, created_at, updated_at)
-		 VALUES (?, ?, ?, 'backlog', ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		slug, name, projectSlug, *priority, absWorkDir, dueDate, assignee, permissionMode, sessionProvider, now, now, now,
+		`INSERT INTO tasks (slug, name, project_slug, status, priority, work_dir, due_date, assignee, permission_mode, model, session_provider, status_changed_at, created_at, updated_at)
+		 VALUES (?, ?, ?, 'backlog', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		slug, name, projectSlug, *priority, absWorkDir, dueDate, assignee, permissionMode, model, sessionProvider, now, now, now,
 	); err != nil {
 		fmt.Fprintf(os.Stderr, "error: insert task: %v\n", err)
 		return 1

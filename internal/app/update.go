@@ -144,6 +144,8 @@ func cmdUpdateTask(args []string) int {
 	agentFlag := fs.String("agent", "", "change session agent: claude or codex (backlog tasks only)")
 	codexAgent := fs.Bool("codex", false, "shortcut for --agent codex")
 	claudeAgent := fs.Bool("claude", false, "shortcut for --agent claude")
+	modelFlag := fs.String("model", "", "set session model override (e.g. opus|sonnet|haiku, gpt-5.4-mini|gpt-5.4|gpt-5.5; backlog tasks only)")
+	clearModel := fs.Bool("clear-model", false, "clear the model override (back to launch-time auto-resolution)")
 	briefStatus := fs.String("brief-status", "", "refresh the brief's \"Current state\" snapshot (terse 1–3 lines; pass \"-\" to read the body from stdin)")
 	if err := fs.Parse(args[1:]); err != nil {
 		return 2
@@ -163,9 +165,9 @@ func cmdUpdateTask(args []string) int {
 		*waiting != "" || *clearWaiting ||
 		*project != "" || *clearProject ||
 		len(addTags) > 0 || len(removeTags) > 0 || *clearTags ||
-		agentRequested || *briefStatus != ""
+		agentRequested || *modelFlag != "" || *clearModel || *briefStatus != ""
 	if !anyField {
-		fmt.Fprintln(os.Stderr, "error: give at least one of --slug, --name, --work-dir, --status, --priority, --agent, --assignee, --clear-assignee, --due-date, --clear-due, --depends-on, --remove-dep, --clear-deps, --subtask-of, --unparent, --parent, --remove-parent, --clear-parent, --waiting, --clear-waiting, --project, --clear-project, --tag, --remove-tag, --clear-tags, --brief-status")
+		fmt.Fprintln(os.Stderr, "error: give at least one of --slug, --name, --work-dir, --status, --priority, --agent, --model, --clear-model, --assignee, --clear-assignee, --due-date, --clear-due, --depends-on, --remove-dep, --clear-deps, --subtask-of, --unparent, --parent, --remove-parent, --clear-parent, --waiting, --clear-waiting, --project, --clear-project, --tag, --remove-tag, --clear-tags, --brief-status")
 		return 2
 	}
 
@@ -208,6 +210,10 @@ func cmdUpdateTask(args []string) int {
 	}
 	if *clearDue && *dueDate != "" {
 		fmt.Fprintln(os.Stderr, "error: --due-date and --clear-due are mutually exclusive")
+		return 2
+	}
+	if *clearModel && *modelFlag != "" {
+		fmt.Fprintln(os.Stderr, "error: --model and --clear-model are mutually exclusive")
 		return 2
 	}
 	if *clearParent && (len(addParents) > 0 || len(removeParents) > 0) {
@@ -376,6 +382,37 @@ func cmdUpdateTask(args []string) int {
 				return 1
 			}
 			fmt.Printf("agent → %s\n", newProvider)
+		}
+	}
+	if *modelFlag != "" || *clearModel {
+		// The model is locked once a session exists — running, idle, or done all
+		// carry a session_id / session_started. Only a never-started backlog task
+		// can set or change its model (mirrors the --agent lock; mid-session model
+		// switching is out of scope).
+		if task.Status != "backlog" || task.SessionID.Valid || task.SessionStarted.Valid {
+			fmt.Fprintf(os.Stderr,
+				"error: the model can only be changed while a task is in backlog (before its session starts); %s is %s\n",
+				task.Slug, task.Status)
+			return 1
+		}
+		var modelVal any = nil
+		if !*clearModel {
+			if m := flowdb.NormalizeModel(*modelFlag); m != "" {
+				modelVal = m
+			}
+		}
+		if _, err := db.Exec(
+			`UPDATE tasks SET model=?, updated_at=?
+			 WHERE slug=? AND status='backlog' AND session_id IS NULL AND session_started IS NULL`,
+			modelVal, now, task.Slug,
+		); err != nil {
+			fmt.Fprintf(os.Stderr, "error: update model: %v\n", err)
+			return 1
+		}
+		if *clearModel {
+			fmt.Println("model cleared (auto-resolved at launch)")
+		} else {
+			fmt.Printf("model → %s\n", flowdb.NormalizeModel(*modelFlag))
 		}
 	}
 	for _, p := range dependsOn {
@@ -959,4 +996,3 @@ func parseDueDate(s string, now time.Time) (time.Time, error) {
 
 	return time.Time{}, fmt.Errorf("unrecognized date %q (want YYYY-MM-DD, today, tomorrow, monday..sunday, Nd)", s)
 }
-

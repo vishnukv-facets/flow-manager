@@ -7,6 +7,24 @@ import (
 	"testing"
 )
 
+func TestSpawnForwardsModel(t *testing.T) {
+	setupFlowRoot(t)
+	rc := cmdSpawn([]string{"child with model", "--agent", "claude", "--model", "haiku", "--no-open"})
+	if rc != 0 {
+		t.Fatalf("spawn rc = %d, want 0", rc)
+	}
+	db := openFlowDB(t)
+	defer db.Close()
+	child, err := resolveJustCreatedTaskSlug(db, "child with model", "")
+	if err != nil {
+		t.Fatalf("locate child: %v", err)
+	}
+	task, _ := flowdb.GetTask(db, child)
+	if !task.Model.Valid || task.Model.String != "haiku" {
+		t.Fatalf("spawn --model should forward to the task; got %+v", task.Model)
+	}
+}
+
 func TestSpawnParentIsHierarchyNotBlocking(t *testing.T) {
 	setupFlowRoot(t)
 
