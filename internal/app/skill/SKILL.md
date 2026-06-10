@@ -1996,6 +1996,29 @@ If a section has no content, leave the heading with an italic "none"
 underneath. Don't omit headings — the parallel structure makes the
 briefs scannable.
 
+**Cross-referencing other tasks — use `[[task-slug]]`, never prose.**
+When a brief or update points at another task — a parent, a dependency,
+a related effort — write that task's **exact slug** in double brackets:
+`[[auto-runs]]`. flow indexes these into a backlink graph: `flow show
+<task>` lists them under `linked from:`, and Mission Control renders
+them as clickable in-app links. This is the norm — a brief that says
+"the parent task's brief" or "see the auto-runs task" in prose creates
+**no** link and breaks the graph. Rules:
+- **Bare slug only.** `[[task-slug]]` — no `[[slug|label]]` pipe, no
+  paths, no spaces inside the brackets. A target containing `/`, `\`, or
+  `|` is ignored, and a slug with no matching task registers nothing
+  (so use the real slug from `flow list tasks`, not a guess).
+- **Tasks only.** Projects and playbooks are not backlink targets;
+  don't bracket their slugs expecting a link.
+- **Sidecar files are different.** A plan or notes file living next to
+  the brief (`implementation-plan.md`, `upstream-feature-map.md`, etc.)
+  is not a task — reference it by filename. `flow show` surfaces these
+  under `other:` automatically; never bracket a filename.
+
+So in the screenshot-style brief that mentions an `auto-runs` parent,
+the slug should appear as `[[auto-runs]]` (in What/Why/Where wherever
+it is first named), not as the bare word `auto-runs`.
+
 Projects use a shorter template: `What / Why / Where / Scope`. No
 "Done when", no "Open questions" (projects are ongoing).
 
