@@ -80,7 +80,13 @@ function FeedView({
 }) {
   const [status, setStatus] = useState<string>('new')
   const [detail, setDetail] = useState<AttentionItem | null>(null)
-  const { data, isLoading, error } = useAttention(status)
+  const { data, isLoading, isFetching, isPlaceholderData, error } = useAttention(status)
+  // keepPreviousData holds the prior tab's rows during a switch, which keeps
+  // isLoading false — so a plain isLoading gate shows no spinner and (when the
+  // prior tab was empty) flashes "Nothing needs you" until the fetch lands.
+  // isFetching && isPlaceholderData is true exactly during a tab switch, so it
+  // drives the spinner while a same-tab background refetch stays silent.
+  const switching = isLoading || (isFetching && isPlaceholderData)
   const { data: workEvents } = useWorkEvents({ limit: 200 })
   const action = useAction()
   const eventByAttentionId = useMemo(() => {
@@ -144,7 +150,7 @@ function FeedView({
         ))}
       </div>
 
-      {isLoading ? (
+      {switching ? (
         <Loading label="loading attention feed" />
       ) : error ? (
         <ErrorNote error={error} />
@@ -886,7 +892,10 @@ function TraceView({
   const [selected, setSelected] = useState<SteeringTrace | null>(null)
   const win = WINDOWS.find((w) => w.id === windowId) ?? WINDOWS[1]
   const since = traceSinceForWindow(windowAnchor, win.ms)
-  const { data, isLoading, error } = useAttentionTrace(since, disposition, source)
+  const { data, isLoading, isFetching, isPlaceholderData, error } = useAttentionTrace(since, disposition, source)
+  // Same keepPreviousData spinner gap as the feed tabs — show the spinner while
+  // a window/disposition/source switch is in flight, silent on background polls.
+  const switching = isLoading || (isFetching && isPlaceholderData)
   const items = data?.items ?? []
   const routedSelected = selectedTraceId ? items.find((it) => it.id === selectedTraceId) ?? null : null
   const activeSelected = selected ?? routedSelected
@@ -915,7 +924,7 @@ function TraceView({
           filters above only narrow the list, not the totals. */}
       {data ? <FunnelStrip funnel={data.funnel} /> : null}
 
-      {isLoading ? (
+      {switching ? (
         <Loading label="loading triage decisions" />
       ) : error ? (
         <ErrorNote error={error} />
