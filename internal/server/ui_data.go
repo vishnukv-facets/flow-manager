@@ -455,7 +455,7 @@ func (s *Server) handleUIDataJS(w http.ResponseWriter, r *http.Request) {
 	if !getOnly(w, r) {
 		return
 	}
-	data, err := s.buildUIData()
+	data, err := s.cachedUIData()
 	if err != nil {
 		writeError(w, err, http.StatusInternalServerError)
 		return
@@ -476,12 +476,34 @@ func (s *Server) handleUIDataJSON(w http.ResponseWriter, r *http.Request) {
 	if !getOnly(w, r) {
 		return
 	}
-	data, err := s.buildUIData()
+	data, err := s.cachedUIData()
 	if err != nil {
 		writeError(w, err, http.StatusInternalServerError)
 		return
 	}
 	writeJSON(w, data)
+}
+
+// cachedUIData serves a recently-built ui-data snapshot, collapsing concurrent
+// rebuilds into one. This is the path every /api/ui-data request takes — the
+// raw buildUIData is O(tasks) (graph queries + transcript parse + allocation)
+// and was re-run per request, pegging multiple cores under load.
+func (s *Server) cachedUIData() (uiData, error) {
+	if s.caches == nil || s.caches.uiData == nil {
+		return s.buildUIData()
+	}
+	return s.caches.uiData.load(time.Now(), s.buildUIData)
+}
+
+// freshUIData forces a rebuild and refreshes the snapshot. The debounced SSE
+// broadcast uses it so a just-mutated state is pushed (and seeds the cache for
+// subsequent reads) without waiting out the TTL.
+func (s *Server) freshUIData() (uiData, error) {
+	data, err := s.buildUIData()
+	if s.caches != nil && s.caches.uiData != nil {
+		s.caches.uiData.store(time.Now(), data, err)
+	}
+	return data, err
 }
 
 func (s *Server) buildUIData() (uiData, error) {

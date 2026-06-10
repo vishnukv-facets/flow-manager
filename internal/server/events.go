@@ -40,7 +40,7 @@ func (s *Server) handleUIEvents(w http.ResponseWriter, r *http.Request) {
 	}
 
 	snapshot := func() ([]byte, []byte, error) {
-		data, err := s.buildUIData()
+		data, err := s.freshUIData()
 		if err != nil {
 			return nil, nil, err
 		}

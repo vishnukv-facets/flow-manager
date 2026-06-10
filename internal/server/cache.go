@@ -97,6 +97,56 @@ func (c *liveSnapshotCache) reset() {
 	c.val.Store(nil)
 }
 
+// uiDataSnapshotCache memoizes the full buildUIData result for a short window
+// and collapses concurrent rebuilds into one. The UI re-requests /api/ui-data on
+// every change notification and from every open tab; without this each request
+// independently re-ran the whole O(tasks) view build (loadChildren/parents/forks
+// graph queries + transcript parse + heavy allocation), which pegged multiple
+// cores under a few live sessions. The TTL matches the SSE broadcast debounce so
+// requests are never more stale than the push cadence already is; the broadcast
+// path calls store() to keep the snapshot fresh after a mutation.
+type uiDataSnapshotCache struct {
+	ttl time.Duration
+	mu  sync.Mutex
+	val atomic.Pointer[uiDataSnapshotEntry]
+}
+
+type uiDataSnapshotEntry struct {
+	data      uiData
+	err       error
+	expiresAt time.Time
+}
+
+func newUIDataSnapshotCache(ttl time.Duration) *uiDataSnapshotCache {
+	return &uiDataSnapshotCache{ttl: ttl}
+}
+
+// load returns a fresh-enough snapshot, or rebuilds once (serializing concurrent
+// rebuilds behind the mutex so a request storm collapses into a single build).
+func (c *uiDataSnapshotCache) load(now time.Time, refresh func() (uiData, error)) (uiData, error) {
+	if e := c.val.Load(); e != nil && now.Before(e.expiresAt) {
+		return e.data, e.err
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if e := c.val.Load(); e != nil && now.Before(e.expiresAt) {
+		return e.data, e.err
+	}
+	data, err := refresh()
+	c.val.Store(&uiDataSnapshotEntry{data: data, err: err, expiresAt: now.Add(c.ttl)})
+	return data, err
+}
+
+// store records a freshly-built snapshot (used by the broadcast path so a
+// just-mutated state is served immediately rather than waiting out the TTL).
+func (c *uiDataSnapshotCache) store(now time.Time, data uiData, err error) {
+	c.val.Store(&uiDataSnapshotEntry{data: data, err: err, expiresAt: now.Add(c.ttl)})
+}
+
+func (c *uiDataSnapshotCache) reset() {
+	c.val.Store(nil)
+}
+
 // uiCaches bundles per-server TTL caches for the read-mostly data that
 // buildUIData would otherwise recompute (and re-fork) for every task on every
 // SSE tick. Per-server means each `New(Config{})` in tests gets a fresh cache
@@ -107,6 +157,7 @@ type uiCaches struct {
 	gitBranches *ttlCache[string, []string]
 	gitDiff     *ttlCache[string, gitDiffSnapshot]
 	flowDBDiag  *flowDBDiagCache
+	uiData      *uiDataSnapshotCache
 }
 
 type gitDiffSnapshot struct {
@@ -134,6 +185,10 @@ func newUICaches() *uiCaches {
 		// search_docs). They cannot run per SSE tick; serve them stale and
 		// refresh in the background. See flowDBDiagCache.
 		flowDBDiag: newFlowDBDiagCache(flowDBDiagCacheTTL, defaultFlowDBQuickCheckTimeout, flowDBDiagQuickCheckTimeout),
+		// Full ui-data rebuilds are requested on every change notification and
+		// from every open tab; collapse concurrent rebuilds and serve a snapshot
+		// up to one broadcast-debounce-window (250ms) old.
+		uiData: newUIDataSnapshotCache(250 * time.Millisecond),
 	}
 }
 
