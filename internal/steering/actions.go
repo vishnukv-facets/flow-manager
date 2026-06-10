@@ -372,14 +372,42 @@ func recordActionFeedback(db *sql.DB, item flowdb.FeedItem, finalAction, outcome
 
 // feedTaskName is a short task title derived from the summary (or the thread
 // key when there's no summary).
+const feedTaskNameMaxLen = 72
+
+// feedTaskName derives a clean task title from the classifier's full-context
+// summary. The summary is already generated with the whole thread in view, so we
+// render it as a tight title rather than byte-slicing it: cut at the first
+// natural clause break (em-dash or sentence end) or, failing that, the last word
+// boundary under the cap — so the name never ends mid-word the way a raw
+// s[:60] did (e.g. "...rename the CloudSQL DB to an 'opt").
 func feedTaskName(item flowdb.FeedItem) string {
-	if s := strings.TrimSpace(item.Summary); s != "" {
-		if len(s) > 60 {
-			s = strings.TrimSpace(s[:60])
+	s := strings.TrimSpace(item.Summary)
+	if s == "" {
+		return "Attention: " + item.ThreadKey
+	}
+	return titleFromSummary(s, feedTaskNameMaxLen)
+}
+
+// titleFromSummary turns a descriptive summary into a task title: prefer the
+// first natural clause; otherwise truncate on a word boundary with an ellipsis.
+// Rune-aware so a multibyte char (em-dash, emoji) is never split.
+func titleFromSummary(s string, max int) string {
+	s = strings.TrimSpace(s)
+	// Prefer the first natural clause break, if it lands at a sensible length.
+	for _, sep := range []string{" — ", " – ", ". ", "? ", "! "} {
+		if i := strings.Index(s, sep); i >= 12 && i <= max {
+			return strings.TrimSpace(s[:i])
 		}
+	}
+	r := []rune(s)
+	if len(r) <= max {
 		return s
 	}
-	return "Attention: " + item.ThreadKey
+	cut := strings.TrimRight(string(r[:max]), " ")
+	if sp := strings.LastIndex(cut, " "); sp > max/2 {
+		cut = cut[:sp]
+	}
+	return strings.TrimRight(cut, " .,;:-—–") + "…"
 }
 
 // FeedTaskSlug derives a stable, filesystem-safe slug from the thread key. It
