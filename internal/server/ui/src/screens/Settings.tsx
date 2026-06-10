@@ -7,6 +7,7 @@ import { ErrorNote, Loading, ProviderIcon, SourceIcon } from '../components/ui'
 import { ConfigField, SettingsPanel, SettingsSection, useConfigDraft } from '../components/SettingsPanels'
 import type { SettingField, ToolCapability } from '../lib/types'
 import { useMascotPrefs, setMascotPrefs, NAP_OPTIONS } from '../lib/mascot'
+import { pushToast } from '../lib/toast'
 
 type BrowserNotificationPermission = NotificationPermission | 'unsupported'
 
@@ -31,6 +32,22 @@ export function Settings() {
       return
     }
     setPermission(await Notification.requestPermission())
+  }
+
+  // Fire an unconditional test notification (bypassing the in-app focus gate) so
+  // the user can verify the OS path end-to-end. If it doesn't appear in
+  // Notification Center, the block is at the OS/browser level, not in flow.
+  const sendTestNotification = () => {
+    if (typeof window === 'undefined' || !('Notification' in window) || Notification.permission !== 'granted') return
+    try {
+      new Notification('flow: test alert', {
+        body: 'Desktop alerts are wired up. If this did not appear as a macOS banner, allow your browser in System Settings → Notifications.',
+        tag: 'flow-test-alert',
+      })
+      pushToast('info', 'Test alert sent — check Notification Center if no banner appeared.')
+    } catch {
+      pushToast('error', 'Could not post a desktop notification from this browser.')
+    }
   }
 
   if (isLoading) return <div className="page"><Loading rows={5} /></div>
@@ -96,7 +113,28 @@ export function Settings() {
                   <Bell size={15} /> Enable
                 </button>
               )}
+              {permission === 'granted' && (
+                <button type="button" className="btn" onClick={sendTestNotification}>
+                  <Bell size={15} /> Send test
+                </button>
+              )}
             </div>
+            {permission === 'granted' && (
+              <div className="setting-hint">
+                Alerts fire when flow isn't the focused window. No macOS banner after a test?
+                The browser itself needs OS permission: System Settings → Notifications →
+                your browser → Allow Notifications, and turn off Focus / Do Not Disturb.
+              </div>
+            )}
+            {permission === 'denied' && (
+              <div className="setting-hint">
+                Blocked in your browser. Re-allow notifications for this site
+                (address-bar site settings), then reload.
+              </div>
+            )}
+            {permission === 'unsupported' && (
+              <div className="setting-hint">This browser doesn't support desktop notifications.</div>
+            )}
           </SettingsPanel>
           <SettingsPanel title="Mascot" icon={<SlidersHorizontal size={17} />}>
             <div className="setting-row">

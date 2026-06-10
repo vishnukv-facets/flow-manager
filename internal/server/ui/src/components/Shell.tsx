@@ -71,7 +71,12 @@ function useNotificationToasts(
 ) {
   const seen = useRef<Set<string> | null>(null)
   const notifyDesktop = useCallback((it: NotificationItem) => {
-    if (currentBrowserNotificationPermission() !== 'granted' || typeof document === 'undefined' || !document.hidden) return
+    // Fire a desktop alert whenever flow isn't the focused window — i.e. you're
+    // working in another app (the whole point of an alert). The old gate used
+    // !document.hidden, which is true only when the flow TAB is backgrounded or
+    // minimized; with the tab simply sitting behind your IDE/terminal it skipped
+    // the notification, so "I enabled alerts but get nothing" was by design.
+    if (currentBrowserNotificationPermission() !== 'granted' || typeof document === 'undefined' || document.hasFocus()) return
     try {
       new Notification(`flow: ${it.title}`, { body: it.sub, tag: it.key })
     } catch {
