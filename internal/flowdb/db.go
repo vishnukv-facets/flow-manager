@@ -84,6 +84,31 @@ CREATE TABLE IF NOT EXISTS tasks (
     CHECK (status IN ('backlog','done') OR session_id IS NOT NULL OR (session_provider = 'codex' AND status = 'in-progress'))
 );
 
+CREATE TABLE IF NOT EXISTS brain_runs (
+    run_id          TEXT PRIMARY KEY,
+    family_slug     TEXT NOT NULL,
+    task_slug       TEXT NOT NULL,
+    plan_id         TEXT,
+    role            TEXT NOT NULL CHECK (role IN ('worker','validator','steward','orchestrator')),
+    provider        TEXT NOT NULL CHECK (provider IN ('claude','codex')),
+    requested_model TEXT,
+    requested_tier  TEXT,
+    resolved_model  TEXT,
+    permission_mode TEXT NOT NULL DEFAULT 'auto' CHECK (permission_mode IN ('default','auto','bypass')),
+    status          TEXT NOT NULL CHECK (status IN ('queued','running','completed','dead','error','cancelled','blocked')),
+    pid             INTEGER,
+    session_id      TEXT,
+    log_path        TEXT,
+    input_summary   TEXT,
+    output_json     TEXT,
+    evidence_json   TEXT,
+    error_text      TEXT,
+    started_at      TEXT,
+    finished_at     TEXT,
+    created_at      TEXT NOT NULL,
+    updated_at      TEXT NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS workdirs (
     path          TEXT PRIMARY KEY,
     name          TEXT,
@@ -349,6 +374,9 @@ CREATE INDEX IF NOT EXISTS idx_task_dependencies_parent ON task_dependencies(par
 CREATE INDEX IF NOT EXISTS idx_task_dependencies_child ON task_dependencies(child_slug);
 CREATE INDEX IF NOT EXISTS idx_task_links_to ON task_links(to_slug);
 CREATE INDEX IF NOT EXISTS idx_task_links_from ON task_links(from_slug);
+CREATE INDEX IF NOT EXISTS idx_brain_runs_family_started ON brain_runs(family_slug, started_at DESC, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_brain_runs_task_started ON brain_runs(task_slug, started_at DESC, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_brain_runs_status_updated ON brain_runs(status, updated_at DESC);
 CREATE INDEX IF NOT EXISTS idx_steering_trace_feed ON steering_trace(feed_item_id);
 CREATE INDEX IF NOT EXISTS idx_steering_trace_created ON steering_trace(created_at);
 CREATE INDEX IF NOT EXISTS idx_steering_trace_created_id ON steering_trace(created_at DESC, id DESC);

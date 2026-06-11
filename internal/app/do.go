@@ -491,13 +491,49 @@ func cmdDo(args []string) int {
 			fmt.Fprintf(os.Stderr, "error: %v\n", err)
 			return 1
 		}
-		pid, logPath, err := launchAutoRun(task, root, cwd, provider, permissionMode, sessionModel, injectionText)
+		runID, err := newUUID()
 		if err != nil {
+			fmt.Fprintf(os.Stderr, "error: generate run id: %v\n", err)
+			return 1
+		}
+		familySlug := task.Slug
+		if rootSlug, ferr := flowdb.TaskFamilyRoot(db, task.Slug); ferr == nil {
+			familySlug = rootSlug
+		} else {
+			fmt.Fprintf(os.Stderr, "warning: resolve task family for %q: %v\n", task.Slug, ferr)
+		}
+		requestedModel := ""
+		if task.Model.Valid && task.Model.String != "" {
+			requestedModel = task.Model.String
+		}
+		run := newAutoBrainRun(task, familySlug, runID, provider, permissionMode, requestedModel, sessionModel, injectionText, sessionID, playbookSlug)
+		if err := flowdb.UpsertBrainRun(db, run); err != nil {
+			fmt.Fprintf(os.Stderr, "warning: record brain run start: %v\n", err)
+		}
+		pid, logPath, err := launchAutoRun(task, runID, root, cwd, provider, permissionMode, sessionModel, injectionText)
+		if err != nil {
+			now := flowdb.NowISO()
+			run.Status = "error"
+			run.FinishedAt = sql.NullString{String: now, Valid: true}
+			run.OutputJSON, run.EvidenceJSON, run.ErrorText = autoBrainRunResult(run, task, "error", err)
+			run.UpdatedAt = now
+			if upErr := flowdb.UpsertBrainRun(db, run); upErr != nil {
+				fmt.Fprintf(os.Stderr, "warning: finalize brain run %q after launch failure: %v\n", run.RunID, upErr)
+			}
 			if needsBootstrap {
 				rollbackAutoLaunchSession(db, task.Slug, provider, sessionID)
 			}
 			fmt.Fprintf(os.Stderr, "error: %v\n", err)
 			return 1
+		}
+		now := flowdb.NowISO()
+		run.Status = "running"
+		run.PID = sql.NullInt64{Int64: int64(pid), Valid: true}
+		run.LogPath = sql.NullString{String: logPath, Valid: true}
+		run.StartedAt = sql.NullString{String: now, Valid: true}
+		run.UpdatedAt = now
+		if upErr := flowdb.UpsertBrainRun(db, run); upErr != nil {
+			fmt.Fprintf(os.Stderr, "warning: update brain run %q launch metadata: %v\n", run.RunID, upErr)
 		}
 		if err := recordAutoRunLaunched(db, task.Slug, pid, logPath); err != nil {
 			fmt.Fprintf(os.Stderr, "warning: record auto run: %v\n", err)

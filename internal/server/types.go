@@ -2,6 +2,7 @@ package server
 
 import (
 	"database/sql"
+	"encoding/json"
 	"flow/internal/briefing"
 	"net/http"
 	"sync"
@@ -36,7 +37,7 @@ type Server struct {
 	// routes untracked messages into. Held on the server so the steerer
 	// backfill (ListenAndServe) can replay catch-up messages through the SAME
 	// cascade via ObserveBatch. Nil when no DB is configured.
-	cascade       *steering.Cascade
+	cascade *steering.Cascade
 	// steeringRuns holds the recent + in-flight cascade runs (the live CI-style
 	// stage view). Populated by the cascade's Progress hook; read by the inbox
 	// UI over /api/steering/runs + the steering_stage WS event. Always non-nil
@@ -206,6 +207,43 @@ type TaskView struct {
 	Updates             []FileRef     `json:"updates"`
 	AuxFiles            []FileRef     `json:"aux_files"`
 	TranscriptAvailable bool          `json:"transcript_available"`
+}
+
+// BrainRunView is one persisted or compatibility run ledger row as surfaced to
+// the UI. The list endpoint returns the summary fields; the detail endpoint
+// also fills the JSON evidence payloads.
+type BrainRunView struct {
+	RunID          string          `json:"run_id"`
+	FamilySlug     string          `json:"family_slug"`
+	TaskSlug       string          `json:"task_slug"`
+	TaskName       string          `json:"task_name,omitempty"`
+	TaskStatus     string          `json:"task_status,omitempty"`
+	PlanID         *string         `json:"plan_id,omitempty"`
+	Role           string          `json:"role"`
+	Provider       string          `json:"provider"`
+	RequestedModel *string         `json:"requested_model,omitempty"`
+	RequestedTier  *string         `json:"requested_tier,omitempty"`
+	ResolvedModel  *string         `json:"resolved_model,omitempty"`
+	PermissionMode string          `json:"permission_mode"`
+	Status         string          `json:"status"`
+	PID            *int64          `json:"pid,omitempty"`
+	SessionID      *string         `json:"session_id,omitempty"`
+	LogPath        *string         `json:"log_path,omitempty"`
+	InputSummary   *string         `json:"input_summary,omitempty"`
+	OutputJSON     json.RawMessage `json:"output_json,omitempty"`
+	EvidenceJSON   json.RawMessage `json:"evidence_json,omitempty"`
+	ErrorText      *string         `json:"error_text,omitempty"`
+	StartedAt      *string         `json:"started_at,omitempty"`
+	FinishedAt     *string         `json:"finished_at,omitempty"`
+	CreatedAt      string          `json:"created_at"`
+	UpdatedAt      string          `json:"updated_at"`
+	Legacy         bool            `json:"legacy,omitempty"`
+}
+
+type BrainRunsResponse struct {
+	TaskSlug   string         `json:"task_slug"`
+	FamilySlug string         `json:"family_slug"`
+	Runs       []BrainRunView `json:"runs"`
 }
 
 // InboxEntry is one parsed message from a task's inbox.md.

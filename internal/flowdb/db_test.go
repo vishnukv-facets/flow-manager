@@ -40,7 +40,7 @@ func insertTask(t *testing.T, db *sql.DB, slug, name, status, priority, wd strin
 
 func TestOpenDBCreatesSchema(t *testing.T) {
 	db := openTempDB(t)
-	for _, tbl := range []string{"projects", "tasks", "workdirs", "agent_runtime_states"} {
+	for _, tbl := range []string{"projects", "tasks", "brain_runs", "workdirs", "agent_runtime_states"} {
 		var name string
 		err := db.QueryRow("SELECT name FROM sqlite_master WHERE type='table' AND name=?", tbl).Scan(&name)
 		if err != nil {
