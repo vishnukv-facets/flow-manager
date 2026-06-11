@@ -158,6 +158,9 @@ type uiCaches struct {
 	gitDiff     *ttlCache[string, gitDiffSnapshot]
 	flowDBDiag  *flowDBDiagCache
 	uiData      *uiDataSnapshotCache
+	// autoAlive caches Signal(0) liveness probes for auto-run supervisor pids.
+	// TTL 15s matches U2: only rows with stored status='running' are probed.
+	autoAlive *ttlCache[int, bool]
 }
 
 type gitDiffSnapshot struct {
@@ -189,6 +192,8 @@ func newUICaches() *uiCaches {
 		// from every open tab; collapse concurrent rebuilds and serve a snapshot
 		// up to one broadcast-debounce-window (250ms) old.
 		uiData: newUIDataSnapshotCache(250 * time.Millisecond),
+		// Auto-run pid liveness: 15s TTL, probes only stored-'running' rows.
+		autoAlive: newTTLCache[int, bool](15 * time.Second),
 	}
 }
 

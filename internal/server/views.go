@@ -140,6 +140,14 @@ func BuildTaskView(db *sql.DB, root string, t *flowdb.Task, live map[string]bool
 			view.RuntimeStatus = &rs
 		}
 	}
+	view.AutoRunStatus = nullStringPtr(t.AutoRunStatus)
+	view.AutoRunStarted = nullStringPtr(t.AutoRunStarted)
+	view.AutoRunFinished = nullStringPtr(t.AutoRunFinished)
+	view.AutoRunLog = nullStringPtr(t.AutoRunLog)
+	if t.AutoRunPID.Valid {
+		v := t.AutoRunPID.Int64
+		view.AutoRunPID = &v
+	}
 	return view, nil
 }
 

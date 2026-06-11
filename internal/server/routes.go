@@ -14,6 +14,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strconv"
 	"strings"
@@ -426,6 +427,10 @@ func (s *Server) handleTaskRoute(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		serveMarkdown(w, path)
+	case len(parts) == 2 && parts[1] == "auto-runs":
+		s.handleTaskAutoRunList(w, r, slug)
+	case len(parts) == 3 && parts[1] == "auto-runs" && parts[2] == "log":
+		s.handleTaskAutoRunLog(w, r, slug)
 	case len(parts) == 2 && parts[1] == "transcript":
 		s.handleTaskTranscript(w, task)
 	case len(parts) == 2 && parts[1] == "bridge":
@@ -630,6 +635,80 @@ func uniqueAttachmentPath(dir, name string) string {
 			return candidate
 		}
 	}
+}
+
+type autoRunFileEntry struct {
+	File     string `json:"file"`
+	Size     int64  `json:"size"`
+	Modified string `json:"modified"`
+}
+
+const autoRunLogMaxBytes = 256 * 1024
+
+func (s *Server) handleTaskAutoRunList(w http.ResponseWriter, _ *http.Request, slug string) {
+	dir := filepath.Join(s.cfg.FlowRoot, "tasks", slug, "auto-runs")
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		if errors.Is(err, fs.ErrNotExist) {
+			writeJSON(w, []autoRunFileEntry{})
+			return
+		}
+		writeError(w, err, http.StatusInternalServerError)
+		return
+	}
+	out := make([]autoRunFileEntry, 0, len(entries))
+	for i := len(entries) - 1; i >= 0; i-- {
+		e := entries[i]
+		if e.IsDir() || filepath.Ext(e.Name()) != ".log" {
+			continue
+		}
+		info, err := e.Info()
+		if err != nil {
+			continue
+		}
+		out = append(out, autoRunFileEntry{
+			File:     e.Name(),
+			Size:     info.Size(),
+			Modified: info.ModTime().UTC().Format(time.RFC3339),
+		})
+	}
+	writeJSON(w, out)
+}
+
+var autoRunLogNameRE = regexp.MustCompile(`^[0-9-]+\.log$`)
+
+type autoRunLogResponse struct {
+	Content   string `json:"content"`
+	Truncated bool   `json:"truncated,omitempty"`
+}
+
+func (s *Server) handleTaskAutoRunLog(w http.ResponseWriter, r *http.Request, slug string) {
+	name := r.URL.Query().Get("file")
+	if !autoRunLogNameRE.MatchString(name) {
+		writeError(w, errors.New("invalid file name"), http.StatusBadRequest)
+		return
+	}
+	dir := filepath.Join(s.cfg.FlowRoot, "tasks", slug, "auto-runs")
+	path := filepath.Clean(filepath.Join(dir, name))
+	if !strings.HasPrefix(path, filepath.Clean(dir)+string(filepath.Separator)) {
+		writeError(w, errors.New("invalid file path"), http.StatusBadRequest)
+		return
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		if errors.Is(err, fs.ErrNotExist) {
+			writeError(w, errors.New("log not found"), http.StatusNotFound)
+			return
+		}
+		writeError(w, err, http.StatusInternalServerError)
+		return
+	}
+	truncated := false
+	if len(data) > autoRunLogMaxBytes {
+		data = data[len(data)-autoRunLogMaxBytes:]
+		truncated = true
+	}
+	writeJSON(w, autoRunLogResponse{Content: string(data), Truncated: truncated})
 }
 
 func (s *Server) handleTaskTranscript(w http.ResponseWriter, task *flowdb.Task) {

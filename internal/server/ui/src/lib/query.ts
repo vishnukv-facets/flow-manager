@@ -248,6 +248,20 @@ export function useTaskTranscript(slug: string | undefined, enabled = true) {
     queryFn: () => apiGet<TranscriptResponse>(`/api/tasks/${encodeURIComponent(slug!)}/transcript`),
   })
 }
+export function useAutoRuns(slug: string | undefined, enabled = true) {
+  return useQuery({
+    queryKey: ['auto-runs', slug],
+    enabled: !!slug && enabled,
+    queryFn: () => apiGet<import('../lib/types').AutoRunFile[]>(`/api/tasks/${encodeURIComponent(slug!)}/auto-runs`),
+  })
+}
+export function useAutoRunLog(slug: string | undefined, file: string | undefined) {
+  return useQuery({
+    queryKey: ['auto-run-log', slug, file],
+    enabled: !!slug && !!file,
+    queryFn: () => apiGet<import('../lib/types').AutoRunLogResponse>(`/api/tasks/${encodeURIComponent(slug!)}/auto-runs/log?file=${encodeURIComponent(file!)}`),
+  })
+}
 
 export interface ProjectListOpts {
   include_archived?: boolean

@@ -372,6 +372,20 @@ export interface UiAgent {
   aux_files?: FileRef[]
   terminal: { mode?: string; message?: string }
   monitored: boolean
+  auto_run_status?: string
+  auto_run_started?: string
+  auto_run_finished?: string
+  auto_run_log?: string
+}
+
+export interface AutoRunFile {
+  file: string
+  size: number
+  modified: string
+}
+export interface AutoRunLogResponse {
+  content: string
+  truncated?: boolean
 }
 
 export interface ToolCapability {

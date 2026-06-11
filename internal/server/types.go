@@ -206,6 +206,12 @@ type TaskView struct {
 	Updates             []FileRef     `json:"updates"`
 	AuxFiles            []FileRef     `json:"aux_files"`
 	TranscriptAvailable bool          `json:"transcript_available"`
+	// Autonomous-run bookkeeping, forwarded from flowdb.Task for UI display.
+	AutoRunStatus   *string `json:"auto_run_status,omitempty"`
+	AutoRunStarted  *string `json:"auto_run_started,omitempty"`
+	AutoRunFinished *string `json:"auto_run_finished,omitempty"`
+	AutoRunLog      *string `json:"auto_run_log,omitempty"`
+	AutoRunPID      *int64  `json:"auto_run_pid,omitempty"`
 }
 
 // InboxEntry is one parsed message from a task's inbox.md.
