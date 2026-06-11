@@ -441,11 +441,12 @@ func TestE2EAutoRunRoundtrip(t *testing.T) {
 	t.Cleanup(func() { newUUID = oldNewUUID })
 
 	const fakePID = 19191
-	var launchedSlug, launchedLog string
+	var launchedSlug, launchedRunID, launchedLog string
 	tabCount := 0
 	oldLauncher := autoLauncher
-	autoLauncher = func(slug, workDir, logPath, provider, permissionMode, model, injection string, env []string) (int, error) {
+	autoLauncher = func(slug, runID, workDir, logPath, provider, permissionMode, model, injection string, env []string) (int, error) {
 		launchedSlug = slug
+		launchedRunID = runID
 		launchedLog = logPath
 		return fakePID, nil
 	}
@@ -475,6 +476,9 @@ func TestE2EAutoRunRoundtrip(t *testing.T) {
 	step("do --auto", cmdDo([]string{"--auto", "fix-slow-query"}))
 	if launchedSlug != "fix-slow-query" {
 		t.Fatalf("launchedSlug = %q, want fix-slow-query", launchedSlug)
+	}
+	if launchedRunID == "" {
+		t.Fatal("launch auto run id was not populated")
 	}
 	if !strings.Contains(launchedLog, "auto-runs") {
 		t.Fatalf("launchedLog %q should contain 'auto-runs'", launchedLog)
@@ -590,7 +594,7 @@ func TestE2ECodexAutoRunRoundtrip(t *testing.T) {
 	const orchestratorModel = "gpt-orchestrated-model"
 	var launchedSlug, launchedProvider, launchedPermission, launchedModel string
 	oldLauncher := autoLauncher
-	autoLauncher = func(slug, workDir, logPath, provider, permissionMode, model, injection string, env []string) (int, error) {
+	autoLauncher = func(slug, runID, workDir, logPath, provider, permissionMode, model, injection string, env []string) (int, error) {
 		launchedSlug = slug
 		launchedProvider = provider
 		launchedPermission = permissionMode

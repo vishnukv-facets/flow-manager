@@ -433,6 +433,10 @@ func (s *Server) handleTaskRoute(w http.ResponseWriter, r *http.Request) {
 		s.handleTaskAutoRunLog(w, r, slug)
 	case len(parts) == 2 && parts[1] == "transcript":
 		s.handleTaskTranscript(w, task)
+	case len(parts) == 2 && parts[1] == "runs":
+		s.handleTaskRuns(w, r, task)
+	case len(parts) == 3 && parts[1] == "runs":
+		s.handleTaskRunDetail(w, r, task, parts[2])
 	case len(parts) == 2 && parts[1] == "bridge":
 		agent, err := s.agentForTask(slug)
 		if err != nil {

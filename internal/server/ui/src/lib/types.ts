@@ -69,6 +69,40 @@ export interface TaskView {
   transcript_available: boolean
 }
 
+export interface BrainRunView {
+  run_id: string
+  family_slug: string
+  task_slug: string
+  task_name?: string
+  task_status?: string
+  plan_id?: string | null
+  role: string
+  provider: string
+  requested_model?: string | null
+  requested_tier?: string | null
+  resolved_model?: string | null
+  permission_mode: string
+  status: string
+  pid?: number | null
+  session_id?: string | null
+  log_path?: string | null
+  input_summary?: string | null
+  output_json?: unknown
+  evidence_json?: unknown
+  error_text?: string | null
+  started_at?: string | null
+  finished_at?: string | null
+  created_at: string
+  updated_at: string
+  legacy?: boolean
+}
+
+export interface BrainRunsResponse {
+  task_slug: string
+  family_slug: string
+  runs: BrainRunView[]
+}
+
 export interface TaskCounts {
   total: number
   in_progress: number

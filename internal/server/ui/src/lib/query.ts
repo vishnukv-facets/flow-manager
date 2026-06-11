@@ -9,6 +9,8 @@ import type {
   AskFlowResponse,
   AttentionItem,
   AttentionTraceResponse,
+  BrainRunView,
+  BrainRunsResponse,
   GitHubAuthStatus,
   GitHubInstallations,
   GitHubOrgs,
@@ -248,6 +250,7 @@ export function useTaskTranscript(slug: string | undefined, enabled = true) {
     queryFn: () => apiGet<TranscriptResponse>(`/api/tasks/${encodeURIComponent(slug!)}/transcript`),
   })
 }
+
 export function useAutoRuns(slug: string | undefined, enabled = true) {
   return useQuery({
     queryKey: ['auto-runs', slug],
@@ -255,6 +258,7 @@ export function useAutoRuns(slug: string | undefined, enabled = true) {
     queryFn: () => apiGet<import('../lib/types').AutoRunFile[]>(`/api/tasks/${encodeURIComponent(slug!)}/auto-runs`),
   })
 }
+
 export function useAutoRunLog(slug: string | undefined, file: string | undefined) {
   return useQuery({
     queryKey: ['auto-run-log', slug, file],
@@ -263,9 +267,33 @@ export function useAutoRunLog(slug: string | undefined, file: string | undefined
   })
 }
 
+export function useTaskRuns(slug: string | undefined, enabled = true, limit = 20) {
+  return useQuery({
+    queryKey: ['task-runs', slug, limit],
+    enabled: !!slug && enabled,
+    queryFn: () =>
+      apiGet<BrainRunsResponse>(
+        `/api/tasks/${encodeURIComponent(slug!)}/runs${limit > 0 ? `?limit=${encodeURIComponent(String(limit))}` : ''}`,
+      ),
+  })
+}
+
+export function useTaskRun(slug: string | undefined, runId: string | undefined, enabled = true) {
+  return useQuery({
+    queryKey: ['task-run', slug, runId],
+    enabled: !!slug && !!runId && enabled,
+    queryFn: () =>
+      apiGet<BrainRunView>(
+        `/api/tasks/${encodeURIComponent(slug!)}/runs/${encodeURIComponent(runId!)}`,
+      ),
+  })
+}
+
 export interface ProjectListOpts {
   include_archived?: boolean
+  include_deleted?: boolean
 }
+
 export function useProjects(opts: ProjectListOpts = {}) {
   return useQuery({
     queryKey: ['projects', opts],
