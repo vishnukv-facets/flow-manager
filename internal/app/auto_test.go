@@ -576,13 +576,14 @@ type launcherCall struct {
 	permissionMode string
 	model          string
 	injection      string
+	meta           autoRunLaunchMetadata
 }
 
 func stubLauncherRecord(t *testing.T, retErr error) *launcherCall {
 	t.Helper()
 	rec := &launcherCall{}
 	old := autoLauncher
-	autoLauncher = func(slug, runID, workDir, logPath, provider, permissionMode, model, injection string, env []string) (int, error) {
+	autoLauncher = func(slug, runID, workDir, logPath, provider, permissionMode, model, injection string, meta autoRunLaunchMetadata, env []string) (int, error) {
 		rec.runID = runID
 		rec.slug = slug
 		rec.workDir = workDir
@@ -591,6 +592,7 @@ func stubLauncherRecord(t *testing.T, retErr error) *launcherCall {
 		rec.permissionMode = permissionMode
 		rec.model = model
 		rec.injection = injection
+		rec.meta = meta
 		if retErr != nil {
 			return 0, retErr
 		}
@@ -667,6 +669,54 @@ func TestCmdDoAutoLaunchesDetached(t *testing.T) {
 	}
 	if !run.StartedAt.Valid || !run.LogPath.Valid || !strings.Contains(run.LogPath.String, filepath.Join("tasks", "auto-det", "auto-runs")) {
 		t.Fatalf("launch metadata missing from run ledger: %+v", run)
+	}
+}
+
+func TestCmdDoAutoRecordsBrainSchedulerMetadata(t *testing.T) {
+	setupFlowRoot(t)
+	if rc := cmdAdd([]string{"task", "Scheduler Worker", "--slug", "sched-worker", "--agent", "codex"}); rc != 0 {
+		t.Fatalf("add scheduler worker rc=%d", rc)
+	}
+
+	const fixedRunID = "run-scheduler-1"
+	oldUUID := newUUID
+	newUUID = func() (string, error) { return fixedRunID, nil }
+	t.Cleanup(func() { newUUID = oldUUID })
+	noTabStub(t)
+	rec := stubLauncherRecord(t, nil)
+
+	rc := cmdDo([]string{
+		"sched-worker",
+		"--auto",
+		"--brain-plan", "plan-123",
+		"--brain-item", "worker-1",
+		"--brain-target-branch", "feature/flow-brain-orchestrator",
+		"--brain-initiated-by", "brain-scheduler",
+	})
+	if rc != 0 {
+		t.Fatalf("cmdDo scheduler auto launch: rc=%d", rc)
+	}
+	if rec.meta.PlanID != "plan-123" || rec.meta.ItemID != "worker-1" || rec.meta.TargetBranch != "feature/flow-brain-orchestrator" || rec.meta.InitiatedBy != "brain-scheduler" {
+		t.Fatalf("launcher metadata = %+v", rec.meta)
+	}
+
+	db := openFlowDB(t)
+	run, err := flowdb.GetBrainRun(db, fixedRunID)
+	if err != nil {
+		t.Fatalf("GetBrainRun: %v", err)
+	}
+	if !run.PlanID.Valid || run.PlanID.String != "plan-123" {
+		t.Fatalf("run plan id = %+v, want plan-123", run.PlanID)
+	}
+	if !run.InputSummary.Valid || !strings.Contains(run.InputSummary.String, "plan item worker-1") || !strings.Contains(run.InputSummary.String, "target branch feature/flow-brain-orchestrator") {
+		t.Fatalf("input summary = %+v", run.InputSummary)
+	}
+	var evidence map[string]any
+	if err := json.Unmarshal([]byte(run.EvidenceJSON.String), &evidence); err != nil {
+		t.Fatalf("unmarshal evidence: %v", err)
+	}
+	if evidence["plan_item_id"] != "worker-1" || evidence["target_branch"] != "feature/flow-brain-orchestrator" || evidence["initiated_by"] != "brain-scheduler" {
+		t.Fatalf("evidence = %+v", evidence)
 	}
 }
 

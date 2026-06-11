@@ -47,7 +47,7 @@ type autoRunRequest struct {
 
 // autoLauncher starts a detached `flow __auto-exec <slug>` process with its
 // stdout/stderr redirected to logPath. Overridable in tests.
-var autoLauncher = func(slug, runID, workDir, logPath, provider, permissionMode, model, injection string, env []string) (int, error) {
+var autoLauncher = func(slug, runID, workDir, logPath, provider, permissionMode, model, injection string, meta autoRunLaunchMetadata, env []string) (int, error) {
 	self, err := os.Executable()
 	if err != nil {
 		return 0, fmt.Errorf("locate flow binary: %w", err)
@@ -76,6 +76,19 @@ var autoLauncher = func(slug, runID, workDir, logPath, provider, permissionMode,
 		// it (behind the marker) to the autonomous prompt. Passed as a
 		// distinct arg — no shell parsing — so any characters are safe.
 		exArgs = append(exArgs, "--with", injection)
+	}
+	meta = meta.normalized()
+	if meta.PlanID != "" {
+		exArgs = append(exArgs, "--brain-plan", meta.PlanID)
+	}
+	if meta.ItemID != "" {
+		exArgs = append(exArgs, "--brain-item", meta.ItemID)
+	}
+	if meta.TargetBranch != "" {
+		exArgs = append(exArgs, "--brain-target-branch", meta.TargetBranch)
+	}
+	if meta.InitiatedBy != "" {
+		exArgs = append(exArgs, "--brain-initiated-by", meta.InitiatedBy)
 	}
 	cmd := exec.Command(self, exArgs...)
 	cmd.Dir = workDir
@@ -153,7 +166,7 @@ var processAlive = func(pid int) bool {
 	return errors.Is(err, syscall.EPERM)
 }
 
-func launchAutoRun(task *flowdb.Task, runID, root, cwd, provider, permissionMode, model, injection string) (int, string, error) {
+func launchAutoRun(task *flowdb.Task, runID, root, cwd, provider, permissionMode, model, injection string, meta autoRunLaunchMetadata) (int, string, error) {
 	runsDir := filepath.Join(root, "tasks", task.Slug, "auto-runs")
 	if err := os.MkdirAll(runsDir, 0o755); err != nil {
 		return 0, "", fmt.Errorf("mkdir %s: %w", runsDir, err)
@@ -163,7 +176,7 @@ func launchAutoRun(task *flowdb.Task, runID, root, cwd, provider, permissionMode
 	logName := time.Now().UTC().Format("2006-01-02-150405") + ".log"
 	logPath := filepath.Join(runsDir, logName)
 
-	pid, err := autoLauncher(task.Slug, runID, cwd, logPath, provider, permissionMode, model, injection, autoChildEnv())
+	pid, err := autoLauncher(task.Slug, runID, cwd, logPath, provider, permissionMode, model, injection, meta, autoChildEnv())
 	if err != nil {
 		return 0, "", err
 	}
@@ -231,8 +244,18 @@ func cmdAutoExec(args []string) int {
 	permissionModeFlag := fs.String("permission-mode", "", "agent permission mode: default|auto|bypass")
 	modelFlag := fs.String("model", "", "resolved session model")
 	withInstr := fs.String("with", "", "one-off instruction to append to the autonomous prompt")
+	brainPlanFlag := fs.String("brain-plan", "", "brain plan id for scheduler attribution")
+	brainItemFlag := fs.String("brain-item", "", "brain plan item id for scheduler attribution")
+	brainTargetBranchFlag := fs.String("brain-target-branch", "", "brain scheduler target branch")
+	brainInitiatedByFlag := fs.String("brain-initiated-by", "", "brain scheduler initiator")
 	if err := fs.Parse(args[1:]); err != nil {
 		return 2
+	}
+	launchMeta := autoRunLaunchMetadata{
+		PlanID:       *brainPlanFlag,
+		ItemID:       *brainItemFlag,
+		TargetBranch: *brainTargetBranchFlag,
+		InitiatedBy:  *brainInitiatedByFlag,
 	}
 
 	dbPath, err := flowDBPath()
@@ -300,7 +323,7 @@ func cmdAutoExec(args []string) int {
 		if task.Model.Valid && task.Model.String != "" {
 			requestedModel = task.Model.String
 		}
-		run := newAutoBrainRun(task, familySlug, runID, provider, permissionMode, requestedModel, model, *withInstr, "", playbookSlug)
+		run := newAutoBrainRun(task, familySlug, runID, provider, permissionMode, requestedModel, model, *withInstr, "", playbookSlug, launchMeta)
 		run.Status = "error"
 		run.FinishedAt = sql.NullString{String: now, Valid: true}
 		run.OutputJSON, run.EvidenceJSON, run.ErrorText = autoBrainRunResult(run, task, "error", fmt.Errorf("task %q has no session_id; cannot run headlessly", slug))
@@ -352,7 +375,7 @@ func cmdAutoExec(args []string) int {
 		if !errors.Is(err, sql.ErrNoRows) {
 			fmt.Fprintf(os.Stderr, "warning: load brain run %q: %v\n", runID, err)
 		}
-		run = newAutoBrainRun(task, familySlug, runID, provider, permissionMode, requestedModel, model, *withInstr, sessionID, playbookSlug)
+		run = newAutoBrainRun(task, familySlug, runID, provider, permissionMode, requestedModel, model, *withInstr, sessionID, playbookSlug, launchMeta)
 	} else {
 		run.FamilySlug = familySlug
 		run.TaskSlug = task.Slug
@@ -368,11 +391,12 @@ func cmdAutoExec(args []string) int {
 			run.ResolvedModel = sql.NullString{String: model, Valid: true}
 		}
 		if !run.InputSummary.Valid || strings.TrimSpace(run.InputSummary.String) == "" {
-			run.InputSummary = sql.NullString{String: autoBrainRunInputSummary(task, provider, requestedModel, model, permissionMode, *withInstr, playbookSlug), Valid: true}
+			run.InputSummary = sql.NullString{String: autoBrainRunInputSummary(task, provider, requestedModel, model, permissionMode, *withInstr, playbookSlug, launchMeta), Valid: true}
 		}
 		if !run.SessionID.Valid && sessionID != "" {
 			run.SessionID = sql.NullString{String: sessionID, Valid: true}
 		}
+		applyAutoBrainRunMetadata(run, launchMeta)
 		if run.CreatedAt == "" {
 			run.CreatedAt = flowdb.NowISO()
 		}

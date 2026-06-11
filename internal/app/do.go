@@ -70,6 +70,10 @@ func cmdDo(args []string) int {
 	auto := fs.Bool("auto", false, "run headlessly in the background (no tab, no human; Claude or Codex). The session self-completes via `flow done`")
 	withInstr := fs.String("with", "", "one-off instruction appended to the autonomous prompt (requires --auto)")
 	withFile := fs.String("with-file", "", "file whose contents are appended to the autonomous prompt (requires --auto)")
+	brainPlanFlag := fs.String("brain-plan", "", "brain plan id for scheduler attribution (requires --auto)")
+	brainItemFlag := fs.String("brain-item", "", "brain plan item id for scheduler attribution (requires --auto)")
+	brainTargetBranchFlag := fs.String("brain-target-branch", "", "brain scheduler target branch (requires --auto)")
+	brainInitiatedByFlag := fs.String("brain-initiated-by", "", "brain scheduler initiator (requires --auto)")
 	// Two-pass parse so the slug positional may appear before OR after
 	// the flags: first absorb any leading flags, then take the next
 	// non-flag as the slug, then absorb any trailing flags.
@@ -99,6 +103,16 @@ func cmdDo(args []string) int {
 	}
 	if (*withInstr != "" || *withFile != "") && !*auto {
 		fmt.Fprintln(os.Stderr, "error: --with/--with-file currently require --auto")
+		return 2
+	}
+	launchMeta := autoRunLaunchMetadata{
+		PlanID:       *brainPlanFlag,
+		ItemID:       *brainItemFlag,
+		TargetBranch: *brainTargetBranchFlag,
+		InitiatedBy:  *brainInitiatedByFlag,
+	}
+	if launchMeta.hasAny() && !*auto {
+		fmt.Fprintln(os.Stderr, "error: --brain-* scheduler attribution flags require --auto")
 		return 2
 	}
 	if *withInstr != "" && *withFile != "" {
@@ -506,11 +520,11 @@ func cmdDo(args []string) int {
 		if task.Model.Valid && task.Model.String != "" {
 			requestedModel = task.Model.String
 		}
-		run := newAutoBrainRun(task, familySlug, runID, provider, permissionMode, requestedModel, sessionModel, injectionText, sessionID, playbookSlug)
+		run := newAutoBrainRun(task, familySlug, runID, provider, permissionMode, requestedModel, sessionModel, injectionText, sessionID, playbookSlug, launchMeta)
 		if err := flowdb.UpsertBrainRun(db, run); err != nil {
 			fmt.Fprintf(os.Stderr, "warning: record brain run start: %v\n", err)
 		}
-		pid, logPath, err := launchAutoRun(task, runID, root, cwd, provider, permissionMode, sessionModel, injectionText)
+		pid, logPath, err := launchAutoRun(task, runID, root, cwd, provider, permissionMode, sessionModel, injectionText, launchMeta)
 		if err != nil {
 			now := flowdb.NowISO()
 			run.Status = "error"

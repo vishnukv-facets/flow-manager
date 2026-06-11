@@ -444,7 +444,7 @@ func TestE2EAutoRunRoundtrip(t *testing.T) {
 	var launchedSlug, launchedRunID, launchedLog string
 	tabCount := 0
 	oldLauncher := autoLauncher
-	autoLauncher = func(slug, runID, workDir, logPath, provider, permissionMode, model, injection string, env []string) (int, error) {
+	autoLauncher = func(slug, runID, workDir, logPath, provider, permissionMode, model, injection string, meta autoRunLaunchMetadata, env []string) (int, error) {
 		launchedSlug = slug
 		launchedRunID = runID
 		launchedLog = logPath
@@ -594,7 +594,7 @@ func TestE2ECodexAutoRunRoundtrip(t *testing.T) {
 	const orchestratorModel = "gpt-orchestrated-model"
 	var launchedSlug, launchedProvider, launchedPermission, launchedModel string
 	oldLauncher := autoLauncher
-	autoLauncher = func(slug, runID, workDir, logPath, provider, permissionMode, model, injection string, env []string) (int, error) {
+	autoLauncher = func(slug, runID, workDir, logPath, provider, permissionMode, model, injection string, meta autoRunLaunchMetadata, env []string) (int, error) {
 		launchedSlug = slug
 		launchedProvider = provider
 		launchedPermission = permissionMode

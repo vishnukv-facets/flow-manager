@@ -60,6 +60,10 @@ func (s *Server) handleBrainPlanRoute(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, plan)
 		return
 	}
+	if len(parts) == 2 && parts[1] == "schedule" {
+		s.handleBrainPlanSchedule(w, r, plan)
+		return
+	}
 	if r.Method != http.MethodPost {
 		w.WriteHeader(http.StatusMethodNotAllowed)
 		return
@@ -73,6 +77,8 @@ func (s *Server) handleBrainPlanRoute(w http.ResponseWriter, r *http.Request) {
 		s.cancelBrainPlan(w, plan)
 	case "execute":
 		s.executeBrainPlan(w, plan)
+	case "schedule":
+		s.handleBrainPlanSchedule(w, r, plan)
 	default:
 		http.NotFound(w, r)
 	}
