@@ -84,6 +84,28 @@ CREATE TABLE IF NOT EXISTS tasks (
     CHECK (status IN ('backlog','done') OR session_id IS NOT NULL OR (session_provider = 'codex' AND status = 'in-progress'))
 );
 
+CREATE TABLE IF NOT EXISTS brain_plans (
+    id             TEXT PRIMARY KEY,
+    title          TEXT NOT NULL,
+    query          TEXT NOT NULL DEFAULT '',
+    summary        TEXT NOT NULL DEFAULT '',
+    source         TEXT NOT NULL DEFAULT '',
+    status         TEXT NOT NULL DEFAULT 'draft' CHECK (status IN ('draft','approved','executing','blocked','completed','cancelled','rejected','deferred','failed')),
+    project_slug   TEXT REFERENCES projects(slug),
+    work_dir       TEXT,
+    branch_policy  TEXT,
+    error          TEXT,
+    approved_at    TEXT,
+    executed_at    TEXT,
+    completed_at   TEXT,
+    cancelled_at   TEXT,
+    rejected_at    TEXT,
+    blocked_at     TEXT,
+    created_at     TEXT NOT NULL,
+    updated_at     TEXT NOT NULL,
+    plan_json      TEXT NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS workdirs (
     path          TEXT PRIMARY KEY,
     name          TEXT,
@@ -356,6 +378,9 @@ CREATE INDEX IF NOT EXISTS idx_steering_trace_disposition_created_id ON steering
 CREATE INDEX IF NOT EXISTS idx_steering_trace_source_created_id ON steering_trace(source, created_at DESC, id DESC);
 CREATE INDEX IF NOT EXISTS idx_steering_trace_disposition_source_created_id ON steering_trace(disposition, source, created_at DESC, id DESC);
 CREATE INDEX IF NOT EXISTS idx_steering_trace_funnel ON steering_trace(created_at, disposition, stage_reached);
+CREATE INDEX IF NOT EXISTS idx_brain_plans_status_updated ON brain_plans(status, updated_at DESC);
+CREATE INDEX IF NOT EXISTS idx_brain_plans_created ON brain_plans(created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_brain_plans_project ON brain_plans(project_slug);
 CREATE INDEX IF NOT EXISTS idx_search_docs_scope ON search_docs(scope);
 CREATE INDEX IF NOT EXISTS idx_search_docs_entity ON search_docs(entity_type, entity_slug);
 CREATE INDEX IF NOT EXISTS idx_attention_feed_status ON attention_feed(status);

@@ -79,7 +79,7 @@ func TestGitHubManifestCreateURL_PersonalAndOrg(t *testing.T) {
 }
 
 func TestConvertManifest_ParsesCredentials(t *testing.T) {
-	stub := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	useMockHTTPTransport(t, func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/app-manifests/the-code/conversions" || r.Method != http.MethodPost {
 			t.Errorf("unexpected request %s %s", r.Method, r.URL.Path)
 		}
@@ -90,9 +90,8 @@ func TestConvertManifest_ParsesCredentials(t *testing.T) {
 			"pem": "-----BEGIN RSA PRIVATE KEY-----\nMII...\n-----END RSA PRIVATE KEY-----\n",
 			"html_url": "https://github.com/apps/flow-dev"
 		}`))
-	}))
-	defer stub.Close()
-	t.Setenv("FLOW_GH_API_BASE_URL", stub.URL)
+	})
+	t.Setenv("FLOW_GH_API_BASE_URL", "https://github.test")
 
 	conv, err := newGitHubSetupAPI().convertManifest(t.Context(), "the-code")
 	if err != nil {
@@ -107,12 +106,11 @@ func TestConvertManifest_ParsesCredentials(t *testing.T) {
 }
 
 func TestConvertManifest_ErrorOnNon2xx(t *testing.T) {
-	stub := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	useMockHTTPTransport(t, func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusUnprocessableEntity)
 		_, _ = w.Write([]byte(`{"message":"Code is invalid or expired"}`))
-	}))
-	defer stub.Close()
-	t.Setenv("FLOW_GH_API_BASE_URL", stub.URL)
+	})
+	t.Setenv("FLOW_GH_API_BASE_URL", "https://github.test")
 
 	if _, err := newGitHubSetupAPI().convertManifest(t.Context(), "bad"); err == nil {
 		t.Error("expected error on 422")
@@ -170,16 +168,15 @@ func TestHandleGitHubSetupCreateApp_ReturnsManifestAndState(t *testing.T) {
 
 func TestHandleGitHubSetupCallback_ConvertsAndPersists(t *testing.T) {
 	srv, _ := githubSetupTestServer(t)
-	stub := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	useMockHTTPTransport(t, func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusCreated)
 		_, _ = w.Write([]byte(`{
 			"id": 99, "slug": "flow-dev", "client_id": "Iv1.cid",
 			"client_secret": "cs", "webhook_secret": "wh", "pem": "PEMDATA",
 			"html_url": "https://github.com/apps/flow-dev"
 		}`))
-	}))
-	defer stub.Close()
-	t.Setenv("FLOW_GH_API_BASE_URL", stub.URL)
+	})
+	t.Setenv("FLOW_GH_API_BASE_URL", "https://github.test")
 
 	// Begin the flow to obtain a valid state nonce.
 	createRec := httptest.NewRecorder()

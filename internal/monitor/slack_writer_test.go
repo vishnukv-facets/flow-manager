@@ -2,11 +2,9 @@ package monitor
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"io"
 	"net/http"
-	"net/http/httptest"
 	"strings"
 	"testing"
 )
@@ -20,30 +18,29 @@ type captureRequest struct {
 	Body string
 }
 
-func enabledWriter(t *testing.T, handler http.HandlerFunc) (*SlackWriter, *[]captureRequest, func()) {
+func enabledWriter(t *testing.T, respond func(*http.Request) *http.Response) (*SlackWriter, *[]captureRequest, func()) {
 	t.Helper()
 	var captured []captureRequest
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	client := &http.Client{Transport: roundTripperFunc(func(r *http.Request) (*http.Response, error) {
 		body, _ := io.ReadAll(r.Body)
 		captured = append(captured, captureRequest{Path: r.URL.Path, Body: string(body)})
-		handler(w, r)
-	}))
+		if respond != nil {
+			return respond(r), nil
+		}
+		return newHTTPResponse(http.StatusOK, `{"ok":true}`), nil
+	})}
 	writer := &SlackWriter{
-		Token:   "xoxp-test",
-		BaseURL: srv.URL,
-		Enabled: true,
+		Token:      "xoxp-test",
+		BaseURL:    "https://slack.test",
+		Enabled:    true,
+		HTTPClient: client,
 	}
-	return writer, &captured, srv.Close
+	return writer, &captured, func() {}
 }
 
 func TestSlackWriterDisabledIsNoOp(t *testing.T) {
-	// A disabled writer must NOT make an HTTP call regardless of args. We
-	// point BaseURL at a server that panics if hit, so any leak is loud.
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		t.Fatalf("unexpected HTTP call on disabled writer: %s", r.URL.Path)
-	}))
-	defer srv.Close()
-	w := &SlackWriter{Token: "xoxp-test", BaseURL: srv.URL, Enabled: false}
+	// A disabled writer must NOT make an HTTP call regardless of args.
+	w := &SlackWriter{Token: "xoxp-test", BaseURL: "https://slack.test", Enabled: false}
 	if err := w.PostMessage(context.Background(), "C1", "1.1", "hello"); err != nil {
 		t.Errorf("disabled PostMessage err = %v, want nil", err)
 	}
@@ -56,9 +53,10 @@ func TestSlackWriterDisabledIsNoOp(t *testing.T) {
 }
 
 func TestSlackWriterPostMessageToDMSucceeds(t *testing.T) {
-	w, captured, cleanup := enabledWriter(t, func(rw http.ResponseWriter, r *http.Request) {
-		rw.Header().Set("Content-Type", "application/json")
-		_ = json.NewEncoder(rw).Encode(map[string]any{"ok": true})
+	w, captured, cleanup := enabledWriter(t, func(r *http.Request) *http.Response {
+		resp := newHTTPResponse(http.StatusOK, `{"ok":true}`)
+		resp.Header.Set("Content-Type", "application/json")
+		return resp
 	})
 	defer cleanup()
 
@@ -84,11 +82,7 @@ func TestSlackWriterPostMessageToDMSucceeds(t *testing.T) {
 func TestSlackWriterRefusesBroadcastToChannel(t *testing.T) {
 	// Channel ID prefix C → public channel. Without thread_ts the safety
 	// guard must short-circuit before any HTTP call.
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		t.Fatalf("safety guard failed: HTTP call made to %s", r.URL.Path)
-	}))
-	defer srv.Close()
-	w := &SlackWriter{Token: "xoxp-test", BaseURL: srv.URL, Enabled: true}
+	w := &SlackWriter{Token: "xoxp-test", BaseURL: "https://slack.test", Enabled: true}
 	err := w.PostMessage(context.Background(), "C42", "", "broadcast attempt")
 	if !errors.Is(err, ErrChannelBroadcast) {
 		t.Fatalf("err = %v, want ErrChannelBroadcast", err)
@@ -96,9 +90,10 @@ func TestSlackWriterRefusesBroadcastToChannel(t *testing.T) {
 }
 
 func TestSlackWriterPostsToChannelWithThreadTS(t *testing.T) {
-	w, captured, cleanup := enabledWriter(t, func(rw http.ResponseWriter, r *http.Request) {
-		rw.Header().Set("Content-Type", "application/json")
-		_ = json.NewEncoder(rw).Encode(map[string]any{"ok": true})
+	w, captured, cleanup := enabledWriter(t, func(r *http.Request) *http.Response {
+		resp := newHTTPResponse(http.StatusOK, `{"ok":true}`)
+		resp.Header.Set("Content-Type", "application/json")
+		return resp
 	})
 	defer cleanup()
 
@@ -115,9 +110,10 @@ func TestSlackWriterPostsToChannelWithThreadTS(t *testing.T) {
 }
 
 func TestSlackWriterPostEphemeralTargetsUserInThread(t *testing.T) {
-	w, captured, cleanup := enabledWriter(t, func(rw http.ResponseWriter, r *http.Request) {
-		rw.Header().Set("Content-Type", "application/json")
-		_ = json.NewEncoder(rw).Encode(map[string]any{"ok": true})
+	w, captured, cleanup := enabledWriter(t, func(r *http.Request) *http.Response {
+		resp := newHTTPResponse(http.StatusOK, `{"ok":true}`)
+		resp.Header.Set("Content-Type", "application/json")
+		return resp
 	})
 	defer cleanup()
 
@@ -139,11 +135,7 @@ func TestSlackWriterPostEphemeralTargetsUserInThread(t *testing.T) {
 }
 
 func TestSlackWriterMissingTokenReturnsErrNoToken(t *testing.T) {
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		t.Fatalf("HTTP call should not be made when token is empty")
-	}))
-	defer srv.Close()
-	w := &SlackWriter{Token: "", BaseURL: srv.URL, Enabled: true}
+	w := &SlackWriter{Token: "", BaseURL: "https://slack.test", Enabled: true}
 	err := w.PostMessage(context.Background(), "D1", "", "hi")
 	if !errors.Is(err, ErrNoToken) {
 		t.Fatalf("err = %v, want ErrNoToken", err)
@@ -166,9 +158,10 @@ func TestNewSlackWriterPrefersExplicitWriteToken(t *testing.T) {
 }
 
 func TestSlackWriterRateLimitedReturnsRetryError(t *testing.T) {
-	w, _, cleanup := enabledWriter(t, func(rw http.ResponseWriter, r *http.Request) {
-		rw.Header().Set("Retry-After", "30")
-		rw.WriteHeader(http.StatusTooManyRequests)
+	w, _, cleanup := enabledWriter(t, func(r *http.Request) *http.Response {
+		resp := newHTTPResponse(http.StatusTooManyRequests, "")
+		resp.Header.Set("Retry-After", "30")
+		return resp
 	})
 	defer cleanup()
 	err := w.PostMessage(context.Background(), "D1", "", "hi")
@@ -180,9 +173,10 @@ func TestSlackWriterRateLimitedReturnsRetryError(t *testing.T) {
 func TestSlackWriterAddReactionStripsColons(t *testing.T) {
 	// Slack's reactions.add rejects ":eyes:" — wants "eyes". The writer
 	// normalizes both forms so callers don't have to.
-	w, captured, cleanup := enabledWriter(t, func(rw http.ResponseWriter, r *http.Request) {
-		rw.Header().Set("Content-Type", "application/json")
-		_ = json.NewEncoder(rw).Encode(map[string]any{"ok": true})
+	w, captured, cleanup := enabledWriter(t, func(r *http.Request) *http.Response {
+		resp := newHTTPResponse(http.StatusOK, `{"ok":true}`)
+		resp.Header.Set("Content-Type", "application/json")
+		return resp
 	})
 	defer cleanup()
 	if err := w.AddReaction(context.Background(), "C1", "1.1", ":eyes:"); err != nil {
@@ -204,9 +198,10 @@ func TestSlackWriterAddReactionTreatsAlreadyReactedAsSuccess(t *testing.T) {
 	// reactions.add returns ok=false + error=already_reacted when the
 	// reaction is already there. We don't want every caller to special-case
 	// that as a non-error.
-	w, _, cleanup := enabledWriter(t, func(rw http.ResponseWriter, r *http.Request) {
-		rw.Header().Set("Content-Type", "application/json")
-		_ = json.NewEncoder(rw).Encode(map[string]any{"ok": false, "error": "already_reacted"})
+	w, _, cleanup := enabledWriter(t, func(r *http.Request) *http.Response {
+		resp := newHTTPResponse(http.StatusOK, `{"ok":false,"error":"already_reacted"}`)
+		resp.Header.Set("Content-Type", "application/json")
+		return resp
 	})
 	defer cleanup()
 	if err := w.AddReaction(context.Background(), "C1", "1.1", "eyes"); err != nil {
@@ -217,9 +212,10 @@ func TestSlackWriterAddReactionTreatsAlreadyReactedAsSuccess(t *testing.T) {
 func TestSlackWriterPostMessageOkFalseSurfacesError(t *testing.T) {
 	// Any other ok=false should surface — caller needs to see invalid_channel,
 	// not_in_channel, missing_scope, etc.
-	w, _, cleanup := enabledWriter(t, func(rw http.ResponseWriter, r *http.Request) {
-		rw.Header().Set("Content-Type", "application/json")
-		_ = json.NewEncoder(rw).Encode(map[string]any{"ok": false, "error": "not_in_channel"})
+	w, _, cleanup := enabledWriter(t, func(r *http.Request) *http.Response {
+		resp := newHTTPResponse(http.StatusOK, `{"ok":false,"error":"not_in_channel"}`)
+		resp.Header.Set("Content-Type", "application/json")
+		return resp
 	})
 	defer cleanup()
 	err := w.PostMessage(context.Background(), "D1", "", "hi")

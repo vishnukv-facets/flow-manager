@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"net/http"
-	"net/http/httptest"
 	"testing"
 )
 
@@ -18,9 +17,9 @@ func prAssignedPayload(number int) string {
 
 // githubDeliveriesStub serves the App hook-deliveries API: a list of two
 // deliveries and their full payloads.
-func githubDeliveriesStub(t *testing.T) *httptest.Server {
+func githubDeliveriesStub(t *testing.T) string {
 	t.Helper()
-	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	useMockHTTPTransport(t, func(w http.ResponseWriter, r *http.Request) {
 		switch {
 		case r.URL.Path == "/app/hook/deliveries" && r.Method == http.MethodGet:
 			_, _ = w.Write([]byte(`[{"id":1,"guid":"g1","event":"pull_request","action":"assigned"},` +
@@ -33,7 +32,8 @@ func githubDeliveriesStub(t *testing.T) *httptest.Server {
 		default:
 			t.Errorf("unexpected request %s %s", r.Method, r.URL.Path)
 		}
-	}))
+	})
+	return "https://github.test"
 }
 
 func TestNewGitHubAppClient_NoAppReturnsNotOK(t *testing.T) {
@@ -45,11 +45,10 @@ func TestNewGitHubAppClient_NoAppReturnsNotOK(t *testing.T) {
 }
 
 func TestBackfillGitHubDeliveries_ReplaysAndDedupes(t *testing.T) {
-	stub := githubDeliveriesStub(t)
-	defer stub.Close()
+	baseURL := githubDeliveriesStub(t)
 	t.Setenv("FLOW_GH_APP_ID", "123")
 	t.Setenv("FLOW_GH_APP_PEM", testRSAKeyPEM(t))
-	t.Setenv("FLOW_GH_API_BASE_URL", stub.URL)
+	t.Setenv("FLOW_GH_API_BASE_URL", baseURL)
 
 	db := dispatcherTestDB(t)
 	var dispatched []GitHubEvent
