@@ -65,9 +65,16 @@ function rankNode(node: BrainGraphNodeView) {
 
 function ownerOrder(owners: BrainGraphOwnerView[], nodes: BrainGraphNodeView[]) {
   const ownerSet = new Set(nodes.map((node) => node.owner_slug || 'unowned'))
-  const ordered = owners.map((owner) => owner.slug).filter((slug) => ownerSet.has(slug))
+  const ordered: string[] = []
+  const orderedSet = new Set<string>()
+  for (const owner of owners) {
+    if (ownerSet.has(owner.slug)) {
+      ordered.push(owner.slug)
+      orderedSet.add(owner.slug)
+    }
+  }
   for (const slug of ownerSet) {
-    if (!ordered.includes(slug)) ordered.push(slug)
+    if (!orderedSet.has(slug)) ordered.push(slug)
   }
   return ordered.length ? ordered : ['unowned']
 }

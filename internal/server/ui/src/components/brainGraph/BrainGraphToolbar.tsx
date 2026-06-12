@@ -34,6 +34,7 @@ export function BrainGraphToolbar({
           <Search size={14} className="dim" />
           <input
             className="input"
+            aria-label="Search Brain Graph"
             placeholder="Search graph..."
             value={q}
             onChange={(event) => onQ(event.target.value)}

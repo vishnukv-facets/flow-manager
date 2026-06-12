@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useMemo, useState } from 'react'
 import { Link } from 'wouter'
 import { AlertTriangle, ArrowUpRight, Boxes, GitBranch, Info, ShieldAlert } from 'lucide-react'
 import { BrainGraphCanvas } from '../components/brainGraph/BrainGraphCanvas'
@@ -50,14 +50,9 @@ export function BrainGraph() {
     [data?.nodes, selectedId],
   )
 
-  useEffect(() => {
-    if (!data || !selectedId) return
-    if (!data.nodes.some((node) => node.id === selectedId)) setSelectedId(null)
-  }, [data, selectedId])
-
   const selectNode = (node: BrainGraphNode) => {
     setSelectedId(node.id)
-    if (node.type !== 'task' || expanded.has(node.id)) return
+    if (node.type !== 'task') return
     setExpanded((prev) => {
       if (prev.has(node.id)) return prev
       const next = new Set(prev)
@@ -98,7 +93,7 @@ export function BrainGraph() {
                 nodes={data.nodes}
                 edges={data.edges}
                 owners={data.owners}
-                selectedId={selectedId}
+                selectedId={selected?.id ?? null}
                 onSelectNode={selectNode}
                 onClearSelection={() => setSelectedId(null)}
               />
