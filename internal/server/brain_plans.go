@@ -499,6 +499,10 @@ func (s *Server) applyBrainTaskMetadata(item *brain.Item, slug, now string, crea
 	if provider != "claude" && provider != "codex" {
 		return fmt.Errorf("item %q has invalid provider %q", item.ID, item.Provider)
 	}
+	harnessName, err := flowdb.NormalizeHarnessName(provider)
+	if err != nil {
+		return fmt.Errorf("item %q harness: %w", item.ID, err)
+	}
 	permissionMode, err := flowdb.NormalizePermissionMode(item.PermissionMode)
 	if err != nil {
 		return fmt.Errorf("item %q permission mode: %w", item.ID, err)
@@ -530,11 +534,11 @@ func (s *Server) applyBrainTaskMetadata(item *brain.Item, slug, now string, crea
 		_, err = s.cfg.DB.Exec(`
 			INSERT INTO tasks (
 				slug, name, project_slug, status, kind, priority, work_dir,
-				permission_mode, model, session_provider, status_changed_at,
+				permission_mode, model, session_provider, harness, status_changed_at,
 				created_at, updated_at
-			) VALUES (?, ?, ?, 'backlog', 'regular', ?, ?, ?, ?, ?, ?, ?, ?)
+			) VALUES (?, ?, ?, 'backlog', 'regular', ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		`,
-			slug, item.Task.Name, flowdb.NullIfEmpty(projectSlug), priority, workDir, permissionMode, flowdb.NullIfEmpty(model), provider, now, now, now,
+			slug, item.Task.Name, flowdb.NullIfEmpty(projectSlug), priority, workDir, permissionMode, flowdb.NullIfEmpty(model), provider, harnessName, now, now, now,
 		)
 		if err != nil {
 			return fmt.Errorf("insert task %s: %w", slug, err)
@@ -557,11 +561,12 @@ func (s *Server) applyBrainTaskMetadata(item *brain.Item, slug, now string, crea
 			permission_mode = ?,
 			model = COALESCE(?, model),
 			session_provider = ?,
+			harness = ?,
 			work_dir = ?,
 			updated_at = ?
 		WHERE slug = ?
 	`,
-		flowdb.NullIfEmpty(projectSlug), permissionMode, flowdb.NullIfEmpty(model), provider, workDir, now, slug,
+		flowdb.NullIfEmpty(projectSlug), permissionMode, flowdb.NullIfEmpty(model), provider, harnessName, workDir, now, slug,
 	)
 	if err != nil {
 		return fmt.Errorf("update task %s: %w", slug, err)

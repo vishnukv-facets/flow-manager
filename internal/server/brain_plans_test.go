@@ -133,6 +133,9 @@ func TestBrainPlanLifecycleAPI(t *testing.T) {
 	if discoverTask.SessionProvider != "codex" {
 		t.Fatalf("discover provider = %q", discoverTask.SessionProvider)
 	}
+	if got := rawBrainTaskHarness(t, db, executed.Items[0].TaskSlug); got != "codex" {
+		t.Fatalf("discover raw harness = %q, want codex", got)
+	}
 	if discoverTask.PermissionMode != "auto" {
 		t.Fatalf("discover permission mode = %q", discoverTask.PermissionMode)
 	}
@@ -153,6 +156,9 @@ func TestBrainPlanLifecycleAPI(t *testing.T) {
 	}
 	if !implementTask.ParentSlug.Valid || implementTask.ParentSlug.String != "support-task" {
 		t.Fatalf("implement parent = %+v", implementTask.ParentSlug)
+	}
+	if got := rawBrainTaskHarness(t, db, executed.Items[1].TaskSlug); got != "codex" {
+		t.Fatalf("implement raw harness = %q, want codex", got)
 	}
 	deps, err := flowdb.TaskStartBlockerFor(db, implementTask)
 	if err != nil {
@@ -262,6 +268,49 @@ func TestBrainPlanRejectCancelAndInvalidDependency(t *testing.T) {
 	}
 }
 
+func TestBrainPlanMaterializationRefreshesExistingTaskHarness(t *testing.T) {
+	root, db := testRootDB(t)
+	insertBrainProject(t, db, "brain", "Brain feature", root)
+	insertBrainTask(t, db, "existing-brain-task", "Existing brain task", "backlog", "medium", root, "brain")
+	if _, err := db.Exec(
+		`UPDATE tasks SET session_provider = 'claude', harness = 'claude' WHERE slug = 'existing-brain-task'`,
+	); err != nil {
+		t.Fatal(err)
+	}
+
+	srv := New(Config{DB: db, FlowRoot: root, Version: "test"}).Handler()
+	plan := mustPostBrainPlan(t, srv, "/api/brain/plans", brain.Plan{
+		Title:  "Refresh existing task",
+		Query:  "Refresh provider metadata for a pre-materialized Brain task",
+		Source: "ask-flow",
+		Items: []brain.Item{{
+			ID:             "refresh",
+			Kind:           brain.ItemKindTask,
+			Title:          "Refresh existing task",
+			Provider:       "codex",
+			PermissionMode: "auto",
+			Risk:           "low",
+			Task: &brain.TaskSpec{
+				Slug: "existing-brain-task",
+				Name: "Existing brain task",
+			},
+		}},
+	}, http.StatusCreated)
+	mustPostBrainPlanAction(t, srv, plan.ID, "approve", http.StatusOK)
+	mustPostBrainPlanAction(t, srv, plan.ID, "execute", http.StatusOK)
+
+	task, err := flowdb.GetTask(db, "existing-brain-task")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if task.SessionProvider != "codex" {
+		t.Fatalf("session provider = %q, want codex", task.SessionProvider)
+	}
+	if got := rawBrainTaskHarness(t, db, "existing-brain-task"); got != "codex" {
+		t.Fatalf("raw harness = %q, want refreshed codex", got)
+	}
+}
+
 func mustPostBrainPlan(t *testing.T, handler http.Handler, path string, plan brain.Plan, wantStatus int) brain.Plan {
 	t.Helper()
 	body, err := json.Marshal(plan)
@@ -329,4 +378,16 @@ func insertBrainTask(t *testing.T, db *sql.DB, slug, name, status, priority, wd,
 	); err != nil {
 		t.Fatalf("insert task: %v", err)
 	}
+}
+
+func rawBrainTaskHarness(t *testing.T, db *sql.DB, slug string) string {
+	t.Helper()
+	var harness sql.NullString
+	if err := db.QueryRow(`SELECT harness FROM tasks WHERE slug = ?`, slug).Scan(&harness); err != nil {
+		t.Fatalf("select harness for %s: %v", slug, err)
+	}
+	if !harness.Valid {
+		return ""
+	}
+	return harness.String
 }
