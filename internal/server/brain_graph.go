@@ -421,7 +421,7 @@ func brainGraphTaskNode(task *flowdb.Task, ownerSlug string, tags []string, filt
 			ID:   task.Slug,
 		},
 		Badges:  append([]string(nil), tags...),
-		Actions: []string{"open_session", "send_event", "seed"},
+		Actions: []string{"open_session"},
 		Metadata: map[string]string{
 			"kind": task.Kind,
 		},
@@ -860,10 +860,10 @@ func listBrainGraphDependencies(db *sql.DB) ([]brainGraphDependency, error) {
 func defaultBrainGraphActions() []BrainGraphActionSpec {
 	return []BrainGraphActionSpec{
 		{Key: "open_session", Label: "Open session", Enabled: true},
-		{Key: "send_event", Label: "Send event", Enabled: true},
-		{Key: "seed", Label: "Seed input", Enabled: true},
+		{Key: "send_event", Label: "Send event", Enabled: false, DisabledReason: "Session event injection is planned for the next Brain Graph task."},
+		{Key: "seed", Label: "Seed input", Enabled: false, DisabledReason: "Session seeding is planned for the next Brain Graph task."},
 		{Key: "retry", Label: "Retry", Enabled: true},
-		{Key: "pause", Label: "Pause", Enabled: true},
+		{Key: "pause", Label: "Pause", Enabled: false, DisabledReason: "No safe persisted stop primitive is available for Brain Graph runs yet."},
 		{Key: "approve", Label: "Approve", Risky: true, Enabled: true},
 	}
 }

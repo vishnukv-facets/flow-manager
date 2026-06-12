@@ -79,6 +79,21 @@ func GetBrainPolicy(db *sql.DB) (BrainPolicy, error) {
 }
 
 func SetBrainPolicyMode(db *sql.DB, action, mode, now string) error {
+	return setBrainPolicyMode(db, action, mode, now)
+}
+
+func SetBrainPolicyModeTx(tx *sql.Tx, action, mode, now string) error {
+	if tx == nil {
+		return errors.New("brain policy transaction is nil")
+	}
+	return setBrainPolicyMode(tx, action, mode, now)
+}
+
+type brainPolicyExecer interface {
+	Exec(query string, args ...any) (sql.Result, error)
+}
+
+func setBrainPolicyMode(exec brainPolicyExecer, action, mode, now string) error {
 	action = normalizeBrainPolicyAction(action)
 	mode = strings.ToLower(strings.TrimSpace(mode))
 	if !isBrainRiskyAction(action) {
@@ -91,7 +106,7 @@ func SetBrainPolicyMode(db *sql.DB, action, mode, now string) error {
 	if now == "" {
 		now = NowISO()
 	}
-	_, err := db.Exec(
+	_, err := exec.Exec(
 		`INSERT INTO brain_policy (action, mode, updated_at) VALUES (?, ?, ?)
 		 ON CONFLICT(action) DO UPDATE SET
 		     mode = excluded.mode,
@@ -120,6 +135,17 @@ type BrainActionAudit struct {
 const brainActionAuditCols = "id, action, target_type, target_id, actor, policy, evidence_json, result, error_text, created_at"
 
 func InsertBrainActionAudit(db *sql.DB, audit *BrainActionAudit) error {
+	return insertBrainActionAudit(db, audit)
+}
+
+func InsertBrainActionAuditTx(tx *sql.Tx, audit *BrainActionAudit) error {
+	if tx == nil {
+		return errors.New("brain action audit transaction is nil")
+	}
+	return insertBrainActionAudit(tx, audit)
+}
+
+func insertBrainActionAudit(exec brainPolicyExecer, audit *BrainActionAudit) error {
 	if audit == nil {
 		return errors.New("brain action audit is nil")
 	}
@@ -150,7 +176,7 @@ func InsertBrainActionAudit(db *sql.DB, audit *BrainActionAudit) error {
 	if strings.TrimSpace(audit.CreatedAt) == "" {
 		audit.CreatedAt = NowISO()
 	}
-	_, err := db.Exec(
+	_, err := exec.Exec(
 		`INSERT INTO brain_action_audit (
 			id, action, target_type, target_id, actor, policy, evidence_json, result, error_text, created_at
 		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,

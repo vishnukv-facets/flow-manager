@@ -81,10 +81,20 @@ func (s *Server) runBrainGraphAction(req BrainGraphActionRequest) (BrainGraphAct
 		base.Message = resp.Message
 		base.Output = resp.Output
 		base.ActionResponse = &resp
+		if resp.OK {
+			audit, auditErr := s.insertBrainGraphActionAudit(req.Action, "task", node.TaskSlug, req.Actor, "operator", "opened", brainGraphOpenSessionEvidence(req, node, resp, status), "")
+			base.Audit = audit
+			if auditErr != nil {
+				base.OK = false
+				base.Message = auditErr.Error()
+				return base, http.StatusInternalServerError
+			}
+			s.publishUIChange("brain-graph")
+		}
 		return base, status
-	case "retry", "trigger_auto":
-		if node.TaskSlug == "" || (node.Type != "task" && !strings.HasSuffix(node.Type, "_run")) {
-			base.Message = req.Action + " is available for task or run nodes with a task slug"
+	case "retry":
+		if node.TaskSlug == "" || !strings.HasSuffix(node.Type, "_run") {
+			base.Message = req.Action + " is available for run nodes only"
 			return base, http.StatusBadRequest
 		}
 		return s.runBrainGraphRetryAction(base, req, node)
@@ -110,6 +120,29 @@ func (s *Server) runBrainGraphAction(req BrainGraphActionRequest) (BrainGraphAct
 	}
 }
 
+func brainGraphOpenSessionEvidence(req BrainGraphActionRequest, node brainGraphActionNode, resp actionResponse, status int) map[string]any {
+	bridge := map[string]any{
+		"ok":      resp.OK,
+		"status":  status,
+		"message": resp.Message,
+		"bridge":  resp.Bridge,
+	}
+	if resp.Output != "" {
+		bridge["output"] = resp.Output
+	}
+	if resp.Agent != nil {
+		bridge["agent_provider"] = resp.Agent.Provider
+		bridge["agent_status"] = resp.Agent.Status
+		bridge["agent_runtime_status"] = resp.Agent.RuntimeStatus
+	}
+	return map[string]any{
+		"node_id":   node.ID,
+		"task_slug": node.TaskSlug,
+		"action":    req.Action,
+		"bridge":    bridge,
+	}
+}
+
 func resolveBrainGraphActionNode(db *sql.DB, nodeID string) (brainGraphActionNode, error) {
 	nodeID = strings.TrimSpace(nodeID)
 	switch {
@@ -118,6 +151,9 @@ func resolveBrainGraphActionNode(db *sql.DB, nodeID string) (brainGraphActionNod
 		task, err := flowdb.GetTask(db, slug)
 		if err != nil {
 			return brainGraphActionNode{}, err
+		}
+		if !brainGraphTaskIsActionable(task) {
+			return brainGraphActionNode{}, sql.ErrNoRows
 		}
 		return brainGraphActionNode{
 			ID:       "task:" + task.Slug,
@@ -133,6 +169,9 @@ func resolveBrainGraphActionNode(db *sql.DB, nodeID string) (brainGraphActionNod
 		task, err := flowdb.GetTask(db, run.TaskSlug)
 		if err != nil {
 			return brainGraphActionNode{}, err
+		}
+		if !brainGraphTaskIsActionable(task) {
+			return brainGraphActionNode{}, sql.ErrNoRows
 		}
 		return brainGraphActionNode{
 			ID:       "run:auto:" + task.Slug,
@@ -153,6 +192,9 @@ func resolveBrainGraphActionNode(db *sql.DB, nodeID string) (brainGraphActionNod
 		if err != nil {
 			return brainGraphActionNode{}, err
 		}
+		if !brainGraphTaskIsActionable(task) {
+			return brainGraphActionNode{}, sql.ErrNoRows
+		}
 		return brainGraphActionNode{
 			ID:       "run:" + run.RunID,
 			Type:     brainGraphRunNodeType(run.Role),
@@ -164,6 +206,10 @@ func resolveBrainGraphActionNode(db *sql.DB, nodeID string) (brainGraphActionNod
 	default:
 		return brainGraphActionNode{}, sql.ErrNoRows
 	}
+}
+
+func brainGraphTaskIsActionable(task *flowdb.Task) bool {
+	return task != nil && !task.ArchivedAt.Valid && !task.DeletedAt.Valid
 }
 
 func resolveBrainGraphApprovalActionNode(db *sql.DB, rest, nodeID string) (brainGraphActionNode, error) {
@@ -179,6 +225,9 @@ func resolveBrainGraphApprovalActionNode(db *sql.DB, rest, nodeID string) (brain
 	task, err := flowdb.GetTask(db, taskSlug)
 	if err != nil {
 		return brainGraphActionNode{}, err
+	}
+	if !brainGraphTaskIsActionable(task) {
+		return brainGraphActionNode{}, sql.ErrNoRows
 	}
 	tags, err := flowdb.GetTaskTags(db, task.Slug)
 	if err != nil {
@@ -263,16 +312,36 @@ func (s *Server) runBrainGraphApproveAction(base BrainGraphActionResponse, req B
 		return base, http.StatusConflict
 	}
 	now := flowdb.NowISO()
-	if err := flowdb.SetBrainPolicyMode(s.cfg.DB, node.ApprovalAction, flowdb.BrainPolicyModeAuto, now); err != nil {
-		base.Message = err.Error()
-		return base, http.StatusInternalServerError
-	}
 	evidence["policy_updated_at"] = now
-	audit, auditErr := s.insertBrainGraphActionAudit(node.ApprovalAction, "task", node.TaskSlug, req.Actor, flowdb.BrainPolicyModeAuto, "allowed", evidence, "")
+	audit, auditErr := s.newBrainGraphActionAudit(node.ApprovalAction, "task", node.TaskSlug, req.Actor, flowdb.BrainPolicyModeAuto, "allowed", evidence, "")
 	if auditErr != nil {
 		base.Message = auditErr.Error()
 		return base, http.StatusInternalServerError
 	}
+	tx, err := s.cfg.DB.Begin()
+	if err != nil {
+		base.Message = err.Error()
+		return base, http.StatusInternalServerError
+	}
+	committed := false
+	defer func() {
+		if !committed {
+			_ = tx.Rollback()
+		}
+	}()
+	if err := flowdb.SetBrainPolicyModeTx(tx, node.ApprovalAction, flowdb.BrainPolicyModeAuto, now); err != nil {
+		base.Message = err.Error()
+		return base, http.StatusInternalServerError
+	}
+	if err := flowdb.InsertBrainActionAuditTx(tx, audit); err != nil {
+		base.Message = err.Error()
+		return base, http.StatusInternalServerError
+	}
+	if err := tx.Commit(); err != nil {
+		base.Message = err.Error()
+		return base, http.StatusInternalServerError
+	}
+	committed = true
 	policy, err := flowdb.GetBrainPolicy(s.cfg.DB)
 	if err != nil {
 		base.Message = err.Error()
@@ -282,12 +351,25 @@ func (s *Server) runBrainGraphApproveAction(base BrainGraphActionResponse, req B
 	base.OK = true
 	base.Message = "approved " + node.ApprovalAction + " for autonomous Brain actions"
 	base.Policy = &policyView
-	base.Audit = audit
+	auditView := brainGraphAuditViews([]*flowdb.BrainActionAudit{audit})[0]
+	base.Audit = &auditView
 	s.publishUIChange("brain-graph")
 	return base, http.StatusOK
 }
 
 func (s *Server) insertBrainGraphActionAudit(action, targetType, targetID, actor, policy, result string, evidence map[string]any, errorText string) (*BrainGraphAuditView, error) {
+	audit, err := s.newBrainGraphActionAudit(action, targetType, targetID, actor, policy, result, evidence, errorText)
+	if err != nil {
+		return nil, err
+	}
+	if err := flowdb.InsertBrainActionAudit(s.cfg.DB, audit); err != nil {
+		return nil, err
+	}
+	view := brainGraphAuditViews([]*flowdb.BrainActionAudit{audit})[0]
+	return &view, nil
+}
+
+func (s *Server) newBrainGraphActionAudit(action, targetType, targetID, actor, policy, result string, evidence map[string]any, errorText string) (*flowdb.BrainActionAudit, error) {
 	raw, err := json.Marshal(evidence)
 	if err != nil {
 		return nil, fmt.Errorf("encode audit evidence: %w", err)
@@ -309,9 +391,5 @@ func (s *Server) insertBrainGraphActionAudit(action, targetType, targetID, actor
 	if strings.TrimSpace(errorText) != "" {
 		audit.ErrorText = sql.NullString{String: strings.TrimSpace(errorText), Valid: true}
 	}
-	if err := flowdb.InsertBrainActionAudit(s.cfg.DB, audit); err != nil {
-		return nil, err
-	}
-	view := brainGraphAuditViews([]*flowdb.BrainActionAudit{audit})[0]
-	return &view, nil
+	return audit, nil
 }

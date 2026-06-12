@@ -45,11 +45,15 @@ func BuildBrainGraphNodeDetail(db *sql.DB, root, nodeID string) (BrainGraphNodeD
 		if err != nil {
 			return BrainGraphNodeDetail{}, err
 		}
+		audits, err := flowdb.ListBrainActionAudit(db, "task", task.Slug, 10)
+		if err != nil {
+			return BrainGraphNodeDetail{}, err
+		}
 		return BrainGraphNodeDetail{
 			ID:    "task:" + task.Slug,
 			Type:  "task",
 			Task:  brainGraphTaskDetail(root, task),
-			Audit: []BrainGraphAuditView{},
+			Audit: brainGraphAuditViews(audits),
 		}, nil
 	case strings.HasPrefix(nodeID, "run:auto:"):
 		slug := strings.TrimPrefix(nodeID, "run:auto:")
@@ -122,11 +126,15 @@ func brainGraphRunDetail(db *sql.DB, runID, nodeID string) (BrainGraphNodeDetail
 		detail.TaskName = &task.Name
 		detail.TaskStatus = &task.Status
 	}
+	audits, err := flowdb.ListBrainActionAudit(db, "task", run.TaskSlug, 10)
+	if err != nil {
+		return BrainGraphNodeDetail{}, err
+	}
 	return BrainGraphNodeDetail{
 		ID:    nodeID,
 		Type:  brainGraphRunNodeType(run.Role),
 		Run:   &detail,
-		Audit: []BrainGraphAuditView{},
+		Audit: brainGraphAuditViews(audits),
 	}, nil
 }
 
