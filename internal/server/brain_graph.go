@@ -3,6 +3,7 @@ package server
 import (
 	"database/sql"
 	"net/http"
+	"net/url"
 	"sort"
 	"strings"
 	"time"
@@ -115,6 +116,10 @@ func BuildBrainGraph(db *sql.DB, root string, filters BrainGraphFilters, now tim
 			})
 		}
 	}
+	if err := appendBrainGraphRunNodes(&view, db, visibleTasks, visible, filters); err != nil {
+		return view, err
+	}
+	appendBrainGraphEvidenceNodes(&view, visibleTasks, visible, tagsByTask, filters)
 	for _, task := range visibleTasks {
 		if !visible[task.Slug] || !task.ParentSlug.Valid || strings.TrimSpace(task.ParentSlug.String) == "" {
 			continue
@@ -319,6 +324,279 @@ func brainGraphTaskNode(task *flowdb.Task, ownerSlug string, tags []string, filt
 			"kind": task.Kind,
 		},
 	}
+}
+
+func appendBrainGraphRunNodes(view *BrainGraphView, db *sql.DB, tasks []*flowdb.Task, visible map[string]bool, filters BrainGraphFilters) error {
+	expandedByTask := make(map[string]bool, len(tasks))
+	rootsByTask := make(map[string]string, len(tasks))
+	runsByRoot := map[string][]*flowdb.BrainRun{}
+	emitted := map[string]bool{}
+
+	for _, task := range tasks {
+		if !visible[task.Slug] {
+			continue
+		}
+		expandedByTask[task.Slug] = brainGraphTaskExpanded(task, filters)
+		root, err := flowdb.TaskFamilyRoot(db, task.Slug)
+		if err != nil {
+			return err
+		}
+		rootsByTask[task.Slug] = root
+		if _, ok := runsByRoot[root]; ok {
+			continue
+		}
+		runs, err := flowdb.ListBrainRunsForFamily(db, root, 50)
+		if err != nil {
+			return err
+		}
+		runsByRoot[root] = runs
+	}
+
+	for _, task := range tasks {
+		if !visible[task.Slug] {
+			continue
+		}
+		for _, run := range runsByRoot[rootsByTask[task.Slug]] {
+			if run == nil || run.TaskSlug != task.Slug {
+				continue
+			}
+			if !expandedByTask[task.Slug] && !brainGraphRunActiveOrFailed(run.Status) {
+				continue
+			}
+			nodeID := brainGraphRunNodeID(run)
+			if emitted[nodeID] {
+				continue
+			}
+			view.Nodes = append(view.Nodes, brainGraphRunNode(run, nodeID))
+			view.Edges = append(view.Edges, BrainGraphEdge{
+				ID:     "run_of:" + task.Slug + ":" + nodeID,
+				Type:   "run_of",
+				Source: "task:" + task.Slug,
+				Target: nodeID,
+			})
+			if brainGraphRunFailed(run.Status) {
+				view.Counts.Failed++
+			}
+			emitted[nodeID] = true
+		}
+	}
+	return nil
+}
+
+func appendBrainGraphEvidenceNodes(view *BrainGraphView, tasks []*flowdb.Task, visible map[string]bool, tagsByTask map[string][]string, filters BrainGraphFilters) {
+	emittedRefs := map[string]bool{}
+	emittedEdges := map[string]bool{}
+	for _, task := range tasks {
+		if !visible[task.Slug] || !brainGraphTaskExpanded(task, filters) {
+			continue
+		}
+		if sessionID := strings.TrimSpace(task.SessionID.String); task.SessionID.Valid && sessionID != "" {
+			nodeID := "transcript:" + task.Slug
+			if !emittedRefs[nodeID] {
+				view.Nodes = append(view.Nodes, BrainGraphNode{
+					ID:       nodeID,
+					Type:     "transcript_ref",
+					TaskSlug: task.Slug,
+					Label:    "Transcript: " + task.Slug,
+					Status:   "available",
+					Ref: &BrainGraphRef{
+						Kind: "transcript",
+						ID:   sessionID,
+					},
+					Metadata: map[string]string{
+						"task_slug":  task.Slug,
+						"session_id": sessionID,
+					},
+				})
+				emittedRefs[nodeID] = true
+			}
+			appendBrainGraphExternalRefEdge(view, emittedEdges, task.Slug, nodeID)
+		}
+		for _, tag := range tagsByTask[task.Slug] {
+			if !brainGraphGitHubTag(tag) {
+				continue
+			}
+			nodeID := brainGraphGitHubRefNodeID(tag)
+			if !emittedRefs[nodeID] {
+				view.Nodes = append(view.Nodes, BrainGraphNode{
+					ID:       nodeID,
+					Type:     "github_ref",
+					TaskSlug: task.Slug,
+					Label:    tag,
+					Status:   "linked",
+					Ref: &BrainGraphRef{
+						Kind: "github",
+						ID:   tag,
+						URL:  brainGraphGitHubRefURL(tag),
+					},
+					Metadata: map[string]string{
+						"task_slug": task.Slug,
+						"tag":       tag,
+					},
+				})
+				emittedRefs[nodeID] = true
+			}
+			appendBrainGraphExternalRefEdge(view, emittedEdges, task.Slug, nodeID)
+		}
+	}
+}
+
+func brainGraphTaskExpanded(task *flowdb.Task, filters BrainGraphFilters) bool {
+	if task == nil {
+		return false
+	}
+	nodeID := "task:" + task.Slug
+	return filters.Expand[nodeID] || filters.Expand[task.Slug]
+}
+
+func brainGraphRunNodeID(run *flowdb.BrainRun) string {
+	if run == nil {
+		return "run:"
+	}
+	if run.Legacy {
+		return "run:auto:" + strings.TrimSpace(run.TaskSlug)
+	}
+	return "run:" + strings.TrimSpace(run.RunID)
+}
+
+func brainGraphRunNode(run *flowdb.BrainRun, nodeID string) BrainGraphNode {
+	metadata := map[string]string{}
+	addMetadata := func(key, value string) {
+		value = strings.TrimSpace(value)
+		if value != "" {
+			metadata[key] = value
+		}
+	}
+	addMetadata("run_id", run.RunID)
+	addMetadata("role", run.Role)
+	if run.Legacy {
+		metadata["legacy"] = "true"
+	}
+	if run.LogPath.Valid {
+		addMetadata("log_path", run.LogPath.String)
+	}
+	if run.SessionID.Valid {
+		addMetadata("session_id", run.SessionID.String)
+	}
+	if run.RequestedModel.Valid {
+		addMetadata("requested_model", run.RequestedModel.String)
+	}
+	if run.RequestedTier.Valid {
+		addMetadata("requested_tier", run.RequestedTier.String)
+	}
+	if run.ResolvedModel.Valid {
+		addMetadata("resolved_model", run.ResolvedModel.String)
+	}
+
+	permissionMode := strings.TrimSpace(run.PermissionMode)
+	if permissionMode == "" {
+		permissionMode = flowdb.DefaultPermissionMode
+	}
+	return BrainGraphNode{
+		ID:             nodeID,
+		Type:           brainGraphRunNodeType(run.Role),
+		TaskSlug:       run.TaskSlug,
+		Label:          brainGraphRunLabel(run),
+		Status:         run.Status,
+		Provider:       run.Provider,
+		PermissionMode: permissionMode,
+		Model:          brainGraphRunModel(run),
+		Ref: &BrainGraphRef{
+			Kind: "brain_run",
+			ID:   run.RunID,
+		},
+		Actions:  []string{"retry", "pause"},
+		Metadata: metadata,
+	}
+}
+
+func brainGraphRunNodeType(role string) string {
+	switch strings.TrimSpace(role) {
+	case "validator":
+		return "validator_run"
+	case "steward":
+		return "steward_run"
+	default:
+		return "worker_run"
+	}
+}
+
+func brainGraphRunLabel(run *flowdb.BrainRun) string {
+	role := strings.TrimSpace(run.Role)
+	if role == "" {
+		role = "worker"
+	}
+	return role + " run: " + run.TaskSlug
+}
+
+func brainGraphRunModel(run *flowdb.BrainRun) string {
+	for _, value := range []sql.NullString{run.ResolvedModel, run.RequestedModel, run.RequestedTier} {
+		if value.Valid && strings.TrimSpace(value.String) != "" {
+			return strings.TrimSpace(value.String)
+		}
+	}
+	return ""
+}
+
+func brainGraphRunActiveOrFailed(status string) bool {
+	switch strings.TrimSpace(status) {
+	case "running", "dead":
+		return true
+	default:
+		return false
+	}
+}
+
+func brainGraphRunFailed(status string) bool {
+	switch strings.TrimSpace(status) {
+	case "dead", "error":
+		return true
+	default:
+		return false
+	}
+}
+
+func brainGraphGitHubTag(tag string) bool {
+	tag = strings.TrimSpace(tag)
+	return strings.HasPrefix(tag, "gh-pr:") || strings.HasPrefix(tag, "gh-issue:")
+}
+
+func brainGraphGitHubRefNodeID(tag string) string {
+	return "github:" + url.PathEscape(flowdb.NormalizeTag(tag))
+}
+
+func brainGraphGitHubRefURL(tag string) string {
+	tag = flowdb.NormalizeTag(tag)
+	kind, rest, ok := strings.Cut(tag, ":")
+	if !ok {
+		return ""
+	}
+	repo, number, ok := strings.Cut(rest, "#")
+	if !ok || strings.TrimSpace(repo) == "" || strings.TrimSpace(number) == "" {
+		return ""
+	}
+	switch kind {
+	case "gh-pr":
+		return "https://github.com/" + repo + "/pull/" + number
+	case "gh-issue":
+		return "https://github.com/" + repo + "/issues/" + number
+	default:
+		return ""
+	}
+}
+
+func appendBrainGraphExternalRefEdge(view *BrainGraphView, emitted map[string]bool, taskSlug, target string) {
+	edgeID := "external_ref:" + taskSlug + ":" + target
+	if emitted[edgeID] {
+		return
+	}
+	view.Edges = append(view.Edges, BrainGraphEdge{
+		ID:     edgeID,
+		Type:   "external_ref",
+		Source: "task:" + taskSlug,
+		Target: target,
+	})
+	emitted[edgeID] = true
 }
 
 func brainGraphTaskSummary(task *flowdb.Task) string {

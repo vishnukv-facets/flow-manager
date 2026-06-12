@@ -186,6 +186,197 @@ func TestBrainGraphAddsParentAndDependencyEdges(t *testing.T) {
 	}
 }
 
+func TestBrainGraphExpandsFailedLegacyAutoRun(t *testing.T) {
+	root, db := testRootDB(t)
+	insertBrainGraphTask(t, db, "worker", "Worker", "backlog", nil)
+	if _, err := db.Exec(
+		`UPDATE tasks
+		 SET session_provider='codex', harness='codex', auto_run_status='dead', auto_run_log='/tmp/worker.log'
+		 WHERE slug='worker'`,
+	); err != nil {
+		t.Fatalf("seed legacy auto run: %v", err)
+	}
+
+	got, err := BuildBrainGraph(db, root, BrainGraphFilters{Expand: map[string]bool{"task:worker": true}}, time.Date(2026, 6, 12, 10, 0, 0, 0, time.FixedZone("IST", 19800)))
+	if err != nil {
+		t.Fatalf("BuildBrainGraph: %v", err)
+	}
+
+	run, ok := graphNodeByID(got, "run:auto:worker")
+	if !ok {
+		t.Fatalf("missing legacy run node: %#v", got.Nodes)
+	}
+	if run.Type != "worker_run" || run.Status != "dead" {
+		t.Fatalf("legacy run node = %#v, want worker_run/dead", run)
+	}
+	if run.Metadata["log_path"] != "/tmp/worker.log" {
+		t.Fatalf("legacy run log_path metadata = %#v, want /tmp/worker.log", run.Metadata)
+	}
+	if !graphHasEdge(got, "run_of", "task:worker", "run:auto:worker") {
+		t.Fatalf("missing run_of edge task:worker -> run:auto:worker: %#v", got.Edges)
+	}
+	if got.Counts.Failed != 1 {
+		t.Fatalf("failed count = %d, want 1", got.Counts.Failed)
+	}
+}
+
+func TestBrainGraphAutoExpandsActiveAndFailedAutoRunsWithoutExplicitExpand(t *testing.T) {
+	root, db := testRootDB(t)
+	insertBrainGraphTask(t, db, "runner", "Runner", "backlog", nil)
+	insertBrainGraphTask(t, db, "dead-worker", "Dead Worker", "backlog", nil)
+	if _, err := db.Exec(
+		`UPDATE tasks SET auto_run_status='running', auto_run_log='/tmp/runner.log' WHERE slug='runner'`,
+	); err != nil {
+		t.Fatalf("seed running auto run: %v", err)
+	}
+	if _, err := db.Exec(
+		`UPDATE tasks SET auto_run_status='dead', auto_run_log='/tmp/dead-worker.log' WHERE slug='dead-worker'`,
+	); err != nil {
+		t.Fatalf("seed dead auto run: %v", err)
+	}
+
+	got, err := BuildBrainGraph(db, root, BrainGraphFilters{}, time.Date(2026, 6, 12, 10, 0, 0, 0, time.FixedZone("IST", 19800)))
+	if err != nil {
+		t.Fatalf("BuildBrainGraph: %v", err)
+	}
+
+	if _, ok := graphNodeByID(got, "run:auto:runner"); !ok {
+		t.Fatalf("missing auto-expanded running run node: %#v", got.Nodes)
+	}
+	if _, ok := graphNodeByID(got, "run:auto:dead-worker"); !ok {
+		t.Fatalf("missing auto-expanded dead run node: %#v", got.Nodes)
+	}
+	if got.Counts.Failed != 1 {
+		t.Fatalf("failed count = %d, want 1", got.Counts.Failed)
+	}
+}
+
+func TestBrainGraphExpandedTaskAddsEvidenceReferences(t *testing.T) {
+	root, db := testRootDB(t)
+	insertBrainGraphTask(t, db, "worker", "Worker", "backlog", nil)
+	if _, err := db.Exec(`UPDATE tasks SET session_id='session-123' WHERE slug='worker'`); err != nil {
+		t.Fatalf("seed session id: %v", err)
+	}
+	for _, tag := range []string{"gh-pr:Facets-cloud/flow-manager#33", "gh-issue:Facets-cloud/flow-manager#123"} {
+		if err := flowdb.AddTaskTag(db, "worker", tag); err != nil {
+			t.Fatalf("AddTaskTag(%s): %v", tag, err)
+		}
+	}
+
+	got, err := BuildBrainGraph(db, root, BrainGraphFilters{Expand: map[string]bool{"task:worker": true}}, time.Date(2026, 6, 12, 10, 0, 0, 0, time.FixedZone("IST", 19800)))
+	if err != nil {
+		t.Fatalf("BuildBrainGraph: %v", err)
+	}
+
+	transcript, ok := graphNodeByID(got, "transcript:worker")
+	if !ok {
+		t.Fatalf("missing transcript node: %#v", got.Nodes)
+	}
+	if transcript.Status != "available" || transcript.Ref == nil || transcript.Ref.Kind != "transcript" || transcript.Ref.ID != "session-123" {
+		t.Fatalf("transcript node = %#v, want available transcript ref", transcript)
+	}
+	if !graphHasEdge(got, "external_ref", "task:worker", "transcript:worker") {
+		t.Fatalf("missing transcript external_ref edge: %#v", got.Edges)
+	}
+	for _, tag := range []string{"gh-pr:Facets-cloud/flow-manager#33", "gh-issue:Facets-cloud/flow-manager#123"} {
+		tag = flowdb.NormalizeTag(tag)
+		nodeID := brainGraphGitHubRefNodeID(tag)
+		node, ok := graphNodeByID(got, nodeID)
+		if !ok {
+			t.Fatalf("missing github reference node %s: %#v", nodeID, got.Nodes)
+		}
+		if node.Status != "linked" || node.Ref == nil || node.Ref.Kind != "github" || node.Ref.ID != tag {
+			t.Fatalf("github reference node = %#v, want linked github ref for %s", node, tag)
+		}
+		if !graphHasEdge(got, "external_ref", "task:worker", nodeID) {
+			t.Fatalf("missing github external_ref edge to %s: %#v", nodeID, got.Edges)
+		}
+	}
+}
+
+func TestBrainGraphExpandsPersistentBrainRuns(t *testing.T) {
+	root, db := testRootDB(t)
+	for _, slug := range []string{"validator-task", "steward-task", "default-task"} {
+		insertBrainGraphTask(t, db, slug, slug, "backlog", nil)
+	}
+	now := "2026-06-12T10:00:00+05:30"
+	runs := []*flowdb.BrainRun{
+		{
+			RunID:          "validator-run-1",
+			FamilySlug:     "validator-task",
+			TaskSlug:       "validator-task",
+			Role:           "validator",
+			Provider:       "codex",
+			PermissionMode: "bypass",
+			Status:         "running",
+			RequestedModel: sql.NullString{String: "gpt-5.4", Valid: true},
+			ResolvedModel:  sql.NullString{String: "gpt-5.4", Valid: true},
+			SessionID:      sql.NullString{String: "validator-session", Valid: true},
+			LogPath:        sql.NullString{String: "/tmp/validator.log", Valid: true},
+			CreatedAt:      now,
+			UpdatedAt:      now,
+		},
+		{
+			RunID:          "steward-run-1",
+			FamilySlug:     "steward-task",
+			TaskSlug:       "steward-task",
+			Role:           "steward",
+			Provider:       "claude",
+			PermissionMode: "auto",
+			Status:         "completed",
+			CreatedAt:      now,
+			UpdatedAt:      now,
+		},
+		{
+			RunID:          "orchestrator-run-1",
+			FamilySlug:     "default-task",
+			TaskSlug:       "default-task",
+			Role:           "orchestrator",
+			Provider:       "claude",
+			PermissionMode: "default",
+			Status:         "completed",
+			CreatedAt:      now,
+			UpdatedAt:      now,
+		},
+	}
+	for _, run := range runs {
+		if err := flowdb.UpsertBrainRun(db, run); err != nil {
+			t.Fatalf("UpsertBrainRun(%s): %v", run.RunID, err)
+		}
+	}
+
+	got, err := BuildBrainGraph(db, root, BrainGraphFilters{Expand: map[string]bool{
+		"task:validator-task": true,
+		"task:steward-task":   true,
+		"task:default-task":   true,
+	}}, time.Date(2026, 6, 12, 10, 0, 0, 0, time.FixedZone("IST", 19800)))
+	if err != nil {
+		t.Fatalf("BuildBrainGraph: %v", err)
+	}
+
+	validator, ok := graphNodeByID(got, "run:validator-run-1")
+	if !ok {
+		t.Fatalf("missing validator run node: %#v", got.Nodes)
+	}
+	if validator.Type != "validator_run" || validator.Provider != "codex" || validator.PermissionMode != "bypass" || validator.Model != "gpt-5.4" {
+		t.Fatalf("validator run node = %#v, want validator metadata", validator)
+	}
+	if validator.Metadata["run_id"] != "validator-run-1" || validator.Metadata["role"] != "validator" || validator.Metadata["session_id"] != "validator-session" || validator.Metadata["log_path"] != "/tmp/validator.log" {
+		t.Fatalf("validator metadata = %#v, want run/session/log/role", validator.Metadata)
+	}
+	if !graphHasEdge(got, "run_of", "task:validator-task", "run:validator-run-1") {
+		t.Fatalf("missing validator run_of edge: %#v", got.Edges)
+	}
+	steward, ok := graphNodeByID(got, "run:steward-run-1")
+	if !ok || steward.Type != "steward_run" {
+		t.Fatalf("steward run node = %#v, ok=%v, want steward_run", steward, ok)
+	}
+	defaultRun, ok := graphNodeByID(got, "run:orchestrator-run-1")
+	if !ok || defaultRun.Type != "worker_run" {
+		t.Fatalf("default role run node = %#v, ok=%v, want worker_run", defaultRun, ok)
+	}
+}
+
 func assertBrainGraphEmptyResponse(t *testing.T, rec *httptest.ResponseRecorder) {
 	t.Helper()
 	if rec.Code != http.StatusOK {
@@ -218,6 +409,15 @@ func graphNodesByTask(view BrainGraphView) map[string]BrainGraphNode {
 		}
 	}
 	return out
+}
+
+func graphNodeByID(view BrainGraphView, id string) (BrainGraphNode, bool) {
+	for _, node := range view.Nodes {
+		if node.ID == id {
+			return node, true
+		}
+	}
+	return BrainGraphNode{}, false
 }
 
 func graphHasEdge(view BrainGraphView, edgeType, source, target string) bool {
