@@ -493,8 +493,16 @@ func cmdDo(args []string) int {
 	if *dangerSkip {
 		permissionMode = "bypass"
 	}
-	if *auto && provider == sessionProviderClaude {
-		permissionMode = "bypass"
+	// Provider adapter: autonomous runs use provider-specific safe defaults.
+	// Claude: bypass (headless, no approval prompts — necessary for unattended execution).
+	// Codex: auto (headless, workspace-write sandbox — safer than bypass).
+	if *auto {
+		switch provider {
+		case sessionProviderClaude:
+			permissionMode = "bypass"
+		case sessionProviderCodex:
+			permissionMode = "auto"
+		}
 	}
 	if changed, err := agenthooks.InstallLocalWithOptions(cwd, agenthooks.InstallOptions{
 		CommandPath: flowCommandPathForSpawn(),

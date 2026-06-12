@@ -4,7 +4,6 @@ import { BrainGraphCanvas } from '../components/brainGraph/BrainGraphCanvas'
 import { BrainGraphInspector } from '../components/brainGraph/BrainGraphInspector'
 import { BrainGraphLegend } from '../components/brainGraph/BrainGraphLegend'
 import { BrainGraphToolbar } from '../components/brainGraph/BrainGraphToolbar'
-import { OwnerBoundary } from '../components/brainGraph/OwnerBoundary'
 import { EmptyState, ErrorNote, Loading } from '../components/ui'
 import { useBrainGraph } from '../lib/query'
 import { useDocumentTitle } from '../lib/useDocumentTitle'
@@ -105,7 +104,6 @@ export function BrainGraph() {
           <div className="brain-main">
             <div className="brain-surface">
               <div className="brain-surface-head">
-                <OwnerBoundary owners={data.owners} selectedOwner={selectedOwner ?? selected?.owner_slug} />
                 <div className="brain-freshness">
                   <span className={`dot ${isFetching ? 'waiting' : 'done'}`} />
                   {isFetching ? 'refreshing' : data.freshness}

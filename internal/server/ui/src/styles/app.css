@@ -6424,6 +6424,26 @@ a.srun-where:hover .srun-chan {
 }
 .brain-canvas .react-flow__edge-path {
   stroke-linecap: round;
+  stroke-linejoin: round;
+}
+.brain-canvas .react-flow__node {
+  transition: opacity 0.16s ease;
+}
+.brain-canvas .react-flow__node.rf-dim {
+  opacity: 0.34;
+}
+.brain-edge-label {
+  position: absolute;
+  padding: 2px 6px;
+  border: 1px solid var(--border);
+  border-radius: var(--r-sm);
+  background: var(--bg-2);
+  color: var(--text-2);
+  font-family: var(--font-mono);
+  font-size: 10px;
+  line-height: 1.3;
+  white-space: nowrap;
+  pointer-events: none;
 }
 .brain-canvas .react-flow__node-ownerGroup {
   cursor: pointer;
