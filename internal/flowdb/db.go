@@ -132,6 +132,25 @@ CREATE TABLE IF NOT EXISTS brain_runs (
     updated_at      TEXT NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS brain_policy (
+    action     TEXT PRIMARY KEY,
+    mode       TEXT NOT NULL CHECK (mode IN ('auto','approval_required')),
+    updated_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS brain_action_audit (
+    id            TEXT PRIMARY KEY,
+    action        TEXT NOT NULL,
+    target_type   TEXT NOT NULL,
+    target_id     TEXT NOT NULL,
+    actor         TEXT NOT NULL,
+    policy        TEXT NOT NULL,
+    evidence_json TEXT NOT NULL DEFAULT '{}',
+    result        TEXT NOT NULL,
+    error_text    TEXT,
+    created_at    TEXT NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS workdirs (
     path          TEXT PRIMARY KEY,
     name          TEXT,
@@ -418,6 +437,7 @@ CREATE INDEX IF NOT EXISTS idx_task_links_from ON task_links(from_slug);
 CREATE INDEX IF NOT EXISTS idx_brain_runs_family_started ON brain_runs(family_slug, started_at DESC, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_brain_runs_task_started ON brain_runs(task_slug, started_at DESC, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_brain_runs_status_updated ON brain_runs(status, updated_at DESC);
+CREATE INDEX IF NOT EXISTS idx_brain_action_audit_target ON brain_action_audit(target_type, target_id, created_at);
 CREATE INDEX IF NOT EXISTS idx_steering_trace_feed ON steering_trace(feed_item_id);
 CREATE INDEX IF NOT EXISTS idx_steering_trace_created ON steering_trace(created_at);
 CREATE INDEX IF NOT EXISTS idx_steering_trace_created_id ON steering_trace(created_at DESC, id DESC);

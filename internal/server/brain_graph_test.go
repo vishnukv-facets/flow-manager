@@ -298,6 +298,101 @@ func TestBrainGraphExpandedTaskAddsEvidenceReferences(t *testing.T) {
 	}
 }
 
+func TestBrainGraphAddsApprovalGateForPRMergePolicy(t *testing.T) {
+	root, db := testRootDB(t)
+	insertBrainGraphOwner(t, db, root, "brain-ui")
+	insertBrainGraphTask(t, db, "ship", "Ship Feature", "backlog", nil)
+	if err := flowdb.AddTaskTag(db, "ship", "owner:brain-ui"); err != nil {
+		t.Fatalf("AddTaskTag(owner): %v", err)
+	}
+	if err := flowdb.AddTaskTag(db, "ship", "gh-pr:Facets-cloud/flow-manager#44"); err != nil {
+		t.Fatalf("AddTaskTag(gh-pr): %v", err)
+	}
+
+	got, err := BuildBrainGraph(db, root, BrainGraphFilters{}, time.Date(2026, 6, 12, 10, 0, 0, 0, time.FixedZone("IST", 19800)))
+	if err != nil {
+		t.Fatalf("BuildBrainGraph: %v", err)
+	}
+
+	node, ok := graphNodeByID(got, "approval:merge:ship")
+	if !ok {
+		t.Fatalf("missing merge approval node: %#v", got.Nodes)
+	}
+	if node.Type != "approval" || node.Status != "approval_required" || node.Ref == nil || node.Ref.Kind != "approval" || node.Actions[0] != "approve" {
+		t.Fatalf("approval node = %#v, want approval_required approve node", node)
+	}
+	if node.Metadata["action"] != "merge" || node.Metadata["policy"] != "approval_required" {
+		t.Fatalf("approval metadata = %#v, want merge approval policy", node.Metadata)
+	}
+	edge, ok := graphEdgeByID(got, "blocks:approval:merge:ship:task:ship")
+	if !ok {
+		t.Fatalf("missing blocks edge for approval gate: %#v", got.Edges)
+	}
+	if edge.Type != "blocks" || edge.Source != "approval:merge:ship" || edge.Target != "task:ship" || edge.Status != "blocked" || edge.Label != "policy gate" {
+		t.Fatalf("blocks edge = %#v, want policy gate blocking task", edge)
+	}
+	if got.Counts.ApprovalNeeded != 1 || got.Counts.Blocked != 1 {
+		t.Fatalf("counts = %#v, want one approval and one blocked", got.Counts)
+	}
+	owner, ok := graphOwnerBySlug(got, "brain-ui")
+	if !ok {
+		t.Fatalf("missing brain-ui owner: %#v", got.Owners)
+	}
+	if owner.ApprovalCount != 1 || owner.BlockedCount != 1 {
+		t.Fatalf("owner counts = %#v, want one approval and one blocked", owner)
+	}
+}
+
+func TestBrainGraphWhitelistedMergeSuppressesApprovalGate(t *testing.T) {
+	root, db := testRootDB(t)
+	insertBrainGraphTask(t, db, "ship", "Ship Feature", "backlog", nil)
+	if err := flowdb.AddTaskTag(db, "ship", "gh-pr:Facets-cloud/flow-manager#44"); err != nil {
+		t.Fatalf("AddTaskTag(gh-pr): %v", err)
+	}
+	if err := flowdb.SetBrainPolicyMode(db, "merge", "auto", "2026-06-12T10:00:00+05:30"); err != nil {
+		t.Fatalf("SetBrainPolicyMode: %v", err)
+	}
+
+	got, err := BuildBrainGraph(db, root, BrainGraphFilters{}, time.Date(2026, 6, 12, 10, 0, 0, 0, time.FixedZone("IST", 19800)))
+	if err != nil {
+		t.Fatalf("BuildBrainGraph: %v", err)
+	}
+
+	if _, ok := graphNodeByID(got, "approval:merge:ship"); ok {
+		t.Fatalf("merge approval node should be suppressed when whitelisted: %#v", got.Nodes)
+	}
+	if got.Counts.ApprovalNeeded != 0 || got.Counts.Blocked != 0 {
+		t.Fatalf("counts = %#v, want no approval gate counts", got.Counts)
+	}
+	if !stringSliceContains(got.Policy.RiskyWhitelist, "merge") {
+		t.Fatalf("RiskyWhitelist = %#v, want merge", got.Policy.RiskyWhitelist)
+	}
+	if stringSliceContains(got.Policy.ApprovalRequired, "merge") {
+		t.Fatalf("ApprovalRequired = %#v, want merge removed", got.Policy.ApprovalRequired)
+	}
+}
+
+func TestBrainGraphExplicitRiskyDeployTagAddsApprovalGate(t *testing.T) {
+	root, db := testRootDB(t)
+	insertBrainGraphTask(t, db, "deploy-prod", "Deploy Prod", "backlog", nil)
+	if err := flowdb.AddTaskTag(db, "deploy-prod", "risky:deploy"); err != nil {
+		t.Fatalf("AddTaskTag(risky:deploy): %v", err)
+	}
+
+	got, err := BuildBrainGraph(db, root, BrainGraphFilters{}, time.Date(2026, 6, 12, 10, 0, 0, 0, time.FixedZone("IST", 19800)))
+	if err != nil {
+		t.Fatalf("BuildBrainGraph: %v", err)
+	}
+
+	node, ok := graphNodeByID(got, "approval:deploy:deploy-prod")
+	if !ok {
+		t.Fatalf("missing deploy approval node: %#v", got.Nodes)
+	}
+	if node.Metadata["action"] != "deploy" {
+		t.Fatalf("approval metadata = %#v, want deploy action", node.Metadata)
+	}
+}
+
 func TestBrainGraphExpandsPersistentBrainRuns(t *testing.T) {
 	root, db := testRootDB(t)
 	for _, slug := range []string{"validator-task", "steward-task", "default-task"} {
@@ -526,6 +621,33 @@ func graphNodeByID(view BrainGraphView, id string) (BrainGraphNode, bool) {
 func graphHasEdge(view BrainGraphView, edgeType, source, target string) bool {
 	for _, edge := range view.Edges {
 		if edge.Type == edgeType && edge.Source == source && edge.Target == target {
+			return true
+		}
+	}
+	return false
+}
+
+func graphEdgeByID(view BrainGraphView, id string) (BrainGraphEdge, bool) {
+	for _, edge := range view.Edges {
+		if edge.ID == id {
+			return edge, true
+		}
+	}
+	return BrainGraphEdge{}, false
+}
+
+func graphOwnerBySlug(view BrainGraphView, slug string) (BrainGraphOwnerView, bool) {
+	for _, owner := range view.Owners {
+		if owner.Slug == slug {
+			return owner, true
+		}
+	}
+	return BrainGraphOwnerView{}, false
+}
+
+func stringSliceContains(values []string, want string) bool {
+	for _, value := range values {
+		if value == want {
 			return true
 		}
 	}

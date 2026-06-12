@@ -40,11 +40,6 @@ func BuildBrainGraph(db *sql.DB, root string, filters BrainGraphFilters, now tim
 			DisplayName: "Global Brain",
 			Status:      "ready",
 		},
-		Policy: BrainGraphPolicyView{
-			FullAuto:         true,
-			RiskyWhitelist:   []string{},
-			ApprovalRequired: []string{"merge", "deploy", "force_push", "destructive_shell", "delete_branch", "outbound_reply"},
-		},
 		Owners: []BrainGraphOwnerView{{
 			ID:     "owner:unowned",
 			Slug:   "unowned",
@@ -56,6 +51,11 @@ func BuildBrainGraph(db *sql.DB, root string, filters BrainGraphFilters, now tim
 		SelectedActions: defaultBrainGraphActions(),
 		Warnings:        []BrainGraphWarning{},
 	}
+	policy, err := flowdb.GetBrainPolicy(db)
+	if err != nil {
+		return view, err
+	}
+	view.Policy = brainGraphPolicyView(policy)
 	allTasks, err := flowdb.ListTasks(db, flowdb.TaskFilter{Kind: ""})
 	if err != nil {
 		return view, err
@@ -117,6 +117,7 @@ func BuildBrainGraph(db *sql.DB, root string, filters BrainGraphFilters, now tim
 			})
 		}
 	}
+	appendBrainGraphApprovalGateNodes(&view, visibleTasks, visible, tagsByTask, taskOwners, policy)
 	if err := appendBrainGraphRunNodes(&view, db, visibleTasks, visible, filters); err != nil {
 		return view, err
 	}
@@ -156,6 +157,14 @@ func BuildBrainGraph(db *sql.DB, root string, filters BrainGraphFilters, now tim
 	return view, nil
 }
 
+func brainGraphPolicyView(policy flowdb.BrainPolicy) BrainGraphPolicyView {
+	return BrainGraphPolicyView{
+		FullAuto:         policy.FullAuto,
+		RiskyWhitelist:   append([]string(nil), policy.RiskyWhitelist...),
+		ApprovalRequired: append([]string(nil), policy.RequiresReview...),
+	}
+}
+
 func visibleBrainGraphWarnings(warnings []BrainGraphWarning, visible map[string]bool) []BrainGraphWarning {
 	out := make([]BrainGraphWarning, 0, len(warnings))
 	for _, warning := range warnings {
@@ -169,6 +178,98 @@ func visibleBrainGraphWarnings(warnings []BrainGraphWarning, visible map[string]
 		}
 	}
 	return out
+}
+
+func appendBrainGraphApprovalGateNodes(view *BrainGraphView, tasks []*flowdb.Task, visible map[string]bool, tagsByTask map[string][]string, taskOwners map[string]string, policy flowdb.BrainPolicy) {
+	for _, task := range tasks {
+		if !visible[task.Slug] {
+			continue
+		}
+		actions := brainGraphRiskyActionsForTask(tagsByTask[task.Slug])
+		if len(actions) == 0 {
+			continue
+		}
+		ownerSlug := taskOwners[task.Slug]
+		if ownerSlug == "" {
+			ownerSlug = "unowned"
+		}
+		for _, action := range flowdb.BrainRiskyActions {
+			if !actions[action] || policy.IsWhitelisted(action) {
+				continue
+			}
+			nodeID := "approval:" + action + ":" + task.Slug
+			view.Nodes = append(view.Nodes, BrainGraphNode{
+				ID:        nodeID,
+				Type:      "approval",
+				OwnerSlug: ownerSlug,
+				TaskSlug:  task.Slug,
+				Label:     "Approval: " + action,
+				Status:    "approval_required",
+				Ref: &BrainGraphRef{
+					Kind: "approval",
+					ID:   action + ":" + task.Slug,
+				},
+				Actions: []string{"approve"},
+				Metadata: map[string]string{
+					"action": action,
+					"policy": flowdb.BrainPolicyModeApprovalRequired,
+				},
+			})
+			view.Edges = append(view.Edges, BrainGraphEdge{
+				ID:     "blocks:" + nodeID + ":task:" + task.Slug,
+				Type:   "blocks",
+				Source: nodeID,
+				Target: "task:" + task.Slug,
+				Label:  "policy gate",
+				Status: "blocked",
+			})
+			view.Counts.ApprovalNeeded++
+			view.Counts.Blocked++
+			incrementBrainGraphOwnerGateCounts(view, ownerSlug)
+		}
+	}
+}
+
+func brainGraphRiskyActionsForTask(tags []string) map[string]bool {
+	actions := map[string]bool{}
+	for _, tag := range tags {
+		tag = flowdb.NormalizeTag(tag)
+		if strings.HasPrefix(tag, "gh-pr:") {
+			actions["merge"] = true
+			continue
+		}
+		for _, prefix := range []string{"risky:", "action:"} {
+			action, ok := strings.CutPrefix(tag, prefix)
+			if !ok {
+				continue
+			}
+			action = strings.TrimSpace(action)
+			if brainGraphKnownRiskyAction(action) {
+				actions[action] = true
+			}
+		}
+	}
+	return actions
+}
+
+func brainGraphKnownRiskyAction(action string) bool {
+	for _, known := range flowdb.BrainRiskyActions {
+		if action == known {
+			return true
+		}
+	}
+	return false
+}
+
+func incrementBrainGraphOwnerGateCounts(view *BrainGraphView, ownerSlug string) {
+	for i := range view.Owners {
+		if view.Owners[i].Slug != ownerSlug {
+			continue
+		}
+		view.Owners[i].ApprovalCount++
+		view.Owners[i].BlockedCount++
+		return
+	}
 }
 
 func filterBrainGraphTasks(tasks []*flowdb.Task, filters BrainGraphFilters) []*flowdb.Task {
