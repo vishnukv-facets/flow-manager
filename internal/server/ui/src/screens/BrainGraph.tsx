@@ -250,8 +250,6 @@ function Warnings({ warnings }: { warnings: BrainGraphWarning[] }) {
 }
 
 function PolicySummary({ policy, warnings }: { policy: BrainGraphPolicyView; warnings: BrainGraphWarning[] }) {
-  const approvalRequired = policy.approval_required ?? []
-  const riskyWhitelist = policy.risky_whitelist ?? []
   return (
     <div className="brain-inspector-section">
       <div className="brain-inspector-head">
@@ -260,8 +258,8 @@ function PolicySummary({ policy, warnings }: { policy: BrainGraphPolicyView; war
       </div>
       <div className="brain-kv">
         <KV k="mode" v={policy.full_auto ? 'full_auto' : 'approval_gated'} />
-        <KV k="review" v={`${approvalRequired.length} actions`} />
-        <KV k="whitelist" v={`${riskyWhitelist.length} actions`} />
+        <KV k="review" v={`${policy.approval_required.length} actions`} />
+        <KV k="whitelist" v={`${policy.risky_whitelist.length} actions`} />
         {policy.last_decision_at ? <KV k="decision" v={dateTime(policy.last_decision_at)} /> : null}
         {policy.last_decision_state ? <KV k="state" v={policy.last_decision_state} /> : null}
         <KV k="warnings" v={String(warnings.length)} />

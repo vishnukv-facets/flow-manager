@@ -167,8 +167,8 @@ export interface BrainGraphController {
 
 export interface BrainGraphPolicyView {
   full_auto: boolean
-  risky_whitelist: string[] | null
-  approval_required: string[] | null
+  risky_whitelist: string[]
+  approval_required: string[]
   last_decision_at?: string | null
   last_decision_state?: string | null
 }
