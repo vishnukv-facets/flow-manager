@@ -13,24 +13,24 @@ import (
 // ValidatorCheckResult represents the outcome of a single validation check.
 type ValidatorCheckResult struct {
 	Check          string `json:"check"`
-	Status         string `json:"status"`           // "pass", "fail", "unknown"
-	Evidence       string `json:"evidence"`          // summary of what was found
-	MissingContext string `json:"missing_context"`  // if unknown, what would help
+	Status         string `json:"status"`          // "pass", "fail", "unknown"
+	Evidence       string `json:"evidence"`        // summary of what was found
+	MissingContext string `json:"missing_context"` // if unknown, what would help
 }
 
 // ValidatorRunFindings is the structured output from a validator run.
 type ValidatorRunFindings struct {
-	RunID              string                   `json:"run_id"`
-	TaskSlug           string                   `json:"task_slug"`
-	FamilySlug         string                   `json:"family_slug"`
-	WorkerRunID        string                   `json:"worker_run_id,omitempty"`
-	OverallStatus      string                   `json:"overall_status"`        // "pass", "fail", "unknown"
-	PassCount          int                      `json:"pass_count"`
-	FailCount          int                      `json:"fail_count"`
-	UnknownCount       int                      `json:"unknown_count"`
-	Checks             []ValidatorCheckResult   `json:"checks"`
-	RecommendedAction  string                   `json:"recommended_action"`     // e.g., "proceed to merge", "reopen for rework", "needs manual review"
-	ValidatedAt        string                   `json:"validated_at"`
+	RunID             string                 `json:"run_id"`
+	TaskSlug          string                 `json:"task_slug"`
+	FamilySlug        string                 `json:"family_slug"`
+	WorkerRunID       string                 `json:"worker_run_id,omitempty"`
+	OverallStatus     string                 `json:"overall_status"` // "pass", "fail", "unknown"
+	PassCount         int                    `json:"pass_count"`
+	FailCount         int                    `json:"fail_count"`
+	UnknownCount      int                    `json:"unknown_count"`
+	Checks            []ValidatorCheckResult `json:"checks"`
+	RecommendedAction string                 `json:"recommended_action"` // e.g., "proceed to merge", "reopen for rework", "needs manual review"
+	ValidatedAt       string                 `json:"validated_at"`
 }
 
 // newValidatorRunFindings creates an empty findings structure.
@@ -331,14 +331,14 @@ func ValidatorRunOutput(run *flowdb.BrainRun, findings *ValidatorRunFindings) (s
 	}
 	findings.RunID = run.RunID
 	output := map[string]any{
-		"run_id":       run.RunID,
-		"task_slug":    findings.TaskSlug,
-		"family_slug":  findings.FamilySlug,
-		"role":         "validator",
-		"status":       findings.OverallStatus,
-		"check_count":  len(findings.Checks),
-		"pass_count":   findings.PassCount,
-		"fail_count":   findings.FailCount,
+		"run_id":        run.RunID,
+		"task_slug":     findings.TaskSlug,
+		"family_slug":   findings.FamilySlug,
+		"role":          "validator",
+		"status":        findings.OverallStatus,
+		"check_count":   len(findings.Checks),
+		"pass_count":    findings.PassCount,
+		"fail_count":    findings.FailCount,
 		"unknown_count": findings.UnknownCount,
 	}
 	outputJSON, _ := json.Marshal(output)

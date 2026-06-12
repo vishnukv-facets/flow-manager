@@ -204,8 +204,64 @@ func BuildOwnerDetail(db *sql.DB, root string, o *flowdb.Owner, now time.Time) O
 	ownerDir := filepath.Join(root, "owners", o.Slug)
 	detail.Journal = ownerJournalNotes(filepath.Join(ownerDir, "updates"), 6)
 	detail.Tasks = ownerOwnedTasks(db, o.Slug)
+	detail.Ticks = ownerTickRecords(filepath.Join(ownerDir, "ticks"), 30)
 	detail.TickLogTail = ownerTickLogTail(filepath.Join(ownerDir, "ticks"))
 	return detail
+}
+
+// ownerTickRecords returns the owner's past ticks (newest first), each with its
+// full streamed activity log, so every tick stays revisitable in the UI — not
+// just the latest one surfaced by ownerTickLogTail.
+func ownerTickRecords(dir string, limit int) []OwnerTickRecord {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return nil
+	}
+	names := make([]string, 0, len(entries))
+	for _, e := range entries {
+		if e.IsDir() || filepath.Ext(e.Name()) != ".log" {
+			continue
+		}
+		names = append(names, e.Name())
+	}
+	sort.Sort(sort.Reverse(sort.StringSlice(names)))
+	if limit > 0 && len(names) > limit {
+		names = names[:limit]
+	}
+	out := make([]OwnerTickRecord, 0, len(names))
+	for _, name := range names {
+		path := filepath.Join(dir, name)
+		rec := OwnerTickRecord{Filename: name, Path: path}
+		if info, err := os.Stat(path); err == nil {
+			rec.StartedAt = info.ModTime().Format(time.RFC3339)
+		}
+		if body, err := os.ReadFile(path); err == nil {
+			const maxBody = 12000
+			content := strings.TrimSpace(string(body))
+			if len(content) > maxBody {
+				content = content[len(content)-maxBody:]
+			}
+			rec.Content = content
+		}
+		rec.Status = ownerTickStatus(rec.Content)
+		out = append(out, rec)
+	}
+	return out
+}
+
+// ownerTickStatus derives a coarse status from a tick's streamed activity log.
+func ownerTickStatus(content string) string {
+	lower := strings.ToLower(content)
+	switch {
+	case strings.TrimSpace(content) == "":
+		return "idle"
+	case strings.Contains(lower, "✗") || strings.Contains(lower, "error"):
+		return "error"
+	case strings.Contains(content, "✓"):
+		return "completed"
+	default:
+		return "ran"
+	}
 }
 
 // ownerJournalNotes reads the newest journal notes (with content) the owner

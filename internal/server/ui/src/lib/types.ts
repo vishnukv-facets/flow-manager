@@ -61,9 +61,18 @@ export interface OwnerTaskRow {
   is_question: boolean
 }
 
+export interface OwnerTickRecord {
+  filename: string
+  path: string
+  started_at: string
+  status: string
+  content: string
+}
+
 export interface OwnerDetailView extends OwnerView {
   journal: OwnerJournalNote[]
   tasks: OwnerTaskRow[]
+  ticks: OwnerTickRecord[]
   tick_log_tail?: string
 }
 

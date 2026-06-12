@@ -8,7 +8,7 @@ import { confirmAction } from '../lib/confirm'
 import { pushToast } from '../lib/toast'
 import { ago, dateTime } from '../lib/format'
 import { EmptyState, ErrorNote, Loading, ProviderIcon } from '../components/ui'
-import type { OwnerTaskRow, OwnerView } from '../lib/types'
+import type { OwnerTaskRow, OwnerTickRecord, OwnerView } from '../lib/types'
 
 const STATUS_FILTERS = [
   { v: '', label: 'All' },
@@ -329,13 +329,45 @@ function OwnerDetailPanel({ slug, tickRunning }: { slug: string; tickRunning: bo
         ) : null}
       </section>
 
-      {!tickRunning && data.tick_log_tail ? (
-        <details className="owner-detail-block">
-          <summary className="owner-detail-head">Tick log (latest)</summary>
-          <pre className="owner-tick-log">{data.tick_log_tail}</pre>
-        </details>
-      ) : null}
+      <TickHistory ticks={data.ticks ?? []} skipNewest={tickRunning} />
     </div>
+  )
+}
+
+const tickStatusTone: Record<string, string> = {
+  completed: 'info',
+  ran: 'ok',
+  error: 'danger',
+  idle: '',
+}
+
+function TickHistory({ ticks, skipNewest }: { ticks: OwnerTickRecord[]; skipNewest: boolean }) {
+  // While a tick is running its log streams in the live block above, so drop
+  // the newest record here to avoid showing the in-flight tick twice.
+  const history = skipNewest ? ticks.slice(1) : ticks
+  if (history.length === 0) return null
+  return (
+    <section className="owner-detail-block">
+      <div className="owner-detail-head">
+        <ScrollText size={13} />
+        Tick history <span className="dim">{history.length}</span>
+      </div>
+      <div className="owner-tick-history">
+        {history.map((tick, index) => (
+          <details className="owner-tick-entry" key={tick.path} open={index === 0 && !skipNewest}>
+            <summary>
+              <span className={`chip ${tickStatusTone[tick.status] ?? ''}`}>{tick.status}</span>
+              <span className="owner-tick-when">{tick.started_at ? dateTime(tick.started_at) : tick.filename}</span>
+            </summary>
+            {tick.content ? (
+              <pre className="owner-tick-log">{tick.content}</pre>
+            ) : (
+              <div className="muted">No activity recorded for this tick.</div>
+            )}
+          </details>
+        ))}
+      </div>
+    </section>
   )
 }
 

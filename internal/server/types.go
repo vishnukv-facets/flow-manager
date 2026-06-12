@@ -202,12 +202,24 @@ type OwnerTaskRow struct {
 	IsQuestion    bool    `json:"is_question"`
 }
 
+// OwnerTickRecord is one past tick the owner ran — its streamed activity log,
+// kept on disk under owners/<slug>/ticks/, so each tick stays revisitable.
+type OwnerTickRecord struct {
+	Filename  string `json:"filename"`
+	Path      string `json:"path"`
+	StartedAt string `json:"started_at"`
+	Status    string `json:"status"`
+	Content   string `json:"content"`
+}
+
 // OwnerDetailView is the single-owner payload: the base view plus the
-// observability surface (journal notes, owned-task status, latest tick log).
+// observability surface (journal notes, owned-task status, tick history, and
+// the latest tick log for the live-stream view while a tick is running).
 type OwnerDetailView struct {
 	OwnerView
 	Journal     []OwnerJournalNote `json:"journal"`
 	Tasks       []OwnerTaskRow     `json:"tasks"`
+	Ticks       []OwnerTickRecord  `json:"ticks"`
 	TickLogTail string             `json:"tick_log_tail,omitempty"`
 }
 
