@@ -3,6 +3,7 @@ package server
 import (
 	"database/sql"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -377,6 +378,105 @@ func TestBrainGraphExpandsPersistentBrainRuns(t *testing.T) {
 	defaultRun, ok := graphNodeByID(got, "run:orchestrator-run-1")
 	if !ok || defaultRun.Type != "worker_run" {
 		t.Fatalf("default role run node = %#v, ok=%v, want worker_run", defaultRun, ok)
+	}
+}
+
+func TestBrainGraphCountsFailedTaskOnceForMultipleFailedRuns(t *testing.T) {
+	root, db := testRootDB(t)
+	insertBrainGraphTask(t, db, "worker", "Worker", "backlog", nil)
+	now := "2026-06-12T10:00:00+05:30"
+	for _, run := range []*flowdb.BrainRun{
+		{
+			RunID:          "worker-dead",
+			FamilySlug:     "worker",
+			TaskSlug:       "worker",
+			Role:           "worker",
+			Provider:       "codex",
+			PermissionMode: "auto",
+			Status:         "dead",
+			CreatedAt:      now,
+			UpdatedAt:      now,
+		},
+		{
+			RunID:          "worker-error",
+			FamilySlug:     "worker",
+			TaskSlug:       "worker",
+			Role:           "worker",
+			Provider:       "codex",
+			PermissionMode: "auto",
+			Status:         "error",
+			CreatedAt:      "2026-06-12T10:01:00+05:30",
+			UpdatedAt:      "2026-06-12T10:01:00+05:30",
+		},
+	} {
+		if err := flowdb.UpsertBrainRun(db, run); err != nil {
+			t.Fatalf("UpsertBrainRun(%s): %v", run.RunID, err)
+		}
+	}
+
+	got, err := BuildBrainGraph(db, root, BrainGraphFilters{Expand: map[string]bool{"task:worker": true}}, time.Date(2026, 6, 12, 10, 0, 0, 0, time.FixedZone("IST", 19800)))
+	if err != nil {
+		t.Fatalf("BuildBrainGraph: %v", err)
+	}
+
+	if _, ok := graphNodeByID(got, "run:worker-dead"); !ok {
+		t.Fatalf("missing dead run node: %#v", got.Nodes)
+	}
+	if _, ok := graphNodeByID(got, "run:worker-error"); !ok {
+		t.Fatalf("missing error run node: %#v", got.Nodes)
+	}
+	if got.Counts.Failed != 1 {
+		t.Fatalf("failed count = %d, want one failed visible task", got.Counts.Failed)
+	}
+}
+
+func TestBrainGraphIncludesOlderFailedRunBeyondFamilyRecentLimit(t *testing.T) {
+	root, db := testRootDB(t)
+	insertBrainGraphTask(t, db, "worker", "Worker", "backlog", nil)
+	oldFailed := &flowdb.BrainRun{
+		RunID:          "worker-old-dead",
+		FamilySlug:     "worker",
+		TaskSlug:       "worker",
+		Role:           "worker",
+		Provider:       "codex",
+		PermissionMode: "auto",
+		Status:         "dead",
+		CreatedAt:      "2026-06-12T08:00:00+05:30",
+		UpdatedAt:      "2026-06-12T08:00:00+05:30",
+		StartedAt:      sql.NullString{String: "2026-06-12T08:00:00+05:30", Valid: true},
+	}
+	if err := flowdb.UpsertBrainRun(db, oldFailed); err != nil {
+		t.Fatalf("UpsertBrainRun(%s): %v", oldFailed.RunID, err)
+	}
+	for i := 0; i < 55; i++ {
+		stamp := time.Date(2026, 6, 12, 9, i, 0, 0, time.FixedZone("IST", 19800)).Format(time.RFC3339)
+		run := &flowdb.BrainRun{
+			RunID:          fmt.Sprintf("worker-completed-%02d", i),
+			FamilySlug:     "worker",
+			TaskSlug:       "worker",
+			Role:           "worker",
+			Provider:       "codex",
+			PermissionMode: "auto",
+			Status:         "completed",
+			CreatedAt:      stamp,
+			UpdatedAt:      stamp,
+			StartedAt:      sql.NullString{String: stamp, Valid: true},
+		}
+		if err := flowdb.UpsertBrainRun(db, run); err != nil {
+			t.Fatalf("UpsertBrainRun(%s): %v", run.RunID, err)
+		}
+	}
+
+	got, err := BuildBrainGraph(db, root, BrainGraphFilters{}, time.Date(2026, 6, 12, 10, 0, 0, 0, time.FixedZone("IST", 19800)))
+	if err != nil {
+		t.Fatalf("BuildBrainGraph: %v", err)
+	}
+
+	if _, ok := graphNodeByID(got, "run:worker-old-dead"); !ok {
+		t.Fatalf("missing older failed run beyond recent family limit: %#v", got.Nodes)
+	}
+	if got.Counts.Failed != 1 {
+		t.Fatalf("failed count = %d, want one failed visible task", got.Counts.Failed)
 	}
 }
 

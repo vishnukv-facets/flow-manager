@@ -2,6 +2,7 @@ package server
 
 import (
 	"database/sql"
+	"errors"
 	"net/http"
 	"net/url"
 	"sort"
@@ -331,6 +332,7 @@ func appendBrainGraphRunNodes(view *BrainGraphView, db *sql.DB, tasks []*flowdb.
 	rootsByTask := make(map[string]string, len(tasks))
 	runsByRoot := map[string][]*flowdb.BrainRun{}
 	emitted := map[string]bool{}
+	failedTasks := map[string]bool{}
 
 	for _, task := range tasks {
 		if !visible[task.Slug] {
@@ -350,6 +352,9 @@ func appendBrainGraphRunNodes(view *BrainGraphView, db *sql.DB, tasks []*flowdb.
 			return err
 		}
 		runsByRoot[root] = runs
+	}
+	if err := appendBrainGraphUncappedActiveFailedRuns(db, tasks, visible, rootsByTask, runsByRoot); err != nil {
+		return err
 	}
 
 	for _, task := range tasks {
@@ -375,12 +380,114 @@ func appendBrainGraphRunNodes(view *BrainGraphView, db *sql.DB, tasks []*flowdb.
 				Target: nodeID,
 			})
 			if brainGraphRunFailed(run.Status) {
-				view.Counts.Failed++
+				failedTasks[task.Slug] = true
 			}
 			emitted[nodeID] = true
 		}
 	}
+	view.Counts.Failed += len(failedTasks)
 	return nil
+}
+
+func appendBrainGraphUncappedActiveFailedRuns(db *sql.DB, tasks []*flowdb.Task, visible map[string]bool, rootsByTask map[string]string, runsByRoot map[string][]*flowdb.BrainRun) error {
+	visibleSlugs := make([]string, 0, len(tasks))
+	for _, task := range tasks {
+		if visible[task.Slug] {
+			visibleSlugs = append(visibleSlugs, task.Slug)
+		}
+	}
+	if len(visibleSlugs) == 0 {
+		return nil
+	}
+	persistentTaskSlugs, err := listBrainGraphPersistentRunTaskSlugs(db, visibleSlugs)
+	if err != nil {
+		return err
+	}
+	activeFailed, err := listBrainGraphActiveFailedRunsForTasks(db, visibleSlugs)
+	if err != nil {
+		return err
+	}
+	for _, run := range activeFailed {
+		root := rootsByTask[run.TaskSlug]
+		if root == "" {
+			continue
+		}
+		runsByRoot[root] = append(runsByRoot[root], run)
+	}
+	for _, task := range tasks {
+		if !visible[task.Slug] || persistentTaskSlugs[task.Slug] || !brainGraphRunActiveOrFailed(nullStringValue(task.AutoRunStatus)) {
+			continue
+		}
+		legacy, err := flowdb.GetBrainRun(db, "legacy:auto-run:"+task.Slug)
+		if errors.Is(err, sql.ErrNoRows) {
+			continue
+		}
+		if err != nil {
+			return err
+		}
+		root := rootsByTask[task.Slug]
+		if root != "" {
+			runsByRoot[root] = append(runsByRoot[root], legacy)
+		}
+	}
+	return nil
+}
+
+func listBrainGraphPersistentRunTaskSlugs(db *sql.DB, taskSlugs []string) (map[string]bool, error) {
+	out := map[string]bool{}
+	if len(taskSlugs) == 0 {
+		return out, nil
+	}
+	placeholders := strings.Repeat("?,", len(taskSlugs)-1) + "?"
+	args := make([]any, 0, len(taskSlugs))
+	for _, slug := range taskSlugs {
+		args = append(args, slug)
+	}
+	rows, err := db.Query(`SELECT DISTINCT task_slug FROM brain_runs WHERE task_slug IN (`+placeholders+`)`, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var slug string
+		if err := rows.Scan(&slug); err != nil {
+			return nil, err
+		}
+		out[slug] = true
+	}
+	return out, rows.Err()
+}
+
+func listBrainGraphActiveFailedRunsForTasks(db *sql.DB, taskSlugs []string) ([]*flowdb.BrainRun, error) {
+	if len(taskSlugs) == 0 {
+		return nil, nil
+	}
+	placeholders := strings.Repeat("?,", len(taskSlugs)-1) + "?"
+	args := make([]any, 0, len(taskSlugs)+3)
+	for _, slug := range taskSlugs {
+		args = append(args, slug)
+	}
+	args = append(args, "running", "dead", "error")
+	rows, err := db.Query(
+		`SELECT `+flowdb.BrainRunCols+` FROM brain_runs
+		 WHERE task_slug IN (`+placeholders+`)
+		   AND status IN (?, ?, ?)
+		 ORDER BY COALESCE(started_at, created_at) DESC, created_at DESC, run_id DESC`,
+		args...,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []*flowdb.BrainRun
+	for rows.Next() {
+		run, err := flowdb.ScanBrainRun(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, run)
+	}
+	return out, rows.Err()
 }
 
 func appendBrainGraphEvidenceNodes(view *BrainGraphView, tasks []*flowdb.Task, visible map[string]bool, tagsByTask map[string][]string, filters BrainGraphFilters) {
@@ -551,7 +658,7 @@ func brainGraphRunModel(run *flowdb.BrainRun) string {
 
 func brainGraphRunActiveOrFailed(status string) bool {
 	switch strings.TrimSpace(status) {
-	case "running", "dead":
+	case "running", "dead", "error":
 		return true
 	default:
 		return false
