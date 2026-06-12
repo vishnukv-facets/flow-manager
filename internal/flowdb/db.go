@@ -63,10 +63,11 @@ CREATE TABLE IF NOT EXISTS tasks (
     due_date              TEXT,
     assignee              TEXT,
     permission_mode       TEXT NOT NULL DEFAULT 'auto' CHECK (permission_mode IN ('default','auto','bypass')),
-    model                 TEXT,
-    status_changed_at     TEXT,
-    session_provider      TEXT NOT NULL DEFAULT 'claude' CHECK (session_provider IN ('claude','codex')),
-    session_id            TEXT,
+	    model                 TEXT,
+	    status_changed_at     TEXT,
+	    session_provider      TEXT NOT NULL DEFAULT 'claude' CHECK (session_provider IN ('claude','codex')),
+	    harness               TEXT,
+	    session_id            TEXT,
     session_started       TEXT,
     session_last_resumed  TEXT,
     session_path          TEXT,
@@ -140,14 +141,32 @@ CREATE TABLE IF NOT EXISTS workdirs (
     created_at    TEXT NOT NULL
 );
 
-CREATE TABLE IF NOT EXISTS task_tags (
-    task_slug   TEXT NOT NULL REFERENCES tasks(slug) ON DELETE CASCADE,
-    tag         TEXT NOT NULL,
-    created_at  TEXT NOT NULL,
-    PRIMARY KEY (task_slug, tag)
-);
+	CREATE TABLE IF NOT EXISTS task_tags (
+	    task_slug   TEXT NOT NULL REFERENCES tasks(slug) ON DELETE CASCADE,
+	    tag         TEXT NOT NULL,
+	    created_at  TEXT NOT NULL,
+	    PRIMARY KEY (task_slug, tag)
+	);
 
-CREATE TABLE IF NOT EXISTS github_event_log (
+	CREATE TABLE IF NOT EXISTS owners (
+	    slug              TEXT PRIMARY KEY,
+	    name              TEXT NOT NULL,
+	    work_dir          TEXT NOT NULL,
+	    project_slug      TEXT REFERENCES projects(slug),
+	    status            TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active','paused','retired')),
+	    every             TEXT NOT NULL,
+	    next_wake_at      TEXT,
+	    last_tick_at      TEXT,
+	    last_tick_status  TEXT,
+	    tick_pid          INTEGER,
+	    tick_started      TEXT,
+	    harness           TEXT,
+	    created_at        TEXT NOT NULL,
+	    updated_at        TEXT NOT NULL,
+	    archived_at       TEXT
+	);
+
+	CREATE TABLE IF NOT EXISTS github_event_log (
     event_key    TEXT PRIMARY KEY,
     event_kind   TEXT NOT NULL,
     task_slug    TEXT REFERENCES tasks(slug) ON DELETE SET NULL,
@@ -480,6 +499,7 @@ type Task struct {
 	Model              sql.NullString // explicit per-task model; empty = resolve at launch
 	StatusChangedAt    sql.NullString
 	SessionProvider    string
+	Harness            string // runtime harness pin; empty DB values read as SessionProvider/claude
 	SessionID          sql.NullString
 	SessionStarted     sql.NullString
 	SessionLastResumed sql.NullString
@@ -1004,6 +1024,35 @@ func NormalizeSessionProvider(provider string) (string, error) {
 	}
 }
 
+// NormalizeHarnessName canonicalizes the runtime harness stored on a task.
+// It currently follows the same supported agent families as session_provider,
+// but lives separately so imported upstream harness features have a stable
+// runtime pin without replacing Flow Manager's public provider contract.
+func NormalizeHarnessName(harness string) (string, error) {
+	switch strings.TrimSpace(strings.ToLower(harness)) {
+	case "", "claude", "claude-code", "claudecode":
+		return "claude", nil
+	case "codex", "codex-cli":
+		return "codex", nil
+	default:
+		return "", fmt.Errorf("harness must be claude|codex, got %q", harness)
+	}
+}
+
+func harnessForScan(sessionProvider string, harness sql.NullString) string {
+	if harness.Valid && strings.TrimSpace(harness.String) != "" {
+		if normalized, err := NormalizeHarnessName(harness.String); err == nil {
+			return normalized
+		}
+		return strings.TrimSpace(strings.ToLower(harness.String))
+	}
+	normalized, err := NormalizeSessionProvider(sessionProvider)
+	if err != nil {
+		return "claude"
+	}
+	return normalized
+}
+
 // OpenDB opens (or creates) the SQLite database at path, ensures the
 // schema is present, and runs idempotent migrations.
 //
@@ -1307,6 +1356,18 @@ func runMigrations(db *sql.DB) error {
 		// SQLite cannot add the CHECK constraint during ALTER TABLE; fresh
 		// databases get it from schemaDDL and application code validates
 		// writes for migrated databases.
+	}
+
+	// tasks.harness: nullable runtime pin for the pluggable harness layer.
+	// Existing rows can remain NULL; ScanTask coalesces them to session_provider.
+	has, err = columnExists(db, "tasks", "harness")
+	if err != nil {
+		return err
+	}
+	if !has {
+		if _, err := db.Exec(`ALTER TABLE tasks ADD COLUMN harness TEXT`); err != nil {
+			return fmt.Errorf("add tasks.harness: %w", err)
+		}
 	}
 
 	has, err = columnExists(db, "tasks", "worktree_path")
@@ -1912,10 +1973,11 @@ func migrateTasksSessionInvariant(db *sql.DB) error {
 			due_date              TEXT,
 			assignee              TEXT,
 			permission_mode       TEXT NOT NULL DEFAULT 'auto' CHECK (permission_mode IN ('default','auto','bypass')),
-			model                 TEXT,
-			status_changed_at     TEXT,
-			session_provider      TEXT NOT NULL DEFAULT 'claude' CHECK (session_provider IN ('claude','codex')),
-			session_id            TEXT,
+				model                 TEXT,
+				status_changed_at     TEXT,
+				session_provider      TEXT NOT NULL DEFAULT 'claude' CHECK (session_provider IN ('claude','codex')),
+				harness               TEXT,
+				session_id            TEXT,
 			session_started       TEXT,
 			session_last_resumed  TEXT,
 			session_path          TEXT,
@@ -1931,18 +1993,18 @@ func migrateTasksSessionInvariant(db *sql.DB) error {
 	}
 
 	if _, err := tx.Exec(`
-		INSERT INTO tasks_new (
-			slug, name, project_slug, status, kind, playbook_slug, parent_slug, forked_from_slug, fork_reason, priority,
-			work_dir, waiting_on, due_date, assignee, permission_mode, model, status_changed_at,
-			session_provider, session_id, session_started, session_last_resumed,
-			session_path, worktree_path, inbox_seen_at, created_at, updated_at, archived_at, deleted_at
-		)
-		SELECT
-			slug, name, project_slug, status, kind, playbook_slug, parent_slug, forked_from_slug, fork_reason, priority,
-			work_dir, waiting_on, due_date, assignee, permission_mode, model, status_changed_at,
-			COALESCE(NULLIF(session_provider, ''), 'claude'), session_id, session_started, session_last_resumed,
-			session_path, worktree_path, inbox_seen_at, created_at, updated_at, archived_at, deleted_at
-		FROM tasks`); err != nil {
+			INSERT INTO tasks_new (
+				slug, name, project_slug, status, kind, playbook_slug, parent_slug, forked_from_slug, fork_reason, priority,
+				work_dir, waiting_on, due_date, assignee, permission_mode, model, status_changed_at,
+				session_provider, harness, session_id, session_started, session_last_resumed,
+				session_path, worktree_path, inbox_seen_at, created_at, updated_at, archived_at, deleted_at
+			)
+			SELECT
+				slug, name, project_slug, status, kind, playbook_slug, parent_slug, forked_from_slug, fork_reason, priority,
+				work_dir, waiting_on, due_date, assignee, permission_mode, model, status_changed_at,
+				COALESCE(NULLIF(session_provider, ''), 'claude'), harness, session_id, session_started, session_last_resumed,
+				session_path, worktree_path, inbox_seen_at, created_at, updated_at, archived_at, deleted_at
+			FROM tasks`); err != nil {
 		return fmt.Errorf("copy rows: %w", err)
 	}
 
@@ -2184,20 +2246,22 @@ func ListProjects(db *sql.DB, filter ProjectFilter) ([]*Project, error) {
 
 // ---------- task queries ----------
 
-const TaskCols = "slug, name, project_slug, status, kind, playbook_slug, parent_slug, forked_from_slug, fork_reason, priority, work_dir, waiting_on, due_date, assignee, permission_mode, model, status_changed_at, session_provider, session_id, session_started, session_last_resumed, session_path, worktree_path, inbox_seen_at, created_at, updated_at, archived_at, deleted_at, auto_run_status, auto_run_pid, auto_run_started, auto_run_finished, auto_run_log"
+const TaskCols = "slug, name, project_slug, status, kind, playbook_slug, parent_slug, forked_from_slug, fork_reason, priority, work_dir, waiting_on, due_date, assignee, permission_mode, model, status_changed_at, session_provider, harness, session_id, session_started, session_last_resumed, session_path, worktree_path, inbox_seen_at, created_at, updated_at, archived_at, deleted_at, auto_run_status, auto_run_pid, auto_run_started, auto_run_finished, auto_run_log"
 
 func ScanTask(row interface{ Scan(dest ...any) error }) (*Task, error) {
 	var t Task
+	var harness sql.NullString
 	err := row.Scan(
 		&t.Slug, &t.Name, &t.ProjectSlug, &t.Status, &t.Kind, &t.PlaybookSlug, &t.ParentSlug, &t.ForkedFromSlug, &t.ForkReason,
 		&t.Priority, &t.WorkDir,
-		&t.WaitingOn, &t.DueDate, &t.Assignee, &t.PermissionMode, &t.Model, &t.StatusChangedAt, &t.SessionProvider, &t.SessionID,
+		&t.WaitingOn, &t.DueDate, &t.Assignee, &t.PermissionMode, &t.Model, &t.StatusChangedAt, &t.SessionProvider, &harness, &t.SessionID,
 		&t.SessionStarted, &t.SessionLastResumed, &t.SessionPath, &t.WorktreePath, &t.InboxSeenAt, &t.CreatedAt, &t.UpdatedAt, &t.ArchivedAt, &t.DeletedAt,
 		&t.AutoRunStatus, &t.AutoRunPID, &t.AutoRunStarted, &t.AutoRunFinished, &t.AutoRunLog,
 	)
 	if err != nil {
 		return nil, err
 	}
+	t.Harness = harnessForScan(t.SessionProvider, harness)
 	return &t, nil
 }
 

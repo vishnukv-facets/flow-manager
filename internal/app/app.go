@@ -25,7 +25,7 @@ func Run(args []string) int {
 	// and `--version` — those manage the skill themselves or need to
 	// run before any install state exists. See maybeAutoUpgradeSkill.
 	switch cmd {
-	case "init", "skill", "--version", "-v", "version", "-h", "--help", "help", "__auto-exec":
+	case "init", "skill", "--version", "-v", "version", "-h", "--help", "help", "__auto-exec", "__owner-tick":
 		// no auto-upgrade
 	default:
 		maybeAutoUpgradeSkill()
@@ -51,6 +51,8 @@ func Run(args []string) int {
 		return cmdSearch(rest)
 	case "standup":
 		return cmdStandup(rest)
+	case "owner":
+		return cmdOwner(rest)
 	case "ui":
 		return cmdUI(rest)
 	case "serve":
@@ -87,6 +89,8 @@ func Run(args []string) int {
 		return cmdAttention(rest)
 	case "__auto-exec":
 		return cmdAutoExec(rest)
+	case "__owner-tick":
+		return cmdOwnerTick(rest)
 	case "-h", "--help", "help":
 		printUsage()
 		return 0
@@ -107,7 +111,8 @@ Setup:
 
 Create:
   flow add project "<name>" --work-dir <path> [--slug <s>] [--priority h|m|l] [--mkdir]
-  flow add task    "<name>" [--slug <s>] [--project <slug>] [--work-dir <path>] [--mkdir] [--priority h|m|l] [--due <date>] [--agent claude|codex] [--permission-mode default|auto|bypass]
+  flow add task    "<name>" [--slug <s>] [--project <slug>] [--work-dir <path>] [--mkdir] [--priority h|m|l] [--due <date>] [--agent claude|codex] [--tag <t> ...] [--permission-mode default|auto|bypass]
+  flow add owner   "<name>" --work-dir <path> [--project <slug>] [--every 24h] [--agent claude|codex]
 
 Sessions:
   flow do                <ref> [--agent claude|codex] [--fresh] [--dangerously-skip-permissions]
@@ -122,15 +127,21 @@ Read:
   flow search "<query>" [--in briefs,updates,memories,transcripts] [--limit N] [--format table|json|tsv]
   flow show task       [<ref>]
   flow show project    [<ref>]
+  flow show owner      <slug>
   flow transcript      [<ref>] [--compact]           (readable transcript from session jsonl)
   flow list tasks    [--status ...] [--project ...] [--priority ...] [--tag <t>] [--since ...] [--include-archived] [--include-deleted|--deleted]
   flow list projects [--status ...] [--include-archived] [--include-deleted|--deleted]
+  flow list owners   [--status active|paused|retired] [--include-archived]
   flow list tags                                            (every tag in use, with per-tag task counts)
   flow attention list      [--status new|acted|dismissed|all]   (review the attention-router feed)
   flow attention act       <id> <make-task|forward|dismiss>
   flow attention feedback  [--group source|channel|author|thread-type|suggested-action|confidence-band]
 
 Edit / mutate:
+  flow owner start|pause|retire <slug>
+  flow owner tick <slug> [--auto]
+  flow owner tick-due
+  flow owner next <slug> (--in <duration> | --at <RFC3339>)
   flow edit        <ref>
   flow update task     <ref> [--slug <new>] [--name <new>]
                              [--work-dir <path>] [--mkdir]

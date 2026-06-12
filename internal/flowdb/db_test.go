@@ -69,6 +69,137 @@ func TestMigrationAddsAutoRunColumns(t *testing.T) {
 	}
 }
 
+func TestMigrationAddsHarnessColumn(t *testing.T) {
+	db := openTempDB(t)
+	insertTask(t, db, "harness-slug", "Harness task", "backlog", "medium", t.TempDir(), nil)
+
+	has, err := columnExists(db, "tasks", "harness")
+	if err != nil {
+		t.Fatalf("columnExists(tasks.harness): %v", err)
+	}
+	if !has {
+		t.Fatal("tasks.harness column missing")
+	}
+
+	task, err := GetTask(db, "harness-slug")
+	if err != nil {
+		t.Fatalf("GetTask: %v", err)
+	}
+	if task.Harness != "claude" {
+		t.Fatalf("Harness = %q, want claude default", task.Harness)
+	}
+}
+
+func TestMigrationPreservesHarnessAcrossSessionInvariantRebuild(t *testing.T) {
+	dir := t.TempDir()
+	dbPath := filepath.Join(dir, "flow.db")
+
+	pre, err := sql.Open("sqlite", dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := "2026-06-11T00:00:00Z"
+	if _, err := pre.Exec(`
+		CREATE TABLE projects (
+			slug TEXT PRIMARY KEY,
+			name TEXT NOT NULL,
+			status TEXT NOT NULL DEFAULT 'active',
+			priority TEXT NOT NULL DEFAULT 'medium',
+			work_dir TEXT NOT NULL,
+			created_at TEXT NOT NULL,
+			updated_at TEXT NOT NULL,
+			archived_at TEXT,
+			deleted_at TEXT
+		);
+		CREATE TABLE tasks (
+			slug TEXT PRIMARY KEY,
+			name TEXT NOT NULL,
+			project_slug TEXT,
+			status TEXT NOT NULL DEFAULT 'backlog',
+			kind TEXT NOT NULL DEFAULT 'regular',
+			playbook_slug TEXT,
+			parent_slug TEXT,
+			forked_from_slug TEXT,
+			fork_reason TEXT,
+			priority TEXT NOT NULL DEFAULT 'medium',
+			work_dir TEXT NOT NULL,
+			waiting_on TEXT,
+			due_date TEXT,
+			assignee TEXT,
+			permission_mode TEXT NOT NULL DEFAULT 'auto',
+			model TEXT,
+			status_changed_at TEXT,
+			session_provider TEXT NOT NULL DEFAULT 'claude',
+			session_id TEXT,
+			session_started TEXT,
+			session_last_resumed TEXT,
+			session_path TEXT,
+			worktree_path TEXT,
+			inbox_seen_at TEXT,
+			harness TEXT,
+			created_at TEXT NOT NULL,
+			updated_at TEXT NOT NULL,
+			archived_at TEXT,
+			deleted_at TEXT,
+			CHECK (status = 'backlog' OR session_id IS NOT NULL)
+		);
+		CREATE TABLE workdirs (
+			path TEXT PRIMARY KEY,
+			name TEXT,
+			description TEXT,
+			git_remote TEXT,
+			last_used_at TEXT,
+			created_at TEXT NOT NULL
+		);
+		CREATE TABLE schema_meta (
+			key TEXT PRIMARY KEY,
+			value TEXT NOT NULL,
+			applied_at TEXT NOT NULL
+		);
+		CREATE TABLE agent_runtime_states (
+			provider TEXT NOT NULL,
+			session_id TEXT NOT NULL,
+			task_slug TEXT,
+			status TEXT NOT NULL,
+			event_kind TEXT NOT NULL,
+			message TEXT,
+			updated_at TEXT NOT NULL,
+			last_seq INTEGER NOT NULL DEFAULT 0,
+			raw_json TEXT,
+			PRIMARY KEY (provider, session_id)
+		);
+		INSERT INTO tasks (
+			slug, name, status, priority, work_dir, session_provider, session_id,
+			session_started, harness, created_at, updated_at
+		) VALUES (
+			'codex-owned', 'Codex owned', 'in-progress', 'medium', '/tmp/owned',
+			'codex', '11111111-1111-4111-8111-111111111111',
+			'2026-06-11T00:00:00Z', 'codex', ?, ?
+		);
+	`, now, now); err != nil {
+		pre.Close()
+		t.Fatalf("seed pre-migration harness DB: %v", err)
+	}
+	pre.Close()
+
+	db, err := OpenDB(dbPath)
+	if err != nil {
+		t.Fatalf("OpenDB: %v", err)
+	}
+	defer db.Close()
+
+	task, err := GetTask(db, "codex-owned")
+	if err != nil {
+		t.Fatalf("GetTask: %v", err)
+	}
+	if task.Harness != "codex" {
+		t.Fatalf("Harness = %q, want codex", task.Harness)
+	}
+	if task.SessionProvider != "codex" {
+		t.Fatalf("SessionProvider = %q, want codex", task.SessionProvider)
+	}
+}
+
 func TestOpenDBIdempotent(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "flow.db")
 	db1, err := OpenDB(path)

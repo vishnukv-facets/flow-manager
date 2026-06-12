@@ -160,6 +160,27 @@ type WorkdirKnown struct {
 	GitRemote *string `json:"git_remote,omitempty"`
 }
 
+type OwnerView struct {
+	Slug           string        `json:"slug"`
+	Name           string        `json:"name"`
+	WorkDir        string        `json:"work_dir"`
+	WorkdirKnown   *WorkdirKnown `json:"workdir_known"`
+	ProjectSlug    *string       `json:"project_slug,omitempty"`
+	Status         string        `json:"status"`
+	Every          string        `json:"every"`
+	NextWakeAt     *string       `json:"next_wake_at,omitempty"`
+	NextDue        bool          `json:"next_due"`
+	LastTickAt     *string       `json:"last_tick_at,omitempty"`
+	LastTickStatus *string       `json:"last_tick_status,omitempty"`
+	TickPID        *int64        `json:"tick_pid,omitempty"`
+	TickStarted    *string       `json:"tick_started,omitempty"`
+	Harness        string        `json:"harness"`
+	CreatedAt      string        `json:"created_at"`
+	UpdatedAt      string        `json:"updated_at"`
+	ArchivedAt     *string       `json:"archived_at,omitempty"`
+	CharterPath    string        `json:"charter_path,omitempty"`
+}
+
 type TaskView struct {
 	Slug                string        `json:"slug"`
 	Name                string        `json:"name"`
@@ -188,11 +209,17 @@ type TaskView struct {
 	Tags                []string      `json:"tags"`
 	SessionID           *string       `json:"session_id"`
 	SessionProvider     *string       `json:"session_provider"`
+	Harness             *string       `json:"harness,omitempty"`
 	SessionStarted      *string       `json:"session_started"`
 	SessionLastResumed  *string       `json:"session_last_resumed"`
 	SessionPath         *string       `json:"session_path,omitempty"`
 	Live                bool          `json:"live"`
 	RuntimeStatus       *string       `json:"runtime_status,omitempty"`
+	AutoRunStatus       *string       `json:"auto_run_status,omitempty"`
+	AutoRunPID          *int64        `json:"auto_run_pid,omitempty"`
+	AutoRunStarted      *string       `json:"auto_run_started,omitempty"`
+	AutoRunFinished     *string       `json:"auto_run_finished,omitempty"`
+	AutoRunLog          *string       `json:"auto_run_log,omitempty"`
 	DaysInStatus        int           `json:"days_in_status"`
 	StaleDays           *int          `json:"stale_days"`
 	TemporalSummary     string        `json:"temporal_summary"`
@@ -207,12 +234,6 @@ type TaskView struct {
 	Updates             []FileRef     `json:"updates"`
 	AuxFiles            []FileRef     `json:"aux_files"`
 	TranscriptAvailable bool          `json:"transcript_available"`
-	// Autonomous-run bookkeeping, forwarded from flowdb.Task for UI display.
-	AutoRunStatus   *string `json:"auto_run_status,omitempty"`
-	AutoRunStarted  *string `json:"auto_run_started,omitempty"`
-	AutoRunFinished *string `json:"auto_run_finished,omitempty"`
-	AutoRunLog      *string `json:"auto_run_log,omitempty"`
-	AutoRunPID      *int64  `json:"auto_run_pid,omitempty"`
 }
 
 // BrainRunView is one persisted or compatibility run ledger row as surfaced to

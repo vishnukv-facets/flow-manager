@@ -25,7 +25,7 @@ session. Sections to cover: What / Why / Where / Done when / Out of scope /
 Open questions.
 `
 
-// cmdAdd dispatches `flow add project|task|playbook ...`.
+// cmdAdd dispatches `flow add project|task|playbook|owner ...`.
 func cmdAdd(args []string) int {
 	if len(args) == 0 {
 		fmt.Fprintln(os.Stderr, "error: add requires 'project', 'task', or 'playbook'")
@@ -38,6 +38,8 @@ func cmdAdd(args []string) int {
 		return addTask(args[1:])
 	case "playbook":
 		return addPlaybook(args[1:])
+	case "owner":
+		return addOwner(args[1:])
 	}
 	fmt.Fprintf(os.Stderr, "error: unknown add subcommand %q\n", args[0])
 	return 2
@@ -158,6 +160,8 @@ func addTask(args []string) int {
 	mkdir := fs.Bool("mkdir", false, "create --work-dir if it does not exist")
 	var dependsOn stringSliceFlag
 	fs.Var(&dependsOn, "depends-on", "slug of a task this one is blocked by (repeatable)")
+	var tags stringSliceFlag
+	fs.Var(&tags, "tag", "tag to attach to the task (repeatable)")
 	subtaskOf := fs.String("subtask-of", "", "slug of the parent task in the hierarchy (organizational, non-blocking)")
 	if leadingHelpArg(args) {
 		fs.Usage()
@@ -192,6 +196,11 @@ func addTask(args []string) int {
 	// interview, scripts pass --agent / --codex / --claude or set FLOW_AGENT).
 	if sessionProvider == "" {
 		fmt.Fprintln(os.Stderr, "error: an agent is required — pass --agent claude|codex (or the --codex / --claude shortcut)")
+		return 2
+	}
+	harnessName, err := harnessNameForProvider(sessionProvider)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "error: %v\n", err)
 		return 2
 	}
 
@@ -294,9 +303,9 @@ func addTask(args []string) int {
 
 	now := flowdb.NowISO()
 	if _, err := db.Exec(
-		`INSERT INTO tasks (slug, name, project_slug, status, priority, work_dir, due_date, assignee, permission_mode, model, session_provider, status_changed_at, created_at, updated_at)
-		 VALUES (?, ?, ?, 'backlog', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		slug, name, projectSlug, *priority, absWorkDir, dueDate, assignee, permissionMode, model, sessionProvider, now, now, now,
+		`INSERT INTO tasks (slug, name, project_slug, status, priority, work_dir, due_date, assignee, permission_mode, model, session_provider, harness, status_changed_at, created_at, updated_at)
+		 VALUES (?, ?, ?, 'backlog', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		slug, name, projectSlug, *priority, absWorkDir, dueDate, assignee, permissionMode, model, sessionProvider, harnessName, now, now, now,
 	); err != nil {
 		fmt.Fprintf(os.Stderr, "error: insert task: %v\n", err)
 		return 1
@@ -332,6 +341,16 @@ func addTask(args []string) int {
 		}
 		if err := flowdb.AddTaskDependency(db, slug, dep); err != nil {
 			fmt.Fprintf(os.Stderr, "error: --depends-on %q: %v\n", dep, err)
+			return 1
+		}
+	}
+	for _, tag := range tags {
+		tag = strings.TrimSpace(tag)
+		if tag == "" {
+			continue
+		}
+		if err := flowdb.AddTaskTag(db, slug, tag); err != nil {
+			fmt.Fprintf(os.Stderr, "error: --tag %q: %v\n", tag, err)
 			return 1
 		}
 	}

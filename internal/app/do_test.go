@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"errors"
 	"flow/internal/flowdb"
+	hclaude "flow/internal/harness/claude"
 	"flow/internal/iterm"
 	"flow/internal/spawner"
 	"io"
@@ -739,6 +740,63 @@ func TestCmdDoCodexFreshUsesInteractiveWrapper(t *testing.T) {
 	}
 	if strings.Contains(script, " claude ") {
 		t.Fatalf("codex spawn script should not invoke claude:\n%s", script)
+	}
+}
+
+func TestCmdDoBackgroundStoresCapturedHarnessSession(t *testing.T) {
+	setupFlowRoot(t)
+	seedTask(t, "bg-task")
+	t.Setenv("ZELLIJ", "")
+	t.Setenv("KITTY_WINDOW_ID", "")
+	t.Setenv("TERM", "")
+	t.Setenv("TERM_PROGRAM", "")
+	t.Setenv("FLOW_TERM", "bg")
+	oldOverride := spawner.Override
+	spawner.Override = ""
+	t.Cleanup(func() { spawner.Override = oldOverride })
+
+	oldRunner := iterm.Runner
+	var tabSpawns int64
+	iterm.Runner = func(args []string) error {
+		atomic.AddInt64(&tabSpawns, 1)
+		return nil
+	}
+	t.Cleanup(func() { iterm.Runner = oldRunner })
+
+	oldBG := hclaude.BGCommandRunner
+	t.Cleanup(func() { hclaude.BGCommandRunner = oldBG })
+	var bgArgs []string
+	hclaude.BGCommandRunner = func(workDir string, args []string) ([]byte, error) {
+		if len(args) > 0 && args[0] == "agents" {
+			return []byte(`[{"kind":"background","id":"1a2b3c4d","sessionId":"11111111-1111-4111-8111-111111111111","name":"flow/bg-task","cwd":"` + workDir + `","pid":4321,"status":"busy","state":"working"}]`), nil
+		}
+		bgArgs = append([]string(nil), args...)
+		return []byte("backgrounded · 1a2b3c4d · flow/bg-task\n"), nil
+	}
+
+	if rc := cmdDo([]string{"bg-task"}); rc != 0 {
+		t.Fatalf("rc=%d", rc)
+	}
+	if atomic.LoadInt64(&tabSpawns) != 0 {
+		t.Fatalf("terminal spawns = %d, want 0", tabSpawns)
+	}
+	if len(bgArgs) == 0 || bgArgs[0] != "--bg" {
+		t.Fatalf("background args = %#v, want --bg launch", bgArgs)
+	}
+
+	db := openFlowDB(t)
+	task, err := flowdb.GetTask(db, "bg-task")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if task.SessionProvider != sessionProviderClaude || task.Harness != sessionProviderClaude {
+		t.Fatalf("provider/harness = %q/%q, want claude/claude", task.SessionProvider, task.Harness)
+	}
+	if !task.SessionID.Valid || task.SessionID.String != "11111111-1111-4111-8111-111111111111" {
+		t.Fatalf("session_id = %+v, want captured background session", task.SessionID)
+	}
+	if task.Status != "in-progress" {
+		t.Fatalf("status = %q, want in-progress", task.Status)
 	}
 }
 

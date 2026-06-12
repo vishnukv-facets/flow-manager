@@ -21,6 +21,7 @@ import type {
   InboxFeed,
   KBFileView,
   MemorySource,
+  OwnerView,
   OverviewView,
   PlaybookView,
   ProjectView,
@@ -255,7 +256,7 @@ export function useAutoRuns(slug: string | undefined, enabled = true) {
   return useQuery({
     queryKey: ['auto-runs', slug],
     enabled: !!slug && enabled,
-    queryFn: () => apiGet<import('../lib/types').AutoRunFile[]>(`/api/tasks/${encodeURIComponent(slug!)}/auto-runs`),
+    queryFn: () => apiGet<import('./types').AutoRunFile[]>(`/api/tasks/${encodeURIComponent(slug!)}/auto-runs`),
   })
 }
 
@@ -263,7 +264,7 @@ export function useAutoRunLog(slug: string | undefined, file: string | undefined
   return useQuery({
     queryKey: ['auto-run-log', slug, file],
     enabled: !!slug && !!file,
-    queryFn: () => apiGet<import('../lib/types').AutoRunLogResponse>(`/api/tasks/${encodeURIComponent(slug!)}/auto-runs/log?file=${encodeURIComponent(file!)}`),
+    queryFn: () => apiGet<import('./types').AutoRunLogResponse>(`/api/tasks/${encodeURIComponent(slug!)}/auto-runs/log?file=${encodeURIComponent(file!)}`),
   })
 }
 
@@ -286,6 +287,27 @@ export function useTaskRun(slug: string | undefined, runId: string | undefined, 
       apiGet<BrainRunView>(
         `/api/tasks/${encodeURIComponent(slug!)}/runs/${encodeURIComponent(runId!)}`,
       ),
+  })
+}
+
+export interface OwnerFilters {
+  status?: string
+  include_archived?: boolean
+}
+export function useOwners(filters: OwnerFilters = {}) {
+  return useQuery({
+    queryKey: ['owners', filters],
+    queryFn: () =>
+      apiGet<OwnerView[]>(
+        `/api/owners${qs(filters as Record<string, string | boolean | number | undefined>)}`,
+      ),
+  })
+}
+export function useOwner(slug: string | undefined) {
+  return useQuery({
+    queryKey: ['owner', slug],
+    enabled: !!slug,
+    queryFn: () => apiGet<OwnerView>(`/api/owners/${encodeURIComponent(slug!)}`),
   })
 }
 

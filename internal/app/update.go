@@ -360,6 +360,11 @@ func cmdUpdateTask(args []string) int {
 		fmt.Printf("priority → %s\n", *priority)
 	}
 	if newProvider != "" {
+		harnessName, err := harnessNameForProvider(newProvider)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "error: %v\n", err)
+			return 2
+		}
 		// The agent is locked once a session exists — running, idle, or done all
 		// carry a session_id / session_started. Only a never-started backlog task
 		// can switch claude ↔ codex (the UI's inline picker and the server's
@@ -374,9 +379,9 @@ func cmdUpdateTask(args []string) int {
 			fmt.Printf("agent unchanged (%s)\n", newProvider)
 		} else {
 			if _, err := db.Exec(
-				`UPDATE tasks SET session_provider=?, updated_at=?
-				 WHERE slug=? AND status='backlog' AND session_id IS NULL AND session_started IS NULL`,
-				newProvider, now, task.Slug,
+				`UPDATE tasks SET session_provider=?, harness=?, updated_at=?
+					 WHERE slug=? AND status='backlog' AND session_id IS NULL AND session_started IS NULL`,
+				newProvider, harnessName, now, task.Slug,
 			); err != nil {
 				fmt.Fprintf(os.Stderr, "error: update agent: %v\n", err)
 				return 1

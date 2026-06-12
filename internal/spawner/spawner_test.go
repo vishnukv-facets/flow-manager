@@ -126,6 +126,7 @@ func TestDetectFlowTermOverride(t *testing.T) {
 		{"kitty", BackendKitty},
 		{"warp", BackendWarp},
 		{"ghostty", BackendGhostty},
+		{"bg", BackendBG},
 	}
 	for _, tc := range cases {
 		t.Run(tc.flowTerm, func(t *testing.T) {
@@ -140,6 +141,18 @@ func TestDetectFlowTermOverride(t *testing.T) {
 					tc.flowTerm, got, tc.want)
 			}
 		})
+	}
+}
+
+func TestIsBackground(t *testing.T) {
+	t.Setenv("ZELLIJ", "")
+	t.Setenv("KITTY_WINDOW_ID", "")
+	t.Setenv("TERM", "")
+	t.Setenv("FLOW_TERM", "bg")
+	t.Setenv("TERM_PROGRAM", "Apple_Terminal")
+	Override = ""
+	if !IsBackground() {
+		t.Fatal("IsBackground() = false, want true for FLOW_TERM=bg")
 	}
 }
 

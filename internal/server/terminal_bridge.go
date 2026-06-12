@@ -1333,9 +1333,10 @@ func (s *Server) prepareTerminalLaunch(slug string) (terminalLaunch, error) {
 				kind = 'regular',
 				playbook_slug = NULL,
 				work_dir = ?,
-				waiting_on = NULL,
-				session_provider = 'claude',
-				session_id = NULL,
+					waiting_on = NULL,
+					session_provider = 'claude',
+					harness = 'claude',
+					session_id = NULL,
 				session_started = NULL,
 				session_last_resumed = NULL,
 				status_changed_at = ?,
@@ -1357,6 +1358,9 @@ func (s *Server) prepareTerminalLaunch(slug string) (terminalLaunch, error) {
 	}
 	if strings.TrimSpace(task.WorkDir) == "" {
 		return terminalLaunch{}, fmt.Errorf("task %s has no work_dir", task.Slug)
+	}
+	if err := reconcileAutoRunBeforeTerminalLaunch(tx, task); err != nil {
+		return terminalLaunch{}, err
 	}
 	// A done task only reaches here via revisit/resume: both bridge entry points
 	// (openBrowserTerminalBridge, openTaskBridge) gate startability for non-done
@@ -1383,9 +1387,10 @@ func (s *Server) prepareTerminalLaunch(slug string) (terminalLaunch, error) {
 			if _, err := tx.Exec(
 				`UPDATE tasks SET
 					status = 'in-progress',
-					status_changed_at = ?,
-					session_provider = 'codex',
-					session_id = NULL,
+						status_changed_at = ?,
+						session_provider = 'codex',
+						harness = 'codex',
+						session_id = NULL,
 					session_started = ?,
 					updated_at = ?
 				 WHERE slug = ?`,
@@ -1398,9 +1403,10 @@ func (s *Server) prepareTerminalLaunch(slug string) (terminalLaunch, error) {
 			if _, err := tx.Exec(
 				`UPDATE tasks SET
 					status = 'in-progress',
-					status_changed_at = ?,
-					session_provider = 'claude',
-					session_id = ?,
+						status_changed_at = ?,
+						session_provider = 'claude',
+						harness = 'claude',
+						session_id = ?,
 					session_started = ?,
 					updated_at = ?
 				 WHERE slug = ?`,
@@ -1683,6 +1689,45 @@ func (s *Server) resolveTaskLaunchModel(task *flowdb.Task, provider string, fres
 		}
 	}
 	return flowdb.ResolveSessionModel(provider, explicit, briefText).Model
+}
+
+func reconcileAutoRunBeforeTerminalLaunch(tx *sql.Tx, task *flowdb.Task) error {
+	if task == nil || !task.AutoRunStatus.Valid || task.AutoRunStatus.String != "running" {
+		return nil
+	}
+	pid := 0
+	if task.AutoRunPID.Valid {
+		pid = int(task.AutoRunPID.Int64)
+	}
+	if terminalProcessAlive(pid) {
+		return fmt.Errorf("task %q autonomous run is already running (pid %d); wait for it to finish before opening an interactive session", task.Slug, pid)
+	}
+	now := flowdb.NowISO()
+	if _, err := tx.Exec(
+		`UPDATE tasks SET auto_run_status='dead', auto_run_finished=COALESCE(auto_run_finished, ?),
+		 auto_run_pid=NULL, updated_at=? WHERE slug=? AND auto_run_status='running'`,
+		now, now, task.Slug,
+	); err != nil {
+		return err
+	}
+	task.AutoRunStatus = sql.NullString{String: "dead", Valid: true}
+	task.AutoRunPID = sql.NullInt64{}
+	if !task.AutoRunFinished.Valid {
+		task.AutoRunFinished = sql.NullString{String: now, Valid: true}
+	}
+	return nil
+}
+
+func terminalProcessAlive(pid int) bool {
+	if pid <= 0 {
+		return false
+	}
+	proc, err := os.FindProcess(pid)
+	if err != nil {
+		return false
+	}
+	err = proc.Signal(syscall.Signal(0))
+	return err == nil || errors.Is(err, syscall.EPERM)
 }
 
 func appendCodexWritableRoot(args []string, workDir, flowRootPath string) []string {

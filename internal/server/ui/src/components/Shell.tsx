@@ -8,6 +8,7 @@ import {
   AlertTriangle,
   Bell,
   BookText,
+  Bot,
   Brain,
   CheckCircle2,
   Database,
@@ -169,6 +170,7 @@ export function Shell({ children }: { children: ReactNode }) {
           tone: 'var(--ok)',
         },
         { to: '/tasks', label: 'Tasks', icon: <ListTodo size={16} />, match: (p) => p === '/tasks', badge: backlog || undefined },
+        { to: '/owners', label: 'Owners', icon: <Bot size={16} />, match: (p) => p === '/owners' },
         {
           to: '/inbox',
           label: 'Inbox',

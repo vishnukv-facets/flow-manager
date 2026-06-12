@@ -44,6 +44,13 @@ func BuildTaskView(db *sql.DB, root string, t *flowdb.Task, live map[string]bool
 	view.SessionStarted = nullStringPtr(t.SessionStarted)
 	view.SessionLastResumed = nullStringPtr(t.SessionLastResumed)
 	view.SessionPath = nullStringPtr(t.SessionPath)
+	view.AutoRunStatus = nullStringPtr(t.AutoRunStatus)
+	view.AutoRunStarted = nullStringPtr(t.AutoRunStarted)
+	view.AutoRunFinished = nullStringPtr(t.AutoRunFinished)
+	view.AutoRunLog = nullStringPtr(t.AutoRunLog)
+	if t.AutoRunPID.Valid {
+		view.AutoRunPID = &t.AutoRunPID.Int64
+	}
 	view.InboxSeenAt = nullStringPtr(t.InboxSeenAt)
 	view.ArchivedAt = nullStringPtr(t.ArchivedAt)
 	view.DeletedAt = nullStringPtr(t.DeletedAt)
@@ -52,6 +59,11 @@ func BuildTaskView(db *sql.DB, root string, t *flowdb.Task, live map[string]bool
 		provider = "claude"
 	}
 	view.SessionProvider = &provider
+	harness := t.Harness
+	if strings.TrimSpace(harness) == "" {
+		harness = provider
+	}
+	view.Harness = &harness
 	if view.DueDate != nil {
 		if s := formatDueDateInfo(*view.DueDate, now); s != "" {
 			view.DueInfo = &s
@@ -149,6 +161,47 @@ func BuildTaskView(db *sql.DB, root string, t *flowdb.Task, live map[string]bool
 		view.AutoRunPID = &v
 	}
 	return view, nil
+}
+
+func BuildOwnerView(db *sql.DB, root string, o *flowdb.Owner, now time.Time) OwnerView {
+	view := OwnerView{
+		Slug:           o.Slug,
+		Name:           o.Name,
+		WorkDir:        o.WorkDir,
+		ProjectSlug:    nullStringPtr(o.ProjectSlug),
+		Status:         o.Status,
+		Every:          o.Every,
+		NextWakeAt:     nullStringPtr(o.NextWakeAt),
+		LastTickAt:     nullStringPtr(o.LastTickAt),
+		LastTickStatus: nullStringPtr(o.LastTickStatus),
+		TickStarted:    nullStringPtr(o.TickStarted),
+		Harness:        o.Harness,
+		CreatedAt:      o.CreatedAt,
+		UpdatedAt:      o.UpdatedAt,
+		ArchivedAt:     nullStringPtr(o.ArchivedAt),
+		CharterPath:    filepath.Join(root, "owners", o.Slug, "charter.md"),
+	}
+	if o.TickPID.Valid {
+		view.TickPID = &o.TickPID.Int64
+	}
+	if o.NextWakeAt.Valid && o.NextWakeAt.String != "" && o.Status == "active" {
+		if wake, err := time.Parse(time.RFC3339, o.NextWakeAt.String); err == nil {
+			view.NextDue = !wake.After(now)
+		}
+	}
+	if wd, err := flowdb.GetWorkdir(db, o.WorkDir); err == nil {
+		view.WorkdirKnown = workdirKnown(wd)
+	}
+	return view
+}
+
+func BuildOwnerViews(db *sql.DB, root string, owners []*flowdb.Owner) []OwnerView {
+	views := make([]OwnerView, 0, len(owners))
+	now := time.Now()
+	for _, o := range owners {
+		views = append(views, BuildOwnerView(db, root, o, now))
+	}
+	return views
 }
 
 func loadParent(db *sql.DB, parentSlug string) *TaskSummary {

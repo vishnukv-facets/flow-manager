@@ -52,8 +52,9 @@ func CaptureCodexSessionForTaskSince(db *sql.DB, taskSlug, workDir string, start
 	// that hand us a partial candidate.
 	res, err := db.Exec(
 		`UPDATE tasks
-		 SET session_provider = 'codex',
-		     session_id = ?,
+			 SET session_provider = 'codex',
+			     harness = 'codex',
+			     session_id = ?,
 		     session_path = ?,
 		     session_started = COALESCE(session_started, ?),
 		     updated_at = ?
