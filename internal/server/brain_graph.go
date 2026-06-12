@@ -54,16 +54,12 @@ func BuildBrainGraph(db *sql.DB, root string, filters BrainGraphFilters, now tim
 		SelectedActions: defaultBrainGraphActions(),
 		Warnings:        []BrainGraphWarning{},
 	}
-	tasks, err := flowdb.ListTasks(db, flowdb.TaskFilter{
-		Project: filters.Project,
-		Status:  filters.Status,
-		Kind:    "",
-	})
+	allTasks, err := flowdb.ListTasks(db, flowdb.TaskFilter{Kind: ""})
 	if err != nil {
 		return view, err
 	}
-	tasks = filterBrainGraphTasks(tasks, filters)
-	slugs := taskSlugs(tasks)
+	visibleTasks := filterBrainGraphTasks(allTasks, filters)
+	slugs := taskSlugs(allTasks)
 	tagsByTask, err := flowdb.GetTaskTagsBatch(db, slugs)
 	if err != nil {
 		return view, err
@@ -72,11 +68,11 @@ func BuildBrainGraph(db *sql.DB, root string, filters BrainGraphFilters, now tim
 	if err != nil {
 		return view, err
 	}
-	ownerBySlug, taskOwners, warnings := resolveBrainGraphOwners(tasks, owners, tagsByTask)
+	ownerBySlug, taskOwners, warnings := resolveBrainGraphOwners(allTasks, owners, tagsByTask)
 	appendOwnerBoundaries(&view, owners)
 
-	visible := make(map[string]bool, len(tasks))
-	for _, task := range tasks {
+	visible := make(map[string]bool, len(visibleTasks))
+	for _, task := range visibleTasks {
 		ownerSlug := taskOwners[task.Slug]
 		if ownerSlug == "" {
 			ownerSlug = "unowned"
@@ -119,7 +115,7 @@ func BuildBrainGraph(db *sql.DB, root string, filters BrainGraphFilters, now tim
 			})
 		}
 	}
-	for _, task := range tasks {
+	for _, task := range visibleTasks {
 		if !visible[task.Slug] || !task.ParentSlug.Valid || strings.TrimSpace(task.ParentSlug.String) == "" {
 			continue
 		}
@@ -173,6 +169,12 @@ func filterBrainGraphTasks(tasks []*flowdb.Task, filters BrainGraphFilters) []*f
 	query := strings.ToLower(strings.TrimSpace(filters.Query))
 	out := make([]*flowdb.Task, 0, len(tasks))
 	for _, task := range tasks {
+		if filters.Project != "" && nullStringValue(task.ProjectSlug) != filters.Project {
+			continue
+		}
+		if filters.Status != "" && task.Status != filters.Status {
+			continue
+		}
 		if !filters.IncludeDone && task.Status == "done" {
 			continue
 		}
@@ -220,19 +222,28 @@ func resolveBrainGraphOwners(tasks []*flowdb.Task, owners []*flowdb.Owner, tagsB
 
 		ownerTags := brainGraphOwnerTags(tagsByTask[task.Slug])
 		if len(ownerTags) > 0 {
+			validOwner := ""
 			for _, ownerSlug := range ownerTags {
 				if _, ok := ownerBySlug[ownerSlug]; ok {
-					resolved[task.Slug] = ownerSlug
-					return ownerSlug
+					if validOwner == "" {
+						validOwner = ownerSlug
+					}
+					continue
 				}
-			}
-			if !warnedUnknown[task.Slug] {
+				warningKey := task.Slug + "\x00" + ownerSlug
+				if warnedUnknown[warningKey] {
+					continue
+				}
 				warnings = append(warnings, BrainGraphWarning{
 					Code:    "unknown_owner",
-					Message: "task has owner tag with no matching owner: owner:" + ownerTags[0],
+					Message: "task has owner tag with no matching owner: owner:" + ownerSlug,
 					NodeID:  "task:" + task.Slug,
 				})
-				warnedUnknown[task.Slug] = true
+				warnedUnknown[warningKey] = true
+			}
+			if validOwner != "" {
+				resolved[task.Slug] = validOwner
+				return validOwner
 			}
 			resolved[task.Slug] = "unowned"
 			return "unowned"

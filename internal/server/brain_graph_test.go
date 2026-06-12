@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -35,14 +36,7 @@ func TestBrainGraphEmptyRouteRegistered(t *testing.T) {
 
 func TestBrainGraphGroupsTasksByOwnerTagAndInheritance(t *testing.T) {
 	root, db := testRootDB(t)
-	now := "2026-06-12T10:00:00+05:30"
-	if _, err := db.Exec(
-		`INSERT INTO owners (slug, name, work_dir, status, every, harness, created_at, updated_at)
-		 VALUES ('brain-ui', 'Brain UI', ?, 'active', '1h', 'claude', ?, ?)`,
-		root, now, now,
-	); err != nil {
-		t.Fatal(err)
-	}
+	insertBrainGraphOwner(t, db, root, "brain-ui")
 	insertBrainGraphTask(t, db, "parent", "Parent", "backlog", nil)
 	insertBrainGraphTask(t, db, "child", "Child", "backlog", strPtr("parent"))
 	insertBrainGraphTask(t, db, "other", "Other", "backlog", nil)
@@ -74,6 +68,87 @@ func TestBrainGraphGroupsTasksByOwnerTagAndInheritance(t *testing.T) {
 	}
 	if ownerCounts["unowned"] != 1 {
 		t.Fatalf("unowned task count = %d, want 1", ownerCounts["unowned"])
+	}
+}
+
+func TestBrainGraphInheritsOwnerFromParentHiddenByVisibilityFilters(t *testing.T) {
+	root, db := testRootDB(t)
+	insertBrainGraphOwner(t, db, root, "brain-ui")
+	insertBrainGraphTask(t, db, "query-parent", "Query Parent", "backlog", nil)
+	insertBrainGraphTask(t, db, "query-child", "Needle Child", "backlog", strPtr("query-parent"))
+	insertBrainGraphTask(t, db, "status-parent", "Status Parent", "done", nil)
+	insertBrainGraphTask(t, db, "status-child", "Status Child", "backlog", strPtr("status-parent"))
+	insertBrainGraphTask(t, db, "done-parent", "Done Parent", "done", nil)
+	insertBrainGraphTask(t, db, "done-child", "Done Child", "backlog", strPtr("done-parent"))
+	for _, slug := range []string{"query-parent", "status-parent", "done-parent"} {
+		if err := flowdb.AddTaskTag(db, slug, "owner:brain-ui"); err != nil {
+			t.Fatalf("AddTaskTag(%s): %v", slug, err)
+		}
+	}
+
+	tests := []struct {
+		name      string
+		filters   BrainGraphFilters
+		childSlug string
+	}{
+		{
+			name:      "query",
+			filters:   BrainGraphFilters{Query: "needle"},
+			childSlug: "query-child",
+		},
+		{
+			name:      "status",
+			filters:   BrainGraphFilters{Status: "backlog", IncludeDone: true},
+			childSlug: "status-child",
+		},
+		{
+			name:      "include_done",
+			filters:   BrainGraphFilters{},
+			childSlug: "done-child",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := BuildBrainGraph(db, root, tt.filters, time.Date(2026, 6, 12, 10, 0, 0, 0, time.FixedZone("IST", 19800)))
+			if err != nil {
+				t.Fatalf("BuildBrainGraph: %v", err)
+			}
+			nodes := graphNodesByTask(got)
+			node, ok := nodes[tt.childSlug]
+			if !ok {
+				t.Fatalf("child %s missing from graph nodes: %#v", tt.childSlug, got.Nodes)
+			}
+			if node.OwnerSlug != "brain-ui" {
+				t.Fatalf("%s owner_slug = %q, want inherited brain-ui", tt.childSlug, node.OwnerSlug)
+			}
+		})
+	}
+}
+
+func TestBrainGraphWarnsForUnknownOwnerTagsEvenWhenValidOwnerSelected(t *testing.T) {
+	root, db := testRootDB(t)
+	insertBrainGraphOwner(t, db, root, "brain-ui")
+	insertBrainGraphTask(t, db, "mixed-owner", "Mixed Owner", "backlog", nil)
+	for _, tag := range []string{"owner:brain-ui", "owner:missing-b", "owner:missing-a"} {
+		if err := flowdb.AddTaskTag(db, "mixed-owner", tag); err != nil {
+			t.Fatalf("AddTaskTag(%s): %v", tag, err)
+		}
+	}
+
+	got, err := BuildBrainGraph(db, root, BrainGraphFilters{}, time.Date(2026, 6, 12, 10, 0, 0, 0, time.FixedZone("IST", 19800)))
+	if err != nil {
+		t.Fatalf("BuildBrainGraph: %v", err)
+	}
+
+	nodes := graphNodesByTask(got)
+	if nodes["mixed-owner"].OwnerSlug != "brain-ui" {
+		t.Fatalf("mixed-owner owner_slug = %q, want brain-ui", nodes["mixed-owner"].OwnerSlug)
+	}
+	if !graphHasWarning(got, "unknown_owner", "task:mixed-owner", "owner:missing-a") {
+		t.Fatalf("missing warning for owner:missing-a: %#v", got.Warnings)
+	}
+	if !graphHasWarning(got, "unknown_owner", "task:mixed-owner", "owner:missing-b") {
+		t.Fatalf("missing warning for owner:missing-b: %#v", got.Warnings)
 	}
 }
 
@@ -152,6 +227,27 @@ func graphHasEdge(view BrainGraphView, edgeType, source, target string) bool {
 		}
 	}
 	return false
+}
+
+func graphHasWarning(view BrainGraphView, code, nodeID, messagePart string) bool {
+	for _, warning := range view.Warnings {
+		if warning.Code == code && warning.NodeID == nodeID && strings.Contains(warning.Message, messagePart) {
+			return true
+		}
+	}
+	return false
+}
+
+func insertBrainGraphOwner(t *testing.T, db *sql.DB, root, slug string) {
+	t.Helper()
+	now := "2026-06-12T10:00:00+05:30"
+	if _, err := db.Exec(
+		`INSERT INTO owners (slug, name, work_dir, status, every, harness, created_at, updated_at)
+		 VALUES (?, ?, ?, 'active', '1h', 'claude', ?, ?)`,
+		slug, slug, root, now, now,
+	); err != nil {
+		t.Fatal(err)
+	}
 }
 
 func insertBrainGraphTask(t *testing.T, db *sql.DB, slug, name, status string, parentSlug *string) {
