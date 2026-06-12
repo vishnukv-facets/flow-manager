@@ -160,8 +160,8 @@ func BuildBrainGraph(db *sql.DB, root string, filters BrainGraphFilters, now tim
 func brainGraphPolicyView(policy flowdb.BrainPolicy) BrainGraphPolicyView {
 	return BrainGraphPolicyView{
 		FullAuto:         policy.FullAuto,
-		RiskyWhitelist:   append([]string(nil), policy.RiskyWhitelist...),
-		ApprovalRequired: append([]string(nil), policy.RequiresReview...),
+		RiskyWhitelist:   append(make([]string, 0, len(policy.RiskyWhitelist)), policy.RiskyWhitelist...),
+		ApprovalRequired: append(make([]string, 0, len(policy.RequiresReview)), policy.RequiresReview...),
 	}
 }
 

@@ -580,6 +580,21 @@ func assertBrainGraphEmptyResponse(t *testing.T, rec *httptest.ResponseRecorder)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d, body = %s", rec.Code, rec.Body.String())
 	}
+	var raw struct {
+		Policy struct {
+			RiskyWhitelist   json.RawMessage `json:"risky_whitelist"`
+			ApprovalRequired json.RawMessage `json:"approval_required"`
+		} `json:"policy"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &raw); err != nil {
+		t.Fatalf("decode raw graph: %v", err)
+	}
+	if string(raw.Policy.RiskyWhitelist) != "[]" {
+		t.Fatalf("policy.risky_whitelist JSON = %s, want []", raw.Policy.RiskyWhitelist)
+	}
+	if string(raw.Policy.ApprovalRequired) == "null" || len(raw.Policy.ApprovalRequired) == 0 {
+		t.Fatalf("policy.approval_required JSON = %s, want non-null array", raw.Policy.ApprovalRequired)
+	}
 	var got BrainGraphView
 	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
 		t.Fatalf("decode graph: %v", err)
