@@ -15,10 +15,25 @@ func TestBrainGraphEmptyRoute(t *testing.T) {
 	req := httptest.NewRequest(http.MethodGet, "/api/brain/graph", nil)
 	s.handleBrainGraph(rec, req)
 
+	assertBrainGraphEmptyResponse(t, rec)
+}
+
+func TestBrainGraphEmptyRouteRegistered(t *testing.T) {
+	root, db := testRootDB(t)
+	s := New(Config{DB: db, FlowRoot: root})
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/api/brain/graph", nil)
+	s.Handler().ServeHTTP(rec, req)
+
+	assertBrainGraphEmptyResponse(t, rec)
+}
+
+func assertBrainGraphEmptyResponse(t *testing.T, rec *httptest.ResponseRecorder) {
+	t.Helper()
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d, body = %s", rec.Code, rec.Body.String())
 	}
-
 	var got BrainGraphView
 	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
 		t.Fatalf("decode graph: %v", err)

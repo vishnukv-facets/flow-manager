@@ -95,11 +95,11 @@ type BrainGraphCounts struct {
 }
 
 type BrainGraphActionSpec struct {
-	Key      string `json:"key"`
-	Label    string `json:"label"`
-	Risky    bool   `json:"risky"`
-	Enabled  bool   `json:"enabled"`
-	Disabled string `json:"disabled_reason,omitempty"`
+	Key            string `json:"key"`
+	Label          string `json:"label"`
+	Risky          bool   `json:"risky"`
+	Enabled        bool   `json:"enabled"`
+	DisabledReason string `json:"disabled_reason,omitempty"`
 }
 
 type BrainGraphWarning struct {

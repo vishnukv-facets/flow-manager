@@ -67,8 +67,7 @@ func defaultBrainGraphActions() []BrainGraphActionSpec {
 }
 
 func (s *Server) handleBrainGraph(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet {
-		w.WriteHeader(http.StatusMethodNotAllowed)
+	if !getOnly(w, r) {
 		return
 	}
 	view, err := BuildBrainGraph(s.cfg.DB, s.cfg.FlowRoot, parseBrainGraphFilters(r), time.Now())
