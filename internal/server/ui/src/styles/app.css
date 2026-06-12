@@ -6379,6 +6379,16 @@ a.srun-where:hover .srun-chan {
 .brain-owner-pill .mono {
   color: var(--text-3);
 }
+.brain-owner-metrics {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+  min-width: 0;
+}
+.brain-owner-metrics.compact {
+  display: contents;
+}
 .brain-canvas {
   min-width: 0;
   min-height: 0;
@@ -6414,6 +6424,76 @@ a.srun-where:hover .srun-chan {
 }
 .brain-canvas .react-flow__edge-path {
   stroke-linecap: round;
+}
+.brain-canvas .react-flow__node-ownerGroup {
+  cursor: pointer;
+}
+.brain-owner-group {
+  width: 100%;
+  height: 100%;
+  padding: 12px 14px;
+  border: 1px solid color-mix(in srgb, var(--border-strong) 76%, transparent);
+  border-radius: var(--r);
+  background:
+    linear-gradient(180deg, color-mix(in srgb, var(--bg-2) 88%, transparent), color-mix(in srgb, var(--bg) 96%, transparent)),
+    var(--bg);
+  color: var(--text);
+  box-shadow: inset 0 1px 0 color-mix(in srgb, var(--text) 5%, transparent);
+  overflow: hidden;
+}
+.brain-owner-group.selected {
+  border-color: var(--accent-line);
+  box-shadow: 0 0 0 2px var(--accent-soft), inset 0 1px 0 color-mix(in srgb, var(--text) 6%, transparent);
+}
+.brain-owner-group-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  min-width: 0;
+  margin-bottom: 9px;
+}
+.brain-owner-group-title {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  min-width: 0;
+}
+.brain-owner-group-title svg {
+  flex: none;
+  margin-top: 2px;
+  color: var(--accent-hi);
+}
+.brain-owner-group-name {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+.brain-owner-group-name strong {
+  min-width: 0;
+  max-width: 230px;
+  font-size: 13px;
+  line-height: 1.2;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.brain-owner-group-name span {
+  min-width: 0;
+  max-width: 230px;
+  color: var(--text-3);
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  line-height: 1.2;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.brain-owner-status {
+  flex: none;
+  max-width: 112px;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 .brain-node {
   width: 286px;

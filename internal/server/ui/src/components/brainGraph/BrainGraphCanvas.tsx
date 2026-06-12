@@ -14,17 +14,25 @@ import {
 } from '@xyflow/react'
 import '@xyflow/react/dist/style.css'
 import { BrainGraphNode } from './BrainGraphNode'
+import { OwnerGroupNode, type OwnerGroupData } from './OwnerBoundary'
 import type { BrainGraphEdge, BrainGraphNode as BrainGraphNodeView, BrainGraphOwnerView } from '../../lib/types'
 
-type FlowNode = Node<BrainGraphNodeView, 'brain'>
+type BrainFlowNode = Node<BrainGraphNodeView, 'brain'>
+type OwnerFlowNode = Node<OwnerGroupData, 'ownerGroup'>
+type FlowNode = BrainFlowNode | OwnerFlowNode
 type FlowEdge = Edge<{ edgeType: string }>
 
 const NODE_W = 286
 const NODE_H = 126
-const OWNER_X = 366
-const ROW_Y = 156
 const CHILD_X = 332
 const CHILD_Y = 132
+const ROW_GAP = 34
+const OWNER_GAP_X = 96
+const OWNER_PAD_X = 24
+const OWNER_PAD_TOP = 88
+const OWNER_PAD_BOTTOM = 24
+const OWNER_MIN_W = 362
+const OWNER_MIN_H = 280
 
 const STATUS_RANK: Record<string, number> = {
   'approval_required': 0,
@@ -57,14 +65,20 @@ const EDGE_COLOR: Record<string, string> = {
 
 const nodeTypes = {
   brain: BrainGraphNode as unknown as ComponentType<NodeProps>,
+  ownerGroup: OwnerGroupNode as unknown as ComponentType<NodeProps>,
 }
 
 function rankNode(node: BrainGraphNodeView) {
   return (STATUS_RANK[node.status] ?? 9) * 10 + (TYPE_RANK[node.type] ?? 8)
 }
 
-function ownerOrder(owners: BrainGraphOwnerView[], nodes: BrainGraphNodeView[]) {
-  const ownerSet = new Set(nodes.map((node) => node.owner_slug || 'unowned'))
+function effectiveOwner(node: BrainGraphNodeView, taskOwners: Map<string, string>) {
+  if (node.owner_slug) return node.owner_slug
+  if (node.task_slug) return taskOwners.get(node.task_slug) || 'unowned'
+  return 'unowned'
+}
+
+function ownerOrder(owners: BrainGraphOwnerView[], ownerSet: Set<string>) {
   const ordered: string[] = []
   const orderedSet = new Set<string>()
   for (const owner of owners) {
@@ -79,14 +93,74 @@ function ownerOrder(owners: BrainGraphOwnerView[], nodes: BrainGraphNodeView[]) 
   return ordered.length ? ordered : ['unowned']
 }
 
-function layoutNodes(nodes: BrainGraphNodeView[], owners: BrainGraphOwnerView[], selectedId?: string | null): FlowNode[] {
-  const ownerIndex = new Map(ownerOrder(owners, nodes).map((owner, index) => [owner, index]))
+function ownerSummary(
+  slug: string,
+  ownerBySlug: Map<string, BrainGraphOwnerView>,
+  effectiveOwners: Map<string, string>,
+  nodes: BrainGraphNodeView[],
+): BrainGraphOwnerView {
+  const existing = ownerBySlug.get(slug)
+  const summary: BrainGraphOwnerView = existing
+    ? { ...existing }
+    : {
+        id: `owner:${slug}`,
+        slug,
+        name: slug === 'unowned' ? 'Unowned' : slug,
+        status: slug === 'unowned' ? 'active' : 'missing',
+        task_count: 0,
+        running_count: 0,
+        blocked_count: 0,
+        approval_count: 0,
+      }
+
+  if (!existing) {
+    for (const node of nodes) {
+      if (effectiveOwners.get(node.id) !== slug) continue
+      if (node.type === 'task') summary.task_count++
+      if (node.type === 'task' && (node.status === 'running' || node.status === 'in-progress')) summary.running_count++
+      if (node.type === 'approval' || node.status === 'approval_required') summary.approval_count++
+      if (node.status === 'blocked' || node.status === 'approval_required') summary.blocked_count++
+    }
+  }
+
+  return summary
+}
+
+function taskSlugFromNode(node: BrainGraphNodeView) {
+  if (node.type === 'task') return node.task_slug || node.id.replace(/^task:/, '')
+  return node.task_slug || ''
+}
+
+function layoutNodes(
+  nodes: BrainGraphNodeView[],
+  owners: BrainGraphOwnerView[],
+  selectedId?: string | null,
+  selectedOwner?: string | null,
+): FlowNode[] {
+  const taskOwners = new Map<string, string>()
+  for (const node of nodes) {
+    if (node.type !== 'task') continue
+    taskOwners.set(taskSlugFromNode(node), node.owner_slug || 'unowned')
+  }
+
+  const effectiveOwners = new Map<string, string>()
+  const visibleOwners = new Set<string>()
+  for (const node of nodes) {
+    const owner = effectiveOwner(node, taskOwners)
+    effectiveOwners.set(node.id, owner)
+    visibleOwners.add(owner)
+  }
+
+  const ownerBySlug = new Map(owners.map((owner) => [owner.slug, owner]))
+  const orderedOwners = ownerOrder(owners, visibleOwners)
+  const ownerIndex = new Map(orderedOwners.map((owner, index) => [owner, index]))
+
   const taskNodes = nodes
     .filter((node) => node.type === 'task')
     .slice()
     .sort((a, b) => {
-      const ax = ownerIndex.get(a.owner_slug || 'unowned') ?? 0
-      const bx = ownerIndex.get(b.owner_slug || 'unowned') ?? 0
+      const ax = ownerIndex.get(effectiveOwners.get(a.id) || 'unowned') ?? 0
+      const bx = ownerIndex.get(effectiveOwners.get(b.id) || 'unowned') ?? 0
       if (ax !== bx) return ax - bx
       const ar = rankNode(a)
       const br = rankNode(b)
@@ -94,51 +168,113 @@ function layoutNodes(nodes: BrainGraphNodeView[], owners: BrainGraphOwnerView[],
       return a.label.localeCompare(b.label)
     })
 
-  const placed = new Map<string, { x: number; y: number }>()
-  const ownerRows = new Map<string, number>()
-  for (const task of taskNodes) {
-    const owner = task.owner_slug || 'unowned'
-    const row = ownerRows.get(owner) ?? 0
-    ownerRows.set(owner, row + 1)
-    placed.set(task.id, {
-      x: (ownerIndex.get(owner) ?? 0) * OWNER_X,
-      y: row * ROW_Y,
-    })
-  }
-
-  const childRows = new Map<string, number>()
-  const orphanRows = new Map<string, number>()
+  const childrenByTask = new Map<string, BrainGraphNodeView[]>()
+  const orphanNodes = new Map<string, BrainGraphNodeView[]>()
+  const taskIdBySlug = new Map(taskNodes.map((node) => [taskSlugFromNode(node), node.id]))
   for (const node of nodes) {
-    if (placed.has(node.id)) continue
-    const taskId = node.task_slug ? `task:${node.task_slug}` : ''
-    const parent = taskId ? placed.get(taskId) : undefined
-    if (parent) {
-      const row = childRows.get(taskId) ?? 0
-      childRows.set(taskId, row + 1)
-      placed.set(node.id, {
-        x: parent.x + CHILD_X,
-        y: parent.y + row * CHILD_Y,
-      })
+    if (node.type === 'task') continue
+    const taskSlug = node.task_slug || ''
+    if (taskSlug && taskIdBySlug.has(taskSlug)) {
+      const key = taskIdBySlug.get(taskSlug) || ''
+      childrenByTask.set(key, [...(childrenByTask.get(key) ?? []), node])
       continue
     }
-    const owner = node.owner_slug || 'unowned'
-    const row = orphanRows.get(owner) ?? 0
-    orphanRows.set(owner, row + 1)
-    placed.set(node.id, {
-      x: (ownerIndex.get(owner) ?? 0) * OWNER_X + CHILD_X,
-      y: row * CHILD_Y,
+    const owner = effectiveOwners.get(node.id) || 'unowned'
+    orphanNodes.set(owner, [...(orphanNodes.get(owner) ?? []), node])
+  }
+  for (const children of childrenByTask.values()) {
+    children.sort((a, b) => {
+      const ar = rankNode(a)
+      const br = rankNode(b)
+      if (ar !== br) return ar - br
+      return a.label.localeCompare(b.label)
+    })
+  }
+  for (const children of orphanNodes.values()) {
+    children.sort((a, b) => {
+      const ar = rankNode(a)
+      const br = rankNode(b)
+      if (ar !== br) return ar - br
+      return a.label.localeCompare(b.label)
     })
   }
 
-  return nodes.map((node) => ({
-    id: node.id,
-    type: 'brain',
-    data: node,
-    position: placed.get(node.id) ?? { x: 0, y: 0 },
-    width: NODE_W,
-    height: NODE_H,
-    selected: node.id === selectedId,
-  }))
+  const placed = new Map<string, { owner: string; x: number; y: number }>()
+  const ownerContent = new Map<string, { height: number; hasRightColumn: boolean }>()
+  const tasksByOwner = new Map<string, BrainGraphNodeView[]>()
+  for (const task of taskNodes) {
+    const owner = effectiveOwners.get(task.id) || 'unowned'
+    tasksByOwner.set(owner, [...(tasksByOwner.get(owner) ?? []), task])
+  }
+
+  for (const owner of orderedOwners) {
+    let cursorY = OWNER_PAD_TOP
+    let hasRightColumn = false
+    for (const task of tasksByOwner.get(owner) ?? []) {
+      const children = childrenByTask.get(task.id) ?? []
+      const rowHeight = Math.max(NODE_H, children.length > 0 ? (children.length - 1) * CHILD_Y + NODE_H : NODE_H)
+      placed.set(task.id, { owner, x: OWNER_PAD_X, y: cursorY })
+      children.forEach((child, index) => {
+        placed.set(child.id, { owner, x: OWNER_PAD_X + CHILD_X, y: cursorY + index * CHILD_Y })
+      })
+      hasRightColumn = hasRightColumn || children.length > 0
+      cursorY += rowHeight + ROW_GAP
+    }
+
+    const orphans = orphanNodes.get(owner) ?? []
+    orphans.forEach((node, index) => {
+      placed.set(node.id, { owner, x: OWNER_PAD_X + CHILD_X, y: cursorY + index * CHILD_Y })
+    })
+    hasRightColumn = hasRightColumn || orphans.length > 0
+    if (orphans.length > 0) {
+      cursorY += (orphans.length - 1) * CHILD_Y + NODE_H + ROW_GAP
+    }
+
+    const contentHeight = Math.max(OWNER_MIN_H, cursorY - ROW_GAP + OWNER_PAD_BOTTOM)
+    ownerContent.set(owner, { height: contentHeight, hasRightColumn })
+  }
+
+  const groupPositions = new Map<string, { x: number; y: number; width: number; height: number }>()
+  let cursorX = 0
+  for (const owner of orderedOwners) {
+    const content = ownerContent.get(owner) ?? { height: OWNER_MIN_H, hasRightColumn: false }
+    const width = Math.max(OWNER_MIN_W, OWNER_PAD_X * 2 + NODE_W + (content.hasRightColumn ? CHILD_X : 0))
+    groupPositions.set(owner, { x: cursorX, y: 0, width, height: content.height })
+    cursorX += width + OWNER_GAP_X
+  }
+
+  const ownerNodes: OwnerFlowNode[] = orderedOwners.map((slug) => {
+    const group = groupPositions.get(slug) ?? { x: 0, y: 0, width: OWNER_MIN_W, height: OWNER_MIN_H }
+    return {
+      id: `owner-boundary:${slug}`,
+      type: 'ownerGroup',
+      data: { owner: ownerSummary(slug, ownerBySlug, effectiveOwners, nodes) },
+      position: { x: group.x, y: group.y },
+      style: { width: group.width, height: group.height },
+      selectable: true,
+      draggable: false,
+      selected: slug === selectedOwner,
+      zIndex: 0,
+    }
+  })
+
+  const graphNodes: BrainFlowNode[] = nodes.map((node) => {
+    const position = placed.get(node.id) ?? { owner: effectiveOwners.get(node.id) || 'unowned', x: OWNER_PAD_X, y: OWNER_PAD_TOP }
+    return {
+      id: node.id,
+      type: 'brain',
+      data: node,
+      parentId: `owner-boundary:${position.owner}`,
+      extent: 'parent',
+      position: { x: position.x, y: position.y },
+      width: NODE_W,
+      height: NODE_H,
+      selected: node.id === selectedId,
+      zIndex: 2,
+    }
+  })
+
+  return [...ownerNodes, ...graphNodes]
 }
 
 function flowEdges(edges: BrainGraphEdge[]): FlowEdge[] {
@@ -160,6 +296,7 @@ function flowEdges(edges: BrainGraphEdge[]): FlowEdge[] {
 }
 
 function miniMapColor(node: Node) {
+  if (node.type === 'ownerGroup') return 'color-mix(in srgb, var(--accent) 26%, var(--bg-3))'
   const data = node.data as unknown as BrainGraphNodeView
   if (data.type === 'approval' || data.status === 'approval_required') return 'var(--warn)'
   if (data.status === 'dead' || data.status === 'error') return 'var(--danger)'
@@ -173,18 +310,22 @@ export function BrainGraphCanvas({
   edges,
   owners,
   selectedId,
+  selectedOwner,
   onSelectNode,
+  onSelectOwner,
   onClearSelection,
 }: {
   nodes: BrainGraphNodeView[]
   edges: BrainGraphEdge[]
   owners: BrainGraphOwnerView[]
   selectedId?: string | null
+  selectedOwner?: string | null
   onSelectNode: (node: BrainGraphNodeView) => void
+  onSelectOwner: (ownerSlug: string) => void
   onClearSelection: () => void
 }) {
   const [instance, setInstance] = useState<ReactFlowInstance<FlowNode, FlowEdge> | null>(null)
-  const flowNodes = useMemo(() => layoutNodes(nodes, owners, selectedId), [nodes, owners, selectedId])
+  const flowNodes = useMemo(() => layoutNodes(nodes, owners, selectedId, selectedOwner), [nodes, owners, selectedId, selectedOwner])
   const flowEdgeList = useMemo(() => flowEdges(edges), [edges])
 
   useEffect(() => {
@@ -195,7 +336,13 @@ export function BrainGraphCanvas({
     return () => window.clearTimeout(timer)
   }, [instance, flowNodes.length, edges.length])
 
-  const onNodeClick: NodeMouseHandler<FlowNode> = (_event, node) => onSelectNode(node.data)
+  const onNodeClick: NodeMouseHandler<FlowNode> = (_event, node) => {
+    if (node.type === 'ownerGroup') {
+      onSelectOwner((node.data as OwnerGroupData).owner.slug)
+      return
+    }
+    onSelectNode(node.data as BrainGraphNodeView)
+  }
 
   return (
     <div className="brain-canvas">

@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react'
+import { useMemo, useReducer } from 'react'
 import { Link } from 'wouter'
 import { AlertTriangle, ArrowUpRight, Boxes, GitBranch, Info, ShieldAlert } from 'lucide-react'
 import { BrainGraphCanvas } from '../components/brainGraph/BrainGraphCanvas'
@@ -36,12 +36,62 @@ function nodeTone(status: string) {
   }
 }
 
+function nodeOwnerSlug(node: BrainGraphNode, nodes: BrainGraphNode[]) {
+  if (node.owner_slug) return node.owner_slug
+  if (!node.task_slug) return 'unowned'
+  const taskNode = nodes.find((candidate) =>
+    candidate.type === 'task' && (candidate.task_slug === node.task_slug || candidate.id === `task:${node.task_slug}`),
+  )
+  return taskNode?.owner_slug || 'unowned'
+}
+
+interface BrainGraphState {
+  q: string
+  includeDone: boolean
+  expanded: Set<string>
+  selectedId: string | null
+  selectedOwner: string | null
+}
+
+type BrainGraphAction =
+  | { type: 'query'; q: string }
+  | { type: 'includeDone'; includeDone: boolean }
+  | { type: 'selectNode'; id: string; ownerSlug: string; expandTask: boolean }
+  | { type: 'selectOwner'; ownerSlug: string }
+  | { type: 'clearSelection' }
+
+const initialBrainGraphState: BrainGraphState = {
+  q: '',
+  includeDone: false,
+  expanded: new Set(),
+  selectedId: null,
+  selectedOwner: null,
+}
+
+function brainGraphReducer(state: BrainGraphState, action: BrainGraphAction): BrainGraphState {
+  switch (action.type) {
+    case 'query':
+      return { ...state, q: action.q }
+    case 'includeDone':
+      return { ...state, includeDone: action.includeDone }
+    case 'selectOwner':
+      return { ...state, selectedId: null, selectedOwner: action.ownerSlug }
+    case 'clearSelection':
+      return { ...state, selectedId: null, selectedOwner: null }
+    case 'selectNode': {
+      const expanded =
+        action.expandTask && !state.expanded.has(action.id)
+          ? new Set([...state.expanded, action.id])
+          : state.expanded
+      return { ...state, selectedId: action.id, selectedOwner: action.ownerSlug, expanded }
+    }
+  }
+}
+
 export function BrainGraph() {
   useDocumentTitle('Brain Graph')
-  const [q, setQ] = useState('')
-  const [includeDone, setIncludeDone] = useState(false)
-  const [expanded, setExpanded] = useState<Set<string>>(new Set())
-  const [selectedId, setSelectedId] = useState<string | null>(null)
+  const [state, dispatch] = useReducer(brainGraphReducer, initialBrainGraphState)
+  const { q, includeDone, expanded, selectedId, selectedOwner } = state
   const expand = useMemo(() => [...expanded].sort(), [expanded])
   const { data, isLoading, error, isFetching } = useBrainGraph({ q, includeDone, expand })
 
@@ -51,13 +101,11 @@ export function BrainGraph() {
   )
 
   const selectNode = (node: BrainGraphNode) => {
-    setSelectedId(node.id)
-    if (node.type !== 'task') return
-    setExpanded((prev) => {
-      if (prev.has(node.id)) return prev
-      const next = new Set(prev)
-      next.add(node.id)
-      return next
+    dispatch({
+      type: 'selectNode',
+      id: node.id,
+      ownerSlug: data ? nodeOwnerSlug(node, data.nodes) : node.owner_slug || 'unowned',
+      expandTask: node.type === 'task',
     })
   }
 
@@ -68,8 +116,8 @@ export function BrainGraph() {
         q={q}
         includeDone={includeDone}
         expandedCount={expanded.size}
-        onQ={setQ}
-        onIncludeDone={setIncludeDone}
+        onQ={(next) => dispatch({ type: 'query', q: next })}
+        onIncludeDone={(next) => dispatch({ type: 'includeDone', includeDone: next })}
       />
 
       {isLoading ? (
@@ -83,7 +131,7 @@ export function BrainGraph() {
           <div className="brain-main">
             <div className="brain-surface">
               <div className="brain-surface-head">
-                <OwnerBoundary owners={data.owners} selectedOwner={selected?.owner_slug} />
+                <OwnerBoundary owners={data.owners} selectedOwner={selectedOwner ?? selected?.owner_slug} />
                 <div className="brain-freshness">
                   <span className={`dot ${isFetching ? 'waiting' : 'done'}`} />
                   {isFetching ? 'refreshing' : data.freshness}
@@ -94,8 +142,12 @@ export function BrainGraph() {
                 edges={data.edges}
                 owners={data.owners}
                 selectedId={selected?.id ?? null}
+                selectedOwner={selectedOwner}
                 onSelectNode={selectNode}
-                onClearSelection={() => setSelectedId(null)}
+                onSelectOwner={(ownerSlug) => {
+                  dispatch({ type: 'selectOwner', ownerSlug })
+                }}
+                onClearSelection={() => dispatch({ type: 'clearSelection' })}
               />
             </div>
             <BrainGraphLegend />
