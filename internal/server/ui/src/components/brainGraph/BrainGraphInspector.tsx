@@ -1,5 +1,5 @@
 import { Link, useLocation } from 'wouter'
-import type { ReactNode } from 'react'
+import { useState, type ReactNode } from 'react'
 import {
   Activity,
   AlertTriangle,
@@ -10,12 +10,14 @@ import {
   ListChecks,
   Loader2,
   ScrollText,
+  SendHorizontal,
   ShieldAlert,
   TerminalSquare,
 } from 'lucide-react'
 import { StatusDot } from '../ui'
+import { Modal } from '../Modal'
 import { confirmAction } from '../../lib/confirm'
-import { useBrainGraphAction, useBrainGraphNodeDetail } from '../../lib/query'
+import { useBrainGraphAction, useBrainGraphNodeDetail, useTaskTranscript } from '../../lib/query'
 import { dateTime } from '../../lib/format'
 import type {
   BrainGraphActionSpec,
@@ -27,6 +29,7 @@ import type {
   BrainGraphRunDetail,
   BrainGraphTaskDetail,
   BrainGraphWarning,
+  TranscriptEntry,
 } from '../../lib/types'
 
 function actionByKey(actions: BrainGraphActionSpec[], key: string) {
@@ -108,6 +111,7 @@ export function BrainGraphInspector({
             {detail?.run ? <RunDetail detail={detail.run} /> : null}
             {detail?.approval ? <ApprovalDetail detail={detail.approval} audit={detail.audit} /> : null}
             {detail?.evidence ? <EvidenceDetail detail={detail.evidence} /> : null}
+            {detail && !detail.approval && detail.audit.length > 0 ? <AuditSection audit={detail.audit} /> : null}
           </div>
         ) : (
           <div className="brain-inspector-empty">No node selected</div>
@@ -222,6 +226,7 @@ function TaskDetail({ detail }: { detail: BrainGraphTaskDetail }) {
           </div>
         ) : null}
       </DetailSection>
+      <TaskTranscriptPreview slug={detail.slug} enabled={Boolean(detail.session_id)} />
     </>
   )
 }
@@ -263,27 +268,31 @@ function ApprovalDetail({ detail, audit }: { detail: BrainGraphApprovalDetail; a
           <KV k="policy" v={detail.policy_mode} />
         </div>
       </DetailSection>
-      {audit.length > 0 ? (
-        <DetailSection title="Audit" icon={<ListChecks size={14} />}>
-          <div className="brain-audit-list">
-            {audit.map((item) => (
-              <div className="brain-audit-row" key={item.id}>
-                <div className="brain-audit-top">
-                  <span className={`badge ${item.result === 'allowed' ? 'ok' : item.result === 'blocked' ? 'warn' : ''}`}>{item.result}</span>
-                  <strong>{item.action}</strong>
-                  <span className="faint">{dateTime(item.created_at)}</span>
-                </div>
-                <div className="brain-audit-sub">
-                  {item.actor} · {item.policy}
-                </div>
-                <JsonPreview label="evidence" value={item.evidence_json} compact />
-                {item.error_text ? <TextBlock label="error" value={item.error_text} tone="danger" /> : null}
-              </div>
-            ))}
-          </div>
-        </DetailSection>
-      ) : null}
+      {audit.length > 0 ? <AuditSection audit={audit} /> : null}
     </>
+  )
+}
+
+function AuditSection({ audit }: { audit: BrainGraphAuditView[] }) {
+  return (
+    <DetailSection title="Audit" icon={<ListChecks size={14} />}>
+      <div className="brain-audit-list">
+        {audit.map((item) => (
+          <div className="brain-audit-row" key={item.id}>
+            <div className="brain-audit-top">
+              <span className={`badge ${item.result === 'allowed' || item.result === 'sent' || item.result === 'opened' ? 'ok' : item.result === 'blocked' ? 'warn' : item.result === 'error' ? 'danger' : ''}`}>{item.result}</span>
+              <strong>{item.action}</strong>
+              <span className="faint">{dateTime(item.created_at)}</span>
+            </div>
+            <div className="brain-audit-sub">
+              {item.actor} · {item.policy}
+            </div>
+            <JsonPreview label="evidence" value={item.evidence_json} compact />
+            {item.error_text ? <TextBlock label="error" value={item.error_text} tone="danger" /> : null}
+          </div>
+        ))}
+      </div>
+    </DetailSection>
   )
 }
 
@@ -375,11 +384,18 @@ function NodeRef({ node }: { node: BrainGraphNode }) {
 function NodeActions({ node, actions }: { node: BrainGraphNode; actions: BrainGraphActionSpec[] }) {
   const graphAction = useBrainGraphAction()
   const [, navigate] = useLocation()
+  const [promptAction, setPromptAction] = useState<BrainGraphActionSpec | null>(null)
+  const [prompt, setPrompt] = useState('')
   const pendingAction = graphAction.isPending ? graphAction.variables?.action : ''
 
   const run = async (key: string, action?: BrainGraphActionSpec) => {
     const enabled = action?.enabled ?? true
     if (!enabled || graphAction.isPending) return
+    if (key === 'seed' || key === 'send_event') {
+      setPrompt('')
+      setPromptAction(action ?? { key, label: key.replace(/_/g, ' '), risky: false, enabled: true })
+      return
+    }
     let confirm = false
     if (key === 'approve') {
       const ok = await confirmAction({
@@ -402,30 +418,140 @@ function NodeActions({ node, actions }: { node: BrainGraphNode; actions: BrainGr
       // The hook emits the toast; keep the click handler quiet.
     }
   }
+  const submitPromptAction = async () => {
+    const text = prompt.trim()
+    if (!promptAction || !text || graphAction.isPending) return
+    try {
+      await graphAction.mutateAsync({ action: promptAction.key, node_id: node.id, prompt: text })
+      setPrompt('')
+      setPromptAction(null)
+    } catch {
+      // The hook emits the toast; keep the modal open so the text can be retried.
+    }
+  }
 
   return (
-    <div className="brain-action-list">
-      {(node.actions ?? []).map((key) => {
-        const action = actionByKey(actions, key)
-        const enabled = action?.enabled ?? true
-        const pending = pendingAction === key
-        return (
-          <button
-            type="button"
-            className={`brain-action-button ${action?.risky ? 'risky' : ''}`}
-            key={key}
-            title={action?.disabled_reason || undefined}
-            disabled={!enabled || graphAction.isPending}
-            aria-busy={pending}
-            onClick={() => void run(key, action)}
-          >
-            {pending ? <Loader2 size={13} className="spin" /> : null}
-            <span>{action?.label ?? key.replace(/_/g, ' ')}</span>
-          </button>
-        )
-      })}
-    </div>
+    <>
+      <div className="brain-action-list">
+        {(node.actions ?? []).map((key) => {
+          const action = actionByKey(actions, key)
+          const enabled = action?.enabled ?? true
+          const pending = pendingAction === key
+          return (
+            <button
+              type="button"
+              className={`brain-action-button ${action?.risky ? 'risky' : ''}`}
+              key={key}
+              title={action?.disabled_reason || undefined}
+              disabled={!enabled || graphAction.isPending}
+              aria-busy={pending}
+              onClick={() => void run(key, action)}
+            >
+              {pending ? <Loader2 size={13} className="spin" /> : null}
+              <span>{action?.label ?? key.replace(/_/g, ' ')}</span>
+            </button>
+          )
+        })}
+      </div>
+      <Modal
+        open={Boolean(promptAction)}
+        onClose={() => {
+          if (graphAction.isPending) return
+          setPromptAction(null)
+          setPrompt('')
+        }}
+        title={promptAction?.label ?? 'Send input'}
+        width={560}
+        footer={
+          <>
+            <button type="button" className="btn" disabled={graphAction.isPending} onClick={() => setPromptAction(null)}>
+              Cancel
+            </button>
+            <button type="button" className="btn primary" disabled={!prompt.trim() || graphAction.isPending} onClick={submitPromptAction}>
+              {graphAction.isPending ? <Loader2 size={14} className="spin" /> : <SendHorizontal size={14} />}
+              Send
+            </button>
+          </>
+        }
+      >
+        <div className="brain-action-modal">
+          <div className="brain-action-modal-target">
+            <span>task</span>
+            <strong>{node.task_slug || node.id}</strong>
+          </div>
+          <textarea
+            className="textarea brain-action-prompt"
+            aria-label={promptAction?.key === 'seed' ? 'Seed input' : 'Session event'}
+            rows={6}
+            value={prompt}
+            disabled={graphAction.isPending}
+            placeholder={promptAction?.key === 'seed' ? 'Seed input for this task session…' : 'Event to send into this task session…'}
+            onChange={(e) => setPrompt(e.target.value)}
+            onKeyDown={(e) => {
+              if ((e.metaKey || e.ctrlKey) && e.key === 'Enter') {
+                e.preventDefault()
+                void submitPromptAction()
+              }
+            }}
+          />
+        </div>
+      </Modal>
+    </>
   )
+}
+
+function TaskTranscriptPreview({ slug, enabled }: { slug: string; enabled: boolean }) {
+  const { data, isLoading, error } = useTaskTranscript(slug, enabled)
+  if (!enabled) return null
+  if (isLoading) {
+    return (
+      <DetailSection title="Transcript" icon={<ScrollText size={14} />}>
+        <div className="brain-detail-state">
+          <Loader2 size={14} className="spin" />
+          <span>loading transcript</span>
+        </div>
+      </DetailSection>
+    )
+  }
+  if (error) {
+    return (
+      <DetailSection title="Transcript" icon={<ScrollText size={14} />}>
+        <div className="brain-detail-state danger">
+          <AlertTriangle size={14} />
+          <span>{errorText(error)}</span>
+        </div>
+      </DetailSection>
+    )
+  }
+  if (!data?.available || data.entries.length === 0) {
+    return (
+      <DetailSection title="Transcript" icon={<ScrollText size={14} />}>
+        <div className="brain-detail-text">{data?.message || 'No transcript captured yet.'}</div>
+      </DetailSection>
+    )
+  }
+  const entries = data.entries.slice(-6)
+  return (
+    <DetailSection title="Transcript" icon={<ScrollText size={14} />}>
+      <div className="brain-transcript-list">
+        {entries.map((entry, index) => (
+          <div className={`brain-transcript-row ${entry.is_error ? 'danger' : ''}`} key={`${entry.byte_offset}:${index}`}>
+            <div className="brain-transcript-meta">
+              <span>{entry.type}</span>
+              {entry.timestamp ? <strong>{dateTime(entry.timestamp)}</strong> : null}
+            </div>
+            <div className="brain-transcript-text">{transcriptEntryText(entry)}</div>
+          </div>
+        ))}
+      </div>
+    </DetailSection>
+  )
+}
+
+function transcriptEntryText(entry: TranscriptEntry) {
+  if (entry.type === 'tool_use') return `${entry.tool_name ?? 'tool'} ${entry.tool_input_summary ?? ''}`.trim()
+  if (entry.type === 'tool_result') return entry.tool_result_text || ''
+  return entry.text || ''
 }
 
 function MetadataTable({ metadata }: { metadata: Record<string, string> }) {

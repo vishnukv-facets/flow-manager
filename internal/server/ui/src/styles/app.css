@@ -6707,6 +6707,36 @@ a.srun-where:hover .srun-chan {
 .brain-action-button svg {
   flex: none;
 }
+.brain-action-modal {
+  display: grid;
+  gap: 10px;
+}
+.brain-action-modal-target {
+  display: grid;
+  grid-template-columns: 58px minmax(0, 1fr);
+  gap: 10px;
+  align-items: baseline;
+  padding: 8px 10px;
+  border: 1px solid var(--border-faint);
+  border-radius: var(--r-sm);
+  background: var(--bg-2);
+}
+.brain-action-modal-target span {
+  color: var(--text-3);
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  text-transform: uppercase;
+}
+.brain-action-modal-target strong {
+  min-width: 0;
+  overflow-wrap: anywhere;
+  color: var(--text-2);
+  font-size: 12px;
+}
+.brain-action-prompt {
+  min-height: 132px;
+  resize: vertical;
+}
 .brain-inspector-summary {
   color: var(--text-2);
   font-size: 12.5px;
@@ -6865,6 +6895,44 @@ a.srun-where:hover .srun-chan {
   color: var(--text-3);
   font-family: var(--font-mono);
   font-size: 10.5px;
+}
+.brain-transcript-list {
+  display: grid;
+  gap: 7px;
+  padding: 0 10px 10px;
+}
+.brain-transcript-row {
+  display: grid;
+  gap: 4px;
+  padding: 7px 0;
+  border-top: 1px solid var(--border-faint);
+}
+.brain-transcript-row:first-child {
+  border-top: 0;
+}
+.brain-transcript-row.danger .brain-transcript-text {
+  color: var(--danger);
+}
+.brain-transcript-meta {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  color: var(--text-3);
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+}
+.brain-transcript-meta strong {
+  font-weight: 500;
+}
+.brain-transcript-text {
+  max-height: 84px;
+  overflow: hidden;
+  color: var(--text-2);
+  font-size: 12px;
+  line-height: 1.4;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
 }
 .brain-ref-link,
 .brain-ref-static {

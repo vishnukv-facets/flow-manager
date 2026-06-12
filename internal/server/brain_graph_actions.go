@@ -112,8 +112,11 @@ func (s *Server) runBrainGraphAction(req BrainGraphActionRequest) (BrainGraphAct
 		base.Message = "pause is disabled: no safe persisted stop primitive is available for Brain Graph runs"
 		return base, http.StatusConflict
 	case "send_event", "seed":
-		base.Message = "graph action " + req.Action + " is not supported yet"
-		return base, http.StatusNotImplemented
+		if node.Type != "task" {
+			base.Message = req.Action + " is available for task nodes only"
+			return base, http.StatusBadRequest
+		}
+		return s.runBrainGraphSessionEventAction(base, req, node)
 	default:
 		base.Message = "unknown graph action " + req.Action
 		return base, http.StatusBadRequest
@@ -291,6 +294,55 @@ func (s *Server) runBrainGraphRetryAction(base BrainGraphActionResponse, req Bra
 	base.Audit = audit
 	s.publishUIChange("brain-graph")
 	return base, http.StatusOK
+}
+
+func (s *Server) runBrainGraphSessionEventAction(base BrainGraphActionResponse, req BrainGraphActionRequest, node brainGraphActionNode) (BrainGraphActionResponse, int) {
+	if req.Prompt == "" {
+		base.Message = "prompt is required for " + req.Action
+		return base, http.StatusBadRequest
+	}
+	deliveredPrompt := brainGraphSessionEventPrompt(req.Action, node.TaskSlug, req.Prompt)
+	resp, status := s.nudgeSession(node.TaskSlug, deliveredPrompt)
+	base.OK = resp.OK
+	base.Message = resp.Message
+	base.Output = resp.Output
+	base.ActionResponse = &resp
+	evidence := map[string]any{
+		"node_id":   node.ID,
+		"task_slug": node.TaskSlug,
+		"action":    req.Action,
+		"prompt":    req.Prompt,
+		"nudge": map[string]any{
+			"ok":      resp.OK,
+			"status":  status,
+			"message": resp.Message,
+		},
+	}
+	result := "sent"
+	errorText := ""
+	if !resp.OK {
+		result = "error"
+		errorText = resp.Message
+	}
+	audit, auditErr := s.insertBrainGraphActionAudit(req.Action, "task", node.TaskSlug, req.Actor, "operator", result, evidence, errorText)
+	base.Audit = audit
+	if auditErr != nil {
+		base.OK = false
+		base.Message = auditErr.Error()
+		return base, http.StatusInternalServerError
+	}
+	if resp.OK {
+		s.publishUIChange("brain-graph")
+	}
+	return base, status
+}
+
+func brainGraphSessionEventPrompt(action, taskSlug, prompt string) string {
+	label := "event"
+	if action == "seed" {
+		label = "seed input"
+	}
+	return fmt.Sprintf("Flow Brain Graph %s for %s:\n\n%s", label, taskSlug, prompt)
 }
 
 func (s *Server) runBrainGraphApproveAction(base BrainGraphActionResponse, req BrainGraphActionRequest, node brainGraphActionNode) (BrainGraphActionResponse, int) {

@@ -221,7 +221,7 @@ func TestBrainGraphOpenSessionActionAuditsSuccessfulBridge(t *testing.T) {
 	}
 }
 
-func TestBrainGraphSeedAndSendEventActionsReturnUnsupported(t *testing.T) {
+func TestBrainGraphSessionEventActionRequiresPrompt(t *testing.T) {
 	root, db := testRootDB(t)
 	s := New(Config{DB: db, FlowRoot: root})
 	insertBrainGraphTask(t, db, "ship", "Ship Feature", "backlog", nil)
@@ -233,13 +233,65 @@ func TestBrainGraphSeedAndSendEventActionsReturnUnsupported(t *testing.T) {
 				NodeID: "task:ship",
 				Actor:  "operator",
 			})
-			if rec.Code != http.StatusNotImplemented {
+			if rec.Code != http.StatusBadRequest {
 				t.Fatalf("status = %d, body = %s", rec.Code, rec.Body.String())
 			}
-			if got.OK || got.Message != "graph action "+action+" is not supported yet" {
-				t.Fatalf("response = %#v, want stable unsupported response", got)
+			if got.OK || !strings.Contains(got.Message, "prompt is required") {
+				t.Fatalf("response = %#v, want prompt-required validation", got)
 			}
 		})
+	}
+}
+
+func TestBrainGraphSessionEventActionNudgesLiveSessionAndAudits(t *testing.T) {
+	root, db := testRootDB(t)
+	s := New(Config{DB: db, FlowRoot: root})
+	insertBrainGraphTask(t, db, "ship", "Ship Feature", "backlog", nil)
+	sessionFile := fakeRunningTerminalSession(t, s, "ship")
+
+	got, rec := postBrainGraphAction(t, s, BrainGraphActionRequest{
+		Action: "seed",
+		NodeID: "task:ship",
+		Prompt: "Focus on the failing retry path.",
+		Actor:  "operator",
+	})
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, body = %s", rec.Code, rec.Body.String())
+	}
+	if !got.OK || got.Audit == nil || got.Audit.Action != "seed" || got.Audit.Result != "sent" {
+		t.Fatalf("response = %#v, want successful audited seed", got)
+	}
+	written := readTerminalSessionFile(t, sessionFile)
+	if !strings.Contains(written, "Flow Brain Graph seed input for ship") || !strings.Contains(written, "Focus on the failing retry path.") {
+		t.Fatalf("terminal prompt missing seed context:\n%s", written)
+	}
+	var evidence struct {
+		NodeID   string `json:"node_id"`
+		TaskSlug string `json:"task_slug"`
+		Action   string `json:"action"`
+		Prompt   string `json:"prompt"`
+		Nudge    struct {
+			OK      bool   `json:"ok"`
+			Status  int    `json:"status"`
+			Message string `json:"message"`
+		} `json:"nudge"`
+	}
+	if err := json.Unmarshal(got.Audit.EvidenceJSON, &evidence); err != nil {
+		t.Fatalf("decode audit evidence %s: %v", got.Audit.EvidenceJSON, err)
+	}
+	if evidence.NodeID != "task:ship" || evidence.TaskSlug != "ship" || evidence.Action != "seed" || evidence.Prompt != "Focus on the failing retry path." {
+		t.Fatalf("evidence = %#v, want seed context", evidence)
+	}
+	if !evidence.Nudge.OK || evidence.Nudge.Status != http.StatusOK {
+		t.Fatalf("nudge evidence = %#v, want successful nudge", evidence.Nudge)
+	}
+	detail, err := BuildBrainGraphNodeDetail(db, root, "task:ship")
+	if err != nil {
+		t.Fatalf("BuildBrainGraphNodeDetail: %v", err)
+	}
+	if len(detail.Audit) != 1 || detail.Audit[0].Action != "seed" || detail.Audit[0].Result != "sent" {
+		t.Fatalf("detail audit = %#v, want seed audit", detail.Audit)
 	}
 }
 
@@ -383,14 +435,20 @@ func TestBrainGraphTaskNodesOnlyAdvertiseSupportedActions(t *testing.T) {
 	if !ok {
 		t.Fatalf("missing task node: %#v", view.Nodes)
 	}
-	if strings.Join(node.Actions, ",") != "open_session" {
-		t.Fatalf("task actions = %#v, want only open_session", node.Actions)
+	if strings.Join(node.Actions, ",") != "open_session,send_event,seed" {
+		t.Fatalf("task actions = %#v, want session controls", node.Actions)
 	}
 	actionSpecs := map[string]BrainGraphActionSpec{}
 	for _, action := range view.SelectedActions {
 		actionSpecs[action.Key] = action
 	}
-	for _, key := range []string{"send_event", "seed", "pause"} {
+	for _, key := range []string{"send_event", "seed"} {
+		spec := actionSpecs[key]
+		if !spec.Enabled || spec.DisabledReason != "" {
+			t.Fatalf("action spec %s = %#v, want enabled session control", key, spec)
+		}
+	}
+	for _, key := range []string{"pause"} {
 		spec := actionSpecs[key]
 		if spec.Enabled || spec.DisabledReason == "" {
 			t.Fatalf("action spec %s = %#v, want disabled reason", key, spec)
@@ -428,4 +486,35 @@ func fakeProviderOnPath(t *testing.T, name string) {
 		t.Fatalf("write fake provider: %v", err)
 	}
 	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
+}
+
+func fakeRunningTerminalSession(t *testing.T, s *Server, slug string) *os.File {
+	t.Helper()
+	f, err := os.CreateTemp(t.TempDir(), "terminal-session-*")
+	if err != nil {
+		t.Fatalf("create terminal file: %v", err)
+	}
+	t.Cleanup(func() { _ = f.Close() })
+	s.terminals.mu.Lock()
+	s.terminals.sessions[slug] = &terminalSession{
+		hub:     s.terminals,
+		slug:    slug,
+		tty:     f,
+		done:    make(chan struct{}),
+		clients: map[*terminalClient]struct{}{},
+	}
+	s.terminals.mu.Unlock()
+	return f
+}
+
+func readTerminalSessionFile(t *testing.T, f *os.File) string {
+	t.Helper()
+	if _, err := f.Seek(0, 0); err != nil {
+		t.Fatalf("seek terminal file: %v", err)
+	}
+	raw, err := os.ReadFile(f.Name())
+	if err != nil {
+		t.Fatalf("read terminal file: %v", err)
+	}
+	return string(raw)
 }
