@@ -127,7 +127,6 @@ export function BrainGraph() {
 
           <BrainGraphInspector
             selected={selected}
-            policy={data.policy}
             actions={data.selected_actions}
             warnings={data.warnings}
           />

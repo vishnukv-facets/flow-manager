@@ -174,7 +174,6 @@ export interface BrainGraphView {
   generated_at: string
   freshness: string
   controller: BrainGraphController
-  policy: BrainGraphPolicyView
   owners: BrainGraphOwnerView[]
   nodes: BrainGraphNode[]
   edges: BrainGraphEdge[]
@@ -189,14 +188,6 @@ export interface BrainGraphController {
   status: string
 }
 
-export interface BrainGraphPolicyView {
-  full_auto: boolean
-  risky_whitelist: string[]
-  approval_required: string[]
-  last_decision_at?: string | null
-  last_decision_state?: string | null
-}
-
 export interface BrainGraphOwnerView {
   id: string
   slug: string
@@ -204,8 +195,6 @@ export interface BrainGraphOwnerView {
   status: string
   task_count: number
   running_count: number
-  blocked_count: number
-  approval_count: number
 }
 
 export interface BrainGraphNode extends Record<string, unknown> {
@@ -247,9 +236,6 @@ export interface BrainGraphEdge {
 export interface BrainGraphCounts {
   total_tasks: number
   running: number
-  blocked: number
-  failed: number
-  approval_needed: number
   done: number
   owners: number
   warnings: number
@@ -273,10 +259,7 @@ export interface BrainGraphNodeDetail {
   id: string
   type: BrainGraphNodeType
   task?: BrainGraphTaskDetail
-  run?: BrainGraphRunDetail
   evidence?: BrainGraphEvidenceDetail
-  approval?: BrainGraphApprovalDetail
-  audit: BrainGraphAuditView[]
 }
 
 export interface BrainGraphTaskDetail {
@@ -299,34 +282,6 @@ export interface BrainGraphTaskDetail {
   updates: FileRef[]
 }
 
-export interface BrainGraphRunDetail {
-  run_id: string
-  family_slug: string
-  task_slug: string
-  task_name?: string | null
-  task_status?: string | null
-  plan_id?: string | null
-  role: string
-  provider: string
-  requested_model?: string | null
-  requested_tier?: string | null
-  resolved_model?: string | null
-  permission_mode: string
-  status: string
-  pid?: number | null
-  session_id?: string | null
-  log_path?: string | null
-  input_summary?: string | null
-  output_json?: unknown
-  evidence_json?: unknown
-  error_text?: string | null
-  started_at?: string | null
-  finished_at?: string | null
-  created_at: string
-  updated_at: string
-  legacy?: boolean
-}
-
 export interface BrainGraphEvidenceDetail {
   kind: string
   task_slug?: string
@@ -337,31 +292,10 @@ export interface BrainGraphEvidenceDetail {
   message?: string
 }
 
-export interface BrainGraphApprovalDetail {
-  action: string
-  task_slug: string
-  task_name?: string | null
-  policy_mode: string
-}
-
-export interface BrainGraphAuditView {
-  id: string
-  action: string
-  target_type: string
-  target_id: string
-  actor: string
-  policy: string
-  evidence_json?: unknown
-  result: string
-  error_text?: string | null
-  created_at: string
-}
-
 export interface BrainGraphActionRequest {
   action: string
   node_id: string
   prompt?: string
-  confirm?: boolean
   actor?: string
 }
 
@@ -370,11 +304,8 @@ export interface BrainGraphActionResponse {
   message: string
   action?: string
   node_id?: string
-  requires_confirmation?: boolean
   output?: string
   action_response?: ActionResponse
-  policy?: BrainGraphPolicyView
-  audit?: BrainGraphAuditView
 }
 
 export interface TaskCounts {

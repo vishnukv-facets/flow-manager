@@ -1,4 +1,4 @@
-import { AlertTriangle, Bot, CircleDotDashed, ShieldAlert, Zap } from 'lucide-react'
+import { Bot, CircleDotDashed, Zap } from 'lucide-react'
 import type { NodeProps } from '@xyflow/react'
 import { StatusDot } from '../ui'
 import type { BrainGraphOwnerView } from '../../lib/types'
@@ -43,18 +43,6 @@ function OwnerMetricBadges({ owner, compact = false }: { owner: BrainGraphOwnerV
         <span className={`badge ${owner.running_count > 0 ? 'ok' : ''}`}>
           <Zap size={11} />
           {owner.running_count} run
-        </span>
-      ) : null}
-      {owner.approval_count > 0 || !compact ? (
-        <span className={`badge ${owner.approval_count > 0 ? 'warn' : ''}`}>
-          <ShieldAlert size={11} />
-          {owner.approval_count} gate
-        </span>
-      ) : null}
-      {owner.blocked_count > 0 || !compact ? (
-        <span className={`badge ${owner.blocked_count > 0 ? 'danger' : ''}`}>
-          <AlertTriangle size={11} />
-          {owner.blocked_count} blocked
         </span>
       ) : null}
     </div>

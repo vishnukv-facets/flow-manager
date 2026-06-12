@@ -1,4 +1,4 @@
-import { CircleAlert, GitPullRequestArrow, Search, ShieldAlert } from 'lucide-react'
+import { GitPullRequestArrow, Search } from 'lucide-react'
 import type { BrainGraphCounts } from '../../lib/types'
 
 export function BrainGraphToolbar({
@@ -25,8 +25,6 @@ export function BrainGraphToolbar({
       <div className="brain-toolbar-counts">
         <span className="badge"><GitPullRequestArrow size={13} />{counts?.total_tasks ?? 0} tasks</span>
         <span className="badge ok">{counts?.running ?? 0} running</span>
-        <span className="badge warn"><ShieldAlert size={13} />{counts?.approval_needed ?? 0} gates</span>
-        <span className="badge danger"><CircleAlert size={13} />{counts?.failed ?? 0} failed</span>
         {expandedCount > 0 ? <span className="badge info">{expandedCount} expanded</span> : null}
       </div>
       <div className="brain-toolbar-actions">

@@ -1,32 +1,24 @@
 import { Link, useLocation } from 'wouter'
 import { useState, type ReactNode } from 'react'
 import {
-  Activity,
   AlertTriangle,
   ArrowUpRight,
   FileText,
   GitBranch,
   Info,
-  ListChecks,
   Loader2,
   ScrollText,
   SendHorizontal,
-  ShieldAlert,
   TerminalSquare,
 } from 'lucide-react'
 import { StatusDot } from '../ui'
 import { Modal } from '../Modal'
-import { confirmAction } from '../../lib/confirm'
 import { useBrainGraphAction, useBrainGraphNodeDetail, useTaskTranscript } from '../../lib/query'
 import { dateTime } from '../../lib/format'
 import type {
   BrainGraphActionSpec,
-  BrainGraphAuditView,
-  BrainGraphApprovalDetail,
   BrainGraphEvidenceDetail,
   BrainGraphNode,
-  BrainGraphPolicyView,
-  BrainGraphRunDetail,
   BrainGraphTaskDetail,
   BrainGraphWarning,
   TranscriptEntry,
@@ -38,8 +30,6 @@ function actionByKey(actions: BrainGraphActionSpec[], key: string) {
 
 function nodeTone(status: string) {
   switch (status) {
-    case 'approval_required':
-    case 'blocked':
     case 'waiting':
       return 'warn'
     case 'dead':
@@ -61,33 +51,12 @@ function errorText(error: unknown) {
   return error instanceof Error ? error.message : 'detail unavailable'
 }
 
-function displayJSON(value: unknown) {
-  if (value == null) return ''
-  if (typeof value === 'string') return value
-  try {
-    return JSON.stringify(value, null, 2)
-  } catch {
-    return String(value)
-  }
-}
-
-function truncate(value: string, max = 700) {
-  if (value.length <= max) return value
-  return `${value.slice(0, max - 1)}…`
-}
-
-function modelLabel(run: BrainGraphRunDetail) {
-  return run.resolved_model || run.requested_model || run.requested_tier || ''
-}
-
 export function BrainGraphInspector({
   selected,
-  policy,
   actions,
   warnings,
 }: {
   selected: BrainGraphNode | null
-  policy: BrainGraphPolicyView
   actions: BrainGraphActionSpec[]
   warnings: BrainGraphWarning[]
 }) {
@@ -108,17 +77,14 @@ export function BrainGraphInspector({
             <NodeSummary selected={selected} actions={actions} warnings={nodeWarnings} />
             <DetailState loading={detailLoading} error={detailQuery.error} />
             {detail?.task ? <TaskDetail detail={detail.task} /> : null}
-            {detail?.run ? <RunDetail detail={detail.run} /> : null}
-            {detail?.approval ? <ApprovalDetail detail={detail.approval} audit={detail.audit} /> : null}
             {detail?.evidence ? <EvidenceDetail detail={detail.evidence} /> : null}
-            {detail && !detail.approval && detail.audit.length > 0 ? <AuditSection audit={detail.audit} /> : null}
           </div>
         ) : (
           <div className="brain-inspector-empty">No node selected</div>
         )}
       </div>
 
-      <PolicySummary policy={policy} warnings={warnings} />
+      {warnings.length > 0 ? <WarningsSummary warnings={warnings} /> : null}
     </aside>
   )
 }
@@ -231,71 +197,6 @@ function TaskDetail({ detail }: { detail: BrainGraphTaskDetail }) {
   )
 }
 
-function RunDetail({ detail }: { detail: BrainGraphRunDetail }) {
-  return (
-    <>
-      <DetailSection title="Run" icon={<Activity size={14} />}>
-        <div className="brain-kv">
-          <KV k="run id" v={detail.run_id} />
-          <KV k="task" v={detail.task_name ? `${detail.task_name} · ${detail.task_slug}` : detail.task_slug} />
-          <KV k="family" v={detail.family_slug} />
-          <KV k="role" v={detail.role} />
-          <KV k="provider" v={detail.provider} />
-          <KV k="status" v={detail.status} />
-          <KV k="permission" v={detail.permission_mode} />
-          <KV k="model" v={modelLabel(detail)} />
-          <KV k="session" v={detail.session_id} />
-          <KV k="log" v={detail.log_path} />
-          <KV k="started" v={detail.started_at ? dateTime(detail.started_at) : ''} />
-          <KV k="finished" v={detail.finished_at ? dateTime(detail.finished_at) : ''} />
-        </div>
-      </DetailSection>
-      {detail.input_summary ? <TextBlock label="input" value={detail.input_summary} /> : null}
-      {detail.error_text ? <TextBlock label="error" value={detail.error_text} tone="danger" /> : null}
-      <JsonPreview label="output" value={detail.output_json} />
-      <JsonPreview label="evidence" value={detail.evidence_json} />
-    </>
-  )
-}
-
-function ApprovalDetail({ detail, audit }: { detail: BrainGraphApprovalDetail; audit: BrainGraphAuditView[] }) {
-  return (
-    <>
-      <DetailSection title="Approval" icon={<ShieldAlert size={14} />}>
-        <div className="brain-kv">
-          <KV k="action" v={detail.action} />
-          <KV k="task" v={detail.task_name ? `${detail.task_name} · ${detail.task_slug}` : detail.task_slug} />
-          <KV k="policy" v={detail.policy_mode} />
-        </div>
-      </DetailSection>
-      {audit.length > 0 ? <AuditSection audit={audit} /> : null}
-    </>
-  )
-}
-
-function AuditSection({ audit }: { audit: BrainGraphAuditView[] }) {
-  return (
-    <DetailSection title="Audit" icon={<ListChecks size={14} />}>
-      <div className="brain-audit-list">
-        {audit.map((item) => (
-          <div className="brain-audit-row" key={item.id}>
-            <div className="brain-audit-top">
-              <span className={`badge ${item.result === 'allowed' || item.result === 'sent' || item.result === 'opened' ? 'ok' : item.result === 'blocked' ? 'warn' : item.result === 'error' ? 'danger' : ''}`}>{item.result}</span>
-              <strong>{item.action}</strong>
-              <span className="faint">{dateTime(item.created_at)}</span>
-            </div>
-            <div className="brain-audit-sub">
-              {item.actor} · {item.policy}
-            </div>
-            <JsonPreview label="evidence" value={item.evidence_json} compact />
-            {item.error_text ? <TextBlock label="error" value={item.error_text} tone="danger" /> : null}
-          </div>
-        ))}
-      </div>
-    </DetailSection>
-  )
-}
-
 function EvidenceDetail({ detail }: { detail: BrainGraphEvidenceDetail }) {
   return (
     <DetailSection title="Evidence" icon={<ScrollText size={14} />}>
@@ -319,26 +220,6 @@ function DetailSection({ title, icon, children }: { title: string; icon: ReactNo
         <span>{title}</span>
       </div>
       {children}
-    </div>
-  )
-}
-
-function TextBlock({ label, value, tone }: { label: string; value: string; tone?: 'danger' }) {
-  return (
-    <div className={`brain-detail-text ${tone ?? ''}`}>
-      <div className="eyebrow">{label}</div>
-      <div>{value}</div>
-    </div>
-  )
-}
-
-function JsonPreview({ label, value, compact = false }: { label: string; value: unknown; compact?: boolean }) {
-  const text = truncate(displayJSON(value), compact ? 240 : 700)
-  if (!text) return null
-  return (
-    <div className={`brain-json-preview${compact ? ' compact' : ''}`}>
-      <div className="eyebrow">{label}</div>
-      <pre>{text}</pre>
     </div>
   )
 }
@@ -396,20 +277,8 @@ function NodeActions({ node, actions }: { node: BrainGraphNode; actions: BrainGr
       setPromptAction(action ?? { key, label: key.replace(/_/g, ' '), risky: false, enabled: true })
       return
     }
-    let confirm = false
-    if (key === 'approve') {
-      const ok = await confirmAction({
-        title: action?.label || 'Approve action',
-        body: `Set ${node.metadata?.action || 'this action'} to auto for the Brain policy.`,
-        confirmLabel: 'Approve',
-        cancelLabel: 'Cancel',
-        danger: true,
-      })
-      if (!ok) return
-      confirm = true
-    }
     try {
-      const resp = await graphAction.mutateAsync({ action: key, node_id: node.id, confirm })
+      const resp = await graphAction.mutateAsync({ action: key, node_id: node.id })
       if ((key === 'open_session' || key === 'resume') && resp.action_response?.bridge) {
         const slug = resp.action_response.agent?.slug || node.task_slug
         if (slug) navigate(`/session/${encodeURIComponent(slug)}`)
@@ -577,22 +446,15 @@ function Warnings({ warnings }: { warnings: BrainGraphWarning[] }) {
   )
 }
 
-function PolicySummary({ policy, warnings }: { policy: BrainGraphPolicyView; warnings: BrainGraphWarning[] }) {
+function WarningsSummary({ warnings }: { warnings: BrainGraphWarning[] }) {
   return (
     <div className="brain-inspector-section">
       <div className="brain-inspector-head">
-        <ShieldAlert size={15} />
-        <span>Policy</span>
+        <AlertTriangle size={15} />
+        <span>Warnings</span>
+        <span className="badge warn">{warnings.length}</span>
       </div>
-      <div className="brain-kv">
-        <KV k="mode" v={policy.full_auto ? 'full_auto' : 'approval_gated'} />
-        <KV k="review" v={`${policy.approval_required.length} actions`} />
-        <KV k="whitelist" v={`${policy.risky_whitelist.length} actions`} />
-        {policy.last_decision_at ? <KV k="decision" v={dateTime(policy.last_decision_at)} /> : null}
-        {policy.last_decision_state ? <KV k="state" v={policy.last_decision_state} /> : null}
-        <KV k="warnings" v={String(warnings.length)} />
-      </div>
-      {warnings.length > 0 ? <Warnings warnings={warnings.slice(0, 3)} /> : null}
+      <Warnings warnings={warnings.slice(0, 5)} />
     </div>
   )
 }

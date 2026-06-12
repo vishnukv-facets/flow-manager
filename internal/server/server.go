@@ -148,8 +148,6 @@ func (s *Server) registerAPIRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/brain/graph", s.handleBrainGraph)
 	mux.HandleFunc("/api/brain/graph/actions", s.handleBrainGraphAction)
 	mux.HandleFunc("/api/brain/graph/node/", s.handleBrainGraphNodeDetail)
-	mux.HandleFunc("/api/brain/plans", s.handleBrainPlans)
-	mux.HandleFunc("/api/brain/plans/", s.handleBrainPlanRoute)
 	mux.HandleFunc("/api/owners", s.handleOwners)
 	mux.HandleFunc("/api/owners/", s.handleOwnerRoute)
 	mux.HandleFunc("/api/workdirs", s.handleWorkdirs)

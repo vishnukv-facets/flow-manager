@@ -400,8 +400,6 @@ func cmdValidatorExec(args []string) int {
 	providerFlag := fs.String("provider", "", "session provider: claude or codex")
 	permissionModeFlag := fs.String("permission-mode", "", "agent permission mode: default|auto|bypass")
 	modelFlag := fs.String("model", "", "resolved session model")
-	brainPlanFlag := fs.String("brain-plan", "", "brain plan id for scheduler attribution")
-	_ = fs.String("brain-initiated-by", "", "brain scheduler initiator")
 	if err := fs.Parse(args[1:]); err != nil {
 		return 2
 	}
@@ -483,9 +481,6 @@ func cmdValidatorExec(args []string) int {
 		Status:         "queued",
 		CreatedAt:      now,
 		UpdatedAt:      now,
-	}
-	if *brainPlanFlag != "" {
-		run.PlanID = sql.NullString{String: *brainPlanFlag, Valid: true}
 	}
 	if *workerRunIDFlag != "" {
 		run.InputSummary = sql.NullString{String: fmt.Sprintf("validating worker run %s", *workerRunIDFlag), Valid: true}

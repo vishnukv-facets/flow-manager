@@ -45,24 +45,11 @@ func BuildBrainGraphNodeDetail(db *sql.DB, root, nodeID string) (BrainGraphNodeD
 		if err != nil {
 			return BrainGraphNodeDetail{}, err
 		}
-		audits, err := flowdb.ListBrainActionAudit(db, "task", task.Slug, 10)
-		if err != nil {
-			return BrainGraphNodeDetail{}, err
-		}
 		return BrainGraphNodeDetail{
-			ID:    "task:" + task.Slug,
-			Type:  "task",
-			Task:  brainGraphTaskDetail(root, task),
-			Audit: brainGraphAuditViews(audits),
+			ID:   "task:" + task.Slug,
+			Type: "task",
+			Task: brainGraphTaskDetail(root, task),
 		}, nil
-	case strings.HasPrefix(nodeID, "run:auto:"):
-		slug := strings.TrimPrefix(nodeID, "run:auto:")
-		return brainGraphRunDetail(db, "legacy:auto-run:"+slug, nodeID)
-	case strings.HasPrefix(nodeID, "run:"):
-		runID := strings.TrimPrefix(nodeID, "run:")
-		return brainGraphRunDetail(db, runID, nodeID)
-	case strings.HasPrefix(nodeID, "approval:"):
-		return brainGraphApprovalDetail(db, strings.TrimPrefix(nodeID, "approval:"), nodeID)
 	case strings.HasPrefix(nodeID, "transcript:"):
 		slug := strings.TrimPrefix(nodeID, "transcript:")
 		task, err := flowdb.GetTask(db, slug)
@@ -77,10 +64,9 @@ func BuildBrainGraphNodeDetail(db *sql.DB, root, nodeID string) (BrainGraphNodeD
 			ID:       "transcript:" + task.Slug,
 			Type:     "transcript_ref",
 			Evidence: evidence,
-			Audit:    []BrainGraphAuditView{},
 		}, nil
 	case strings.HasPrefix(nodeID, "github:"):
-		return brainGraphGitHubEvidenceDetail(db, strings.TrimPrefix(nodeID, "github:"), nodeID)
+		return brainGraphGitHubEvidenceDetail(db, strings.TrimPrefix(nodeID, "github:"))
 	default:
 		return BrainGraphNodeDetail{}, sql.ErrNoRows
 	}
@@ -116,59 +102,6 @@ func brainGraphTaskDetail(root string, task *flowdb.Task) *BrainGraphTaskDetail 
 	}
 }
 
-func brainGraphRunDetail(db *sql.DB, runID, nodeID string) (BrainGraphNodeDetail, error) {
-	run, err := flowdb.GetBrainRun(db, runID)
-	if err != nil {
-		return BrainGraphNodeDetail{}, err
-	}
-	detail := brainGraphRunDetailFromDB(run)
-	if task, err := flowdb.GetTask(db, run.TaskSlug); err == nil {
-		detail.TaskName = &task.Name
-		detail.TaskStatus = &task.Status
-	}
-	audits, err := flowdb.ListBrainActionAudit(db, "task", run.TaskSlug, 10)
-	if err != nil {
-		return BrainGraphNodeDetail{}, err
-	}
-	return BrainGraphNodeDetail{
-		ID:    nodeID,
-		Type:  brainGraphRunNodeType(run.Role),
-		Run:   &detail,
-		Audit: brainGraphAuditViews(audits),
-	}, nil
-}
-
-func brainGraphRunDetailFromDB(run *flowdb.BrainRun) BrainGraphRunDetail {
-	if run == nil {
-		return BrainGraphRunDetail{}
-	}
-	return BrainGraphRunDetail{
-		RunID:          run.RunID,
-		FamilySlug:     run.FamilySlug,
-		TaskSlug:       run.TaskSlug,
-		PlanID:         nullStringPtr(run.PlanID),
-		Role:           run.Role,
-		Provider:       run.Provider,
-		RequestedModel: nullStringPtr(run.RequestedModel),
-		RequestedTier:  nullStringPtr(run.RequestedTier),
-		ResolvedModel:  nullStringPtr(run.ResolvedModel),
-		PermissionMode: run.PermissionMode,
-		Status:         run.Status,
-		PID:            nullInt64Ptr(run.PID),
-		SessionID:      nullStringPtr(run.SessionID),
-		LogPath:        nullStringPtr(run.LogPath),
-		InputSummary:   nullStringPtr(run.InputSummary),
-		OutputJSON:     rawJSONFromNullString(run.OutputJSON),
-		EvidenceJSON:   rawJSONFromNullString(run.EvidenceJSON),
-		ErrorText:      nullStringPtr(run.ErrorText),
-		StartedAt:      nullStringPtr(run.StartedAt),
-		FinishedAt:     nullStringPtr(run.FinishedAt),
-		CreatedAt:      run.CreatedAt,
-		UpdatedAt:      run.UpdatedAt,
-		Legacy:         run.Legacy,
-	}
-}
-
 func brainGraphTranscriptDetail(task *flowdb.Task) *BrainGraphEvidenceDetail {
 	if task == nil || !task.SessionID.Valid || strings.TrimSpace(task.SessionID.String) == "" {
 		return nil
@@ -194,7 +127,7 @@ func brainGraphTranscriptDetail(task *flowdb.Task) *BrainGraphEvidenceDetail {
 	}
 }
 
-func brainGraphGitHubEvidenceDetail(db *sql.DB, escapedTag, nodeID string) (BrainGraphNodeDetail, error) {
+func brainGraphGitHubEvidenceDetail(db *sql.DB, escapedTag string) (BrainGraphNodeDetail, error) {
 	tag, err := url.PathUnescape(escapedTag)
 	if err != nil {
 		return BrainGraphNodeDetail{}, err
@@ -217,70 +150,7 @@ func brainGraphGitHubEvidenceDetail(db *sql.DB, escapedTag, nodeID string) (Brai
 		ID:       brainGraphGitHubRefNodeID(tag),
 		Type:     "github_ref",
 		Evidence: evidence,
-		Audit:    []BrainGraphAuditView{},
 	}, nil
-}
-
-func brainGraphApprovalDetail(db *sql.DB, rest, nodeID string) (BrainGraphNodeDetail, error) {
-	action, taskSlug, ok := strings.Cut(rest, ":")
-	if !ok || strings.TrimSpace(action) == "" || strings.TrimSpace(taskSlug) == "" {
-		return BrainGraphNodeDetail{}, sql.ErrNoRows
-	}
-	task, err := flowdb.GetTask(db, taskSlug)
-	if err != nil {
-		return BrainGraphNodeDetail{}, err
-	}
-	policyMode := flowdb.BrainPolicyModeApprovalRequired
-	if policy, err := flowdb.GetBrainPolicy(db); err != nil {
-		return BrainGraphNodeDetail{}, err
-	} else if policy.IsWhitelisted(action) {
-		policyMode = flowdb.BrainPolicyModeAuto
-	}
-	audits, err := flowdb.ListBrainActionAudit(db, "task", taskSlug, 10)
-	if err != nil {
-		return BrainGraphNodeDetail{}, err
-	}
-	return BrainGraphNodeDetail{
-		ID:   nodeID,
-		Type: "approval",
-		Approval: &BrainGraphApprovalDetail{
-			Action:     action,
-			TaskSlug:   taskSlug,
-			TaskName:   &task.Name,
-			PolicyMode: policyMode,
-		},
-		Audit: brainGraphAuditViews(audits),
-	}, nil
-}
-
-func brainGraphAuditViews(audits []*flowdb.BrainActionAudit) []BrainGraphAuditView {
-	out := make([]BrainGraphAuditView, 0, len(audits))
-	for _, audit := range audits {
-		if audit == nil {
-			continue
-		}
-		out = append(out, BrainGraphAuditView{
-			ID:           audit.ID,
-			Action:       audit.Action,
-			TargetType:   audit.TargetType,
-			TargetID:     audit.TargetID,
-			Actor:        audit.Actor,
-			Policy:       audit.Policy,
-			EvidenceJSON: rawJSONFromString(audit.EvidenceJSON),
-			Result:       audit.Result,
-			ErrorText:    nullStringPtr(audit.ErrorText),
-			CreatedAt:    audit.CreatedAt,
-		})
-	}
-	return out
-}
-
-func rawJSONFromString(raw string) []byte {
-	raw = strings.TrimSpace(raw)
-	if raw == "" {
-		return nil
-	}
-	return []byte(raw)
 }
 
 func stringPtrIfNotEmpty(s string) *string {

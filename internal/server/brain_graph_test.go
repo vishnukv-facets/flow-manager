@@ -3,7 +3,6 @@ package server
 import (
 	"database/sql"
 	"encoding/json"
-	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -15,6 +14,10 @@ import (
 
 	"flow/internal/flowdb"
 )
+
+func graphTestTime() time.Time {
+	return time.Date(2026, 6, 12, 10, 0, 0, 0, time.FixedZone("IST", 19800))
+}
 
 func TestBrainGraphEmptyRoute(t *testing.T) {
 	root, db := testRootDB(t)
@@ -119,9 +122,6 @@ func TestBrainGraphTaskDetailIncludesTaskAndTranscriptRef(t *testing.T) {
 	if got.Task.SessionID == nil || *got.Task.SessionID != "session-123" {
 		t.Fatalf("session_id = %#v, want session-123", got.Task.SessionID)
 	}
-	if got.Task.SessionPath == nil || *got.Task.SessionPath != missingTranscript {
-		t.Fatalf("session_path = %#v, want stored transcript path", got.Task.SessionPath)
-	}
 	if got.Task.Transcript == nil || got.Task.Transcript.Kind != "transcript" || got.Task.Transcript.RefID != "session-123" {
 		t.Fatalf("transcript ref = %#v, want unavailable transcript ref", got.Task.Transcript)
 	}
@@ -136,110 +136,46 @@ func TestBrainGraphTaskDetailIncludesTaskAndTranscriptRef(t *testing.T) {
 	}
 }
 
-func TestBrainGraphRunDetailIncludesPersistedRunContext(t *testing.T) {
+func TestBrainGraphExpandedTaskAddsEvidenceReferences(t *testing.T) {
 	root, db := testRootDB(t)
-	s := New(Config{DB: db, FlowRoot: root})
 	insertBrainGraphTask(t, db, "worker", "Worker", "backlog", nil)
-	run := &flowdb.BrainRun{
-		RunID:          "run-1",
-		FamilySlug:     "worker",
-		TaskSlug:       "worker",
-		Role:           "validator",
-		Provider:       "codex",
-		RequestedModel: sql.NullString{String: "gpt-5.4", Valid: true},
-		ResolvedModel:  sql.NullString{String: "gpt-5.4-mini", Valid: true},
-		PermissionMode: "auto",
-		Status:         "error",
-		SessionID:      sql.NullString{String: "run-session", Valid: true},
-		LogPath:        sql.NullString{String: "/tmp/run.log", Valid: true},
-		InputSummary:   sql.NullString{String: "validate worker", Valid: true},
-		OutputJSON:     sql.NullString{String: `{"summary":"failed"}`, Valid: true},
-		EvidenceJSON:   sql.NullString{String: `{"checks":["typecheck"]}`, Valid: true},
-		ErrorText:      sql.NullString{String: "typecheck failed", Valid: true},
-		StartedAt:      sql.NullString{String: "2026-06-12T10:00:00+05:30", Valid: true},
-		FinishedAt:     sql.NullString{String: "2026-06-12T10:02:00+05:30", Valid: true},
-		CreatedAt:      "2026-06-12T10:00:00+05:30",
-		UpdatedAt:      "2026-06-12T10:02:00+05:30",
+	if _, err := db.Exec(`UPDATE tasks SET session_id='session-123' WHERE slug='worker'`); err != nil {
+		t.Fatalf("seed session id: %v", err)
 	}
-	if err := flowdb.UpsertBrainRun(db, run); err != nil {
-		t.Fatalf("UpsertBrainRun: %v", err)
+	for _, tag := range []string{"gh-pr:Facets-cloud/flow-manager#33", "gh-issue:Facets-cloud/flow-manager#123"} {
+		if err := flowdb.AddTaskTag(db, "worker", tag); err != nil {
+			t.Fatalf("AddTaskTag(%s): %v", tag, err)
+		}
 	}
 
-	rec := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodGet, "/api/brain/graph/node/"+url.PathEscape("run:run-1"), nil)
-	s.Handler().ServeHTTP(rec, req)
-	if rec.Code != http.StatusOK {
-		t.Fatalf("status = %d, body = %s", rec.Code, rec.Body.String())
-	}
-	var got BrainGraphNodeDetail
-	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
-		t.Fatalf("decode detail: %v", err)
+	got, err := BuildBrainGraph(db, root, BrainGraphFilters{Expand: map[string]bool{"task:worker": true}}, graphTestTime())
+	if err != nil {
+		t.Fatalf("BuildBrainGraph: %v", err)
 	}
 
-	if got.ID != "run:run-1" || got.Type != "validator_run" || got.Run == nil {
-		t.Fatalf("detail identity = %#v, want validator run detail", got)
+	transcript, ok := graphNodeByID(got, "transcript:worker")
+	if !ok {
+		t.Fatalf("missing transcript node: %#v", got.Nodes)
 	}
-	if got.Run.RunID != "run-1" || got.Run.Role != "validator" || got.Run.Status != "error" || got.Run.Provider != "codex" {
-		t.Fatalf("run detail = %#v, want persisted run metadata", got.Run)
+	if transcript.Status != "available" || transcript.Ref == nil || transcript.Ref.Kind != "transcript" || transcript.Ref.ID != "session-123" {
+		t.Fatalf("transcript node = %#v, want available transcript ref", transcript)
 	}
-	if got.Run.TaskSlug != "worker" || got.Run.TaskName == nil || *got.Run.TaskName != "Worker" {
-		t.Fatalf("run task refs = %#v, want worker task context", got.Run)
+	if !graphHasEdge(got, "external_ref", "task:worker", "transcript:worker") {
+		t.Fatalf("missing transcript external_ref edge: %#v", got.Edges)
 	}
-	if got.Run.ResolvedModel == nil || *got.Run.ResolvedModel != "gpt-5.4-mini" {
-		t.Fatalf("resolved model = %#v, want gpt-5.4-mini", got.Run.ResolvedModel)
-	}
-	if got.Run.SessionID == nil || *got.Run.SessionID != "run-session" || got.Run.LogPath == nil || *got.Run.LogPath != "/tmp/run.log" {
-		t.Fatalf("session/log refs = %#v, want persisted refs", got.Run)
-	}
-	if string(got.Run.OutputJSON) != `{"summary":"failed"}` || string(got.Run.EvidenceJSON) != `{"checks":["typecheck"]}` {
-		t.Fatalf("run json = output:%s evidence:%s", got.Run.OutputJSON, got.Run.EvidenceJSON)
-	}
-	if got.Run.ErrorText == nil || *got.Run.ErrorText != "typecheck failed" {
-		t.Fatalf("error_text = %#v, want typecheck failed", got.Run.ErrorText)
-	}
-}
-
-func TestBrainGraphEvidenceDetailIncludesTranscriptAvailability(t *testing.T) {
-	root, db := testRootDB(t)
-	s := New(Config{DB: db, FlowRoot: root})
-	insertBrainGraphTask(t, db, "worker", "Worker", "backlog", nil)
-	transcriptPath := filepath.Join(root, "sessions", "session.jsonl")
-	if err := os.MkdirAll(filepath.Dir(transcriptPath), 0o755); err != nil {
-		t.Fatalf("mkdir transcript dir: %v", err)
-	}
-	if err := os.WriteFile(transcriptPath, []byte(`{"type":"user"}`+"\n"), 0o644); err != nil {
-		t.Fatalf("write transcript: %v", err)
-	}
-	if _, err := db.Exec(
-		`UPDATE tasks
-		 SET session_provider='codex',
-		     session_id='session-123',
-		     session_path=?
-		 WHERE slug='worker'`,
-		transcriptPath,
-	); err != nil {
-		t.Fatalf("seed transcript: %v", err)
-	}
-
-	rec := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodGet, "/api/brain/graph/node/"+url.PathEscape("transcript:worker"), nil)
-	s.Handler().ServeHTTP(rec, req)
-	if rec.Code != http.StatusOK {
-		t.Fatalf("status = %d, body = %s", rec.Code, rec.Body.String())
-	}
-	var got BrainGraphNodeDetail
-	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
-		t.Fatalf("decode detail: %v", err)
-	}
-
-	if got.ID != "transcript:worker" || got.Type != "transcript_ref" || got.Evidence == nil {
-		t.Fatalf("detail identity = %#v, want transcript evidence detail", got)
-	}
-	if got.Evidence.Kind != "transcript" || got.Evidence.TaskSlug != "worker" || got.Evidence.RefID != "session-123" {
-		t.Fatalf("evidence = %#v, want transcript refs", got.Evidence)
-	}
-	if got.Evidence.Path == nil || *got.Evidence.Path != transcriptPath || !got.Evidence.Available {
-		t.Fatalf("evidence availability = %#v, want available transcript path", got.Evidence)
+	for _, tag := range []string{"gh-pr:Facets-cloud/flow-manager#33", "gh-issue:Facets-cloud/flow-manager#123"} {
+		tag = flowdb.NormalizeTag(tag)
+		nodeID := brainGraphGitHubRefNodeID(tag)
+		node, ok := graphNodeByID(got, nodeID)
+		if !ok {
+			t.Fatalf("missing github reference node %s: %#v", nodeID, got.Nodes)
+		}
+		if node.Status != "linked" || node.Ref == nil || node.Ref.Kind != "github" || node.Ref.ID != tag {
+			t.Fatalf("github reference node = %#v, want linked github ref for %s", node, tag)
+		}
+		if !graphHasEdge(got, "external_ref", "task:worker", nodeID) {
+			t.Fatalf("missing github external_ref edge to %s: %#v", nodeID, got.Edges)
+		}
 	}
 }
 
@@ -250,7 +186,7 @@ func TestBrainGraphGitHubEvidenceDetailPreservesGraphNodeID(t *testing.T) {
 	if err := flowdb.AddTaskTag(db, "ship", "gh-pr:Facets-cloud/flow-manager#44"); err != nil {
 		t.Fatalf("AddTaskTag: %v", err)
 	}
-	view, err := BuildBrainGraph(db, root, BrainGraphFilters{Expand: map[string]bool{"task:ship": true}}, time.Date(2026, 6, 12, 10, 0, 0, 0, time.FixedZone("IST", 19800)))
+	view, err := BuildBrainGraph(db, root, BrainGraphFilters{Expand: map[string]bool{"task:ship": true}}, graphTestTime())
 	if err != nil {
 		t.Fatalf("BuildBrainGraph: %v", err)
 	}
@@ -284,67 +220,6 @@ func TestBrainGraphGitHubEvidenceDetailPreservesGraphNodeID(t *testing.T) {
 	}
 }
 
-func TestBrainGraphApprovalDetailIncludesPolicyAndAudit(t *testing.T) {
-	root, db := testRootDB(t)
-	s := New(Config{DB: db, FlowRoot: root})
-	insertBrainGraphTask(t, db, "ship", "Ship Feature", "backlog", nil)
-	if err := flowdb.AddTaskTag(db, "ship", "gh-pr:Facets-cloud/flow-manager#44"); err != nil {
-		t.Fatalf("AddTaskTag: %v", err)
-	}
-	for _, audit := range []*flowdb.BrainActionAudit{
-		{
-			ID:           "audit-old",
-			Action:       "merge",
-			TargetType:   "task",
-			TargetID:     "ship",
-			Actor:        "brain",
-			Policy:       "approval_required",
-			EvidenceJSON: `{"pr":"44"}`,
-			Result:       "blocked",
-			CreatedAt:    "2026-06-12T10:00:00+05:30",
-		},
-		{
-			ID:           "audit-new",
-			Action:       "merge",
-			TargetType:   "task",
-			TargetID:     "ship",
-			Actor:        "operator",
-			Policy:       "auto",
-			EvidenceJSON: `{"approval":"manual"}`,
-			Result:       "allowed",
-			CreatedAt:    "2026-06-12T10:02:00+05:30",
-		},
-	} {
-		if err := flowdb.InsertBrainActionAudit(db, audit); err != nil {
-			t.Fatalf("InsertBrainActionAudit(%s): %v", audit.ID, err)
-		}
-	}
-
-	rec := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodGet, "/api/brain/graph/node/"+url.PathEscape("approval:merge:ship"), nil)
-	s.Handler().ServeHTTP(rec, req)
-	if rec.Code != http.StatusOK {
-		t.Fatalf("status = %d, body = %s", rec.Code, rec.Body.String())
-	}
-	var got BrainGraphNodeDetail
-	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
-		t.Fatalf("decode detail: %v", err)
-	}
-
-	if got.ID != "approval:merge:ship" || got.Type != "approval" || got.Approval == nil {
-		t.Fatalf("detail identity = %#v, want approval detail", got)
-	}
-	if got.Approval.Action != "merge" || got.Approval.TaskSlug != "ship" || got.Approval.PolicyMode != "approval_required" {
-		t.Fatalf("approval detail = %#v, want merge approval gate", got.Approval)
-	}
-	if len(got.Audit) != 2 || got.Audit[0].ID != "audit-new" || got.Audit[1].ID != "audit-old" {
-		t.Fatalf("audit = %#v, want newest-first task audit", got.Audit)
-	}
-	if string(got.Audit[0].EvidenceJSON) != `{"approval":"manual"}` {
-		t.Fatalf("audit evidence = %s, want manual approval JSON", got.Audit[0].EvidenceJSON)
-	}
-}
-
 func TestBrainGraphGroupsTasksByOwnerTagAndInheritance(t *testing.T) {
 	root, db := testRootDB(t)
 	insertBrainGraphOwner(t, db, root, "brain-ui")
@@ -355,7 +230,7 @@ func TestBrainGraphGroupsTasksByOwnerTagAndInheritance(t *testing.T) {
 		t.Fatalf("AddTaskTag: %v", err)
 	}
 
-	got, err := BuildBrainGraph(db, root, BrainGraphFilters{}, time.Date(2026, 6, 12, 10, 0, 0, 0, time.FixedZone("IST", 19800)))
+	got, err := BuildBrainGraph(db, root, BrainGraphFilters{}, graphTestTime())
 	if err != nil {
 		t.Fatalf("BuildBrainGraph: %v", err)
 	}
@@ -402,25 +277,13 @@ func TestBrainGraphInheritsOwnerFromParentHiddenByVisibilityFilters(t *testing.T
 		filters   BrainGraphFilters
 		childSlug string
 	}{
-		{
-			name:      "query",
-			filters:   BrainGraphFilters{Query: "needle"},
-			childSlug: "query-child",
-		},
-		{
-			name:      "status",
-			filters:   BrainGraphFilters{Status: "backlog", IncludeDone: true},
-			childSlug: "status-child",
-		},
-		{
-			name:      "include_done",
-			filters:   BrainGraphFilters{},
-			childSlug: "done-child",
-		},
+		{name: "query", filters: BrainGraphFilters{Query: "needle"}, childSlug: "query-child"},
+		{name: "status", filters: BrainGraphFilters{Status: "backlog", IncludeDone: true}, childSlug: "status-child"},
+		{name: "include_done", filters: BrainGraphFilters{}, childSlug: "done-child"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got, err := BuildBrainGraph(db, root, tt.filters, time.Date(2026, 6, 12, 10, 0, 0, 0, time.FixedZone("IST", 19800)))
+			got, err := BuildBrainGraph(db, root, tt.filters, graphTestTime())
 			if err != nil {
 				t.Fatalf("BuildBrainGraph: %v", err)
 			}
@@ -446,7 +309,7 @@ func TestBrainGraphWarnsForUnknownOwnerTagsEvenWhenValidOwnerSelected(t *testing
 		}
 	}
 
-	got, err := BuildBrainGraph(db, root, BrainGraphFilters{}, time.Date(2026, 6, 12, 10, 0, 0, 0, time.FixedZone("IST", 19800)))
+	got, err := BuildBrainGraph(db, root, BrainGraphFilters{}, graphTestTime())
 	if err != nil {
 		t.Fatalf("BuildBrainGraph: %v", err)
 	}
@@ -476,7 +339,7 @@ func TestBrainGraphAddsParentAndDependencyEdges(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	withoutDone, err := BuildBrainGraph(db, root, BrainGraphFilters{}, time.Date(2026, 6, 12, 10, 0, 0, 0, time.FixedZone("IST", 19800)))
+	withoutDone, err := BuildBrainGraph(db, root, BrainGraphFilters{}, graphTestTime())
 	if err != nil {
 		t.Fatalf("BuildBrainGraph without done: %v", err)
 	}
@@ -484,7 +347,7 @@ func TestBrainGraphAddsParentAndDependencyEdges(t *testing.T) {
 		t.Fatalf("depends_on edge should be hidden when done dependency node is excluded: %#v", withoutDone.Edges)
 	}
 
-	got, err := BuildBrainGraph(db, root, BrainGraphFilters{IncludeDone: true}, time.Date(2026, 6, 12, 10, 0, 0, 0, time.FixedZone("IST", 19800)))
+	got, err := BuildBrainGraph(db, root, BrainGraphFilters{IncludeDone: true}, graphTestTime())
 	if err != nil {
 		t.Fatalf("BuildBrainGraph: %v", err)
 	}
@@ -497,391 +360,36 @@ func TestBrainGraphAddsParentAndDependencyEdges(t *testing.T) {
 	}
 }
 
-func TestBrainGraphExpandsFailedLegacyAutoRun(t *testing.T) {
-	root, db := testRootDB(t)
-	insertBrainGraphTask(t, db, "worker", "Worker", "backlog", nil)
-	if _, err := db.Exec(
-		`UPDATE tasks
-		 SET session_provider='codex', harness='codex', auto_run_status='dead', auto_run_log='/tmp/worker.log'
-		 WHERE slug='worker'`,
-	); err != nil {
-		t.Fatalf("seed legacy auto run: %v", err)
-	}
-
-	got, err := BuildBrainGraph(db, root, BrainGraphFilters{Expand: map[string]bool{"task:worker": true}}, time.Date(2026, 6, 12, 10, 0, 0, 0, time.FixedZone("IST", 19800)))
-	if err != nil {
-		t.Fatalf("BuildBrainGraph: %v", err)
-	}
-
-	run, ok := graphNodeByID(got, "run:auto:worker")
-	if !ok {
-		t.Fatalf("missing legacy run node: %#v", got.Nodes)
-	}
-	if run.Type != "worker_run" || run.Status != "dead" {
-		t.Fatalf("legacy run node = %#v, want worker_run/dead", run)
-	}
-	if run.Harness != "codex" || run.Metadata["harness"] != "codex" {
-		t.Fatalf("legacy run harness = %q metadata=%#v, want codex", run.Harness, run.Metadata)
-	}
-	if run.Metadata["log_path"] != "/tmp/worker.log" {
-		t.Fatalf("legacy run log_path metadata = %#v, want /tmp/worker.log", run.Metadata)
-	}
-	if !graphHasEdge(got, "run_of", "task:worker", "run:auto:worker") {
-		t.Fatalf("missing run_of edge task:worker -> run:auto:worker: %#v", got.Edges)
-	}
-	if got.Counts.Failed != 1 {
-		t.Fatalf("failed count = %d, want 1", got.Counts.Failed)
-	}
-}
-
-func TestBrainGraphAutoExpandsActiveAndFailedAutoRunsWithoutExplicitExpand(t *testing.T) {
-	root, db := testRootDB(t)
-	insertBrainGraphTask(t, db, "runner", "Runner", "backlog", nil)
-	insertBrainGraphTask(t, db, "dead-worker", "Dead Worker", "backlog", nil)
-	if _, err := db.Exec(
-		`UPDATE tasks SET auto_run_status='running', auto_run_log='/tmp/runner.log' WHERE slug='runner'`,
-	); err != nil {
-		t.Fatalf("seed running auto run: %v", err)
-	}
-	if _, err := db.Exec(
-		`UPDATE tasks SET auto_run_status='dead', auto_run_log='/tmp/dead-worker.log' WHERE slug='dead-worker'`,
-	); err != nil {
-		t.Fatalf("seed dead auto run: %v", err)
-	}
-
-	got, err := BuildBrainGraph(db, root, BrainGraphFilters{}, time.Date(2026, 6, 12, 10, 0, 0, 0, time.FixedZone("IST", 19800)))
-	if err != nil {
-		t.Fatalf("BuildBrainGraph: %v", err)
-	}
-
-	if _, ok := graphNodeByID(got, "run:auto:runner"); !ok {
-		t.Fatalf("missing auto-expanded running run node: %#v", got.Nodes)
-	}
-	if _, ok := graphNodeByID(got, "run:auto:dead-worker"); !ok {
-		t.Fatalf("missing auto-expanded dead run node: %#v", got.Nodes)
-	}
-	if got.Counts.Failed != 1 {
-		t.Fatalf("failed count = %d, want 1", got.Counts.Failed)
-	}
-}
-
-func TestBrainGraphExpandedTaskAddsEvidenceReferences(t *testing.T) {
-	root, db := testRootDB(t)
-	insertBrainGraphTask(t, db, "worker", "Worker", "backlog", nil)
-	if _, err := db.Exec(`UPDATE tasks SET session_id='session-123' WHERE slug='worker'`); err != nil {
-		t.Fatalf("seed session id: %v", err)
-	}
-	for _, tag := range []string{"gh-pr:Facets-cloud/flow-manager#33", "gh-issue:Facets-cloud/flow-manager#123"} {
-		if err := flowdb.AddTaskTag(db, "worker", tag); err != nil {
-			t.Fatalf("AddTaskTag(%s): %v", tag, err)
-		}
-	}
-
-	got, err := BuildBrainGraph(db, root, BrainGraphFilters{Expand: map[string]bool{"task:worker": true}}, time.Date(2026, 6, 12, 10, 0, 0, 0, time.FixedZone("IST", 19800)))
-	if err != nil {
-		t.Fatalf("BuildBrainGraph: %v", err)
-	}
-
-	transcript, ok := graphNodeByID(got, "transcript:worker")
-	if !ok {
-		t.Fatalf("missing transcript node: %#v", got.Nodes)
-	}
-	if transcript.Status != "available" || transcript.Ref == nil || transcript.Ref.Kind != "transcript" || transcript.Ref.ID != "session-123" {
-		t.Fatalf("transcript node = %#v, want available transcript ref", transcript)
-	}
-	if !graphHasEdge(got, "external_ref", "task:worker", "transcript:worker") {
-		t.Fatalf("missing transcript external_ref edge: %#v", got.Edges)
-	}
-	for _, tag := range []string{"gh-pr:Facets-cloud/flow-manager#33", "gh-issue:Facets-cloud/flow-manager#123"} {
-		tag = flowdb.NormalizeTag(tag)
-		nodeID := brainGraphGitHubRefNodeID(tag)
-		node, ok := graphNodeByID(got, nodeID)
-		if !ok {
-			t.Fatalf("missing github reference node %s: %#v", nodeID, got.Nodes)
-		}
-		if node.Status != "linked" || node.Ref == nil || node.Ref.Kind != "github" || node.Ref.ID != tag {
-			t.Fatalf("github reference node = %#v, want linked github ref for %s", node, tag)
-		}
-		if !graphHasEdge(got, "external_ref", "task:worker", nodeID) {
-			t.Fatalf("missing github external_ref edge to %s: %#v", nodeID, got.Edges)
-		}
-	}
-}
-
-func TestBrainGraphAddsApprovalGateForPRMergePolicy(t *testing.T) {
-	root, db := testRootDB(t)
-	insertBrainGraphOwner(t, db, root, "brain-ui")
-	insertBrainGraphTask(t, db, "ship", "Ship Feature", "backlog", nil)
-	if err := flowdb.AddTaskTag(db, "ship", "owner:brain-ui"); err != nil {
-		t.Fatalf("AddTaskTag(owner): %v", err)
-	}
-	if err := flowdb.AddTaskTag(db, "ship", "gh-pr:Facets-cloud/flow-manager#44"); err != nil {
-		t.Fatalf("AddTaskTag(gh-pr): %v", err)
-	}
-
-	got, err := BuildBrainGraph(db, root, BrainGraphFilters{}, time.Date(2026, 6, 12, 10, 0, 0, 0, time.FixedZone("IST", 19800)))
-	if err != nil {
-		t.Fatalf("BuildBrainGraph: %v", err)
-	}
-
-	node, ok := graphNodeByID(got, "approval:merge:ship")
-	if !ok {
-		t.Fatalf("missing merge approval node: %#v", got.Nodes)
-	}
-	if node.Type != "approval" || node.Status != "approval_required" || node.Ref == nil || node.Ref.Kind != "approval" || node.Actions[0] != "approve" {
-		t.Fatalf("approval node = %#v, want approval_required approve node", node)
-	}
-	if node.Metadata["action"] != "merge" || node.Metadata["policy"] != "approval_required" {
-		t.Fatalf("approval metadata = %#v, want merge approval policy", node.Metadata)
-	}
-	edge, ok := graphEdgeByID(got, "blocks:approval:merge:ship:task:ship")
-	if !ok {
-		t.Fatalf("missing blocks edge for approval gate: %#v", got.Edges)
-	}
-	if edge.Type != "blocks" || edge.Source != "approval:merge:ship" || edge.Target != "task:ship" || edge.Status != "blocked" || edge.Label != "policy gate" {
-		t.Fatalf("blocks edge = %#v, want policy gate blocking task", edge)
-	}
-	if got.Counts.ApprovalNeeded != 1 || got.Counts.Blocked != 1 {
-		t.Fatalf("counts = %#v, want one approval and one blocked", got.Counts)
-	}
-	owner, ok := graphOwnerBySlug(got, "brain-ui")
-	if !ok {
-		t.Fatalf("missing brain-ui owner: %#v", got.Owners)
-	}
-	if owner.ApprovalCount != 1 || owner.BlockedCount != 1 {
-		t.Fatalf("owner counts = %#v, want one approval and one blocked", owner)
-	}
-}
-
-func TestBrainGraphWhitelistedMergeSuppressesApprovalGate(t *testing.T) {
+func TestBrainGraphTaskNodesOnlyAdvertiseSupportedActions(t *testing.T) {
 	root, db := testRootDB(t)
 	insertBrainGraphTask(t, db, "ship", "Ship Feature", "backlog", nil)
-	if err := flowdb.AddTaskTag(db, "ship", "gh-pr:Facets-cloud/flow-manager#44"); err != nil {
-		t.Fatalf("AddTaskTag(gh-pr): %v", err)
-	}
-	if err := flowdb.SetBrainPolicyMode(db, "merge", "auto", "2026-06-12T10:00:00+05:30"); err != nil {
-		t.Fatalf("SetBrainPolicyMode: %v", err)
-	}
 
-	got, err := BuildBrainGraph(db, root, BrainGraphFilters{}, time.Date(2026, 6, 12, 10, 0, 0, 0, time.FixedZone("IST", 19800)))
+	view, err := BuildBrainGraph(db, root, BrainGraphFilters{}, graphTestTime())
 	if err != nil {
 		t.Fatalf("BuildBrainGraph: %v", err)
 	}
-
-	if _, ok := graphNodeByID(got, "approval:merge:ship"); ok {
-		t.Fatalf("merge approval node should be suppressed when whitelisted: %#v", got.Nodes)
-	}
-	if got.Counts.ApprovalNeeded != 0 || got.Counts.Blocked != 0 {
-		t.Fatalf("counts = %#v, want no approval gate counts", got.Counts)
-	}
-	if !stringSliceContains(got.Policy.RiskyWhitelist, "merge") {
-		t.Fatalf("RiskyWhitelist = %#v, want merge", got.Policy.RiskyWhitelist)
-	}
-	if stringSliceContains(got.Policy.ApprovalRequired, "merge") {
-		t.Fatalf("ApprovalRequired = %#v, want merge removed", got.Policy.ApprovalRequired)
-	}
-}
-
-func TestBrainGraphExplicitRiskyDeployTagAddsApprovalGate(t *testing.T) {
-	root, db := testRootDB(t)
-	insertBrainGraphTask(t, db, "deploy-prod", "Deploy Prod", "backlog", nil)
-	if err := flowdb.AddTaskTag(db, "deploy-prod", "risky:deploy"); err != nil {
-		t.Fatalf("AddTaskTag(risky:deploy): %v", err)
-	}
-
-	got, err := BuildBrainGraph(db, root, BrainGraphFilters{}, time.Date(2026, 6, 12, 10, 0, 0, 0, time.FixedZone("IST", 19800)))
-	if err != nil {
-		t.Fatalf("BuildBrainGraph: %v", err)
-	}
-
-	node, ok := graphNodeByID(got, "approval:deploy:deploy-prod")
+	node, ok := graphNodeByID(view, "task:ship")
 	if !ok {
-		t.Fatalf("missing deploy approval node: %#v", got.Nodes)
+		t.Fatalf("missing task node: %#v", view.Nodes)
 	}
-	if node.Metadata["action"] != "deploy" {
-		t.Fatalf("approval metadata = %#v, want deploy action", node.Metadata)
+	if strings.Join(node.Actions, ",") != "open_session,send_event,seed" {
+		t.Fatalf("task actions = %#v, want session controls", node.Actions)
 	}
-}
-
-func TestBrainGraphExpandsPersistentBrainRuns(t *testing.T) {
-	root, db := testRootDB(t)
-	for _, slug := range []string{"validator-task", "steward-task", "default-task"} {
-		insertBrainGraphTask(t, db, slug, slug, "backlog", nil)
-	}
-	now := "2026-06-12T10:00:00+05:30"
-	runs := []*flowdb.BrainRun{
-		{
-			RunID:          "validator-run-1",
-			FamilySlug:     "validator-task",
-			TaskSlug:       "validator-task",
-			Role:           "validator",
-			Provider:       "codex",
-			PermissionMode: "bypass",
-			Status:         "running",
-			RequestedModel: sql.NullString{String: "gpt-5.4", Valid: true},
-			ResolvedModel:  sql.NullString{String: "gpt-5.4", Valid: true},
-			SessionID:      sql.NullString{String: "validator-session", Valid: true},
-			LogPath:        sql.NullString{String: "/tmp/validator.log", Valid: true},
-			CreatedAt:      now,
-			UpdatedAt:      now,
-		},
-		{
-			RunID:          "steward-run-1",
-			FamilySlug:     "steward-task",
-			TaskSlug:       "steward-task",
-			Role:           "steward",
-			Provider:       "claude",
-			PermissionMode: "auto",
-			Status:         "completed",
-			CreatedAt:      now,
-			UpdatedAt:      now,
-		},
-		{
-			RunID:          "orchestrator-run-1",
-			FamilySlug:     "default-task",
-			TaskSlug:       "default-task",
-			Role:           "orchestrator",
-			Provider:       "claude",
-			PermissionMode: "default",
-			Status:         "completed",
-			CreatedAt:      now,
-			UpdatedAt:      now,
-		},
-	}
-	for _, run := range runs {
-		if err := flowdb.UpsertBrainRun(db, run); err != nil {
-			t.Fatalf("UpsertBrainRun(%s): %v", run.RunID, err)
+	want := map[string]bool{"open_session": true, "send_event": true, "seed": true}
+	got := map[string]bool{}
+	for _, action := range view.SelectedActions {
+		got[action.Key] = true
+		if !action.Enabled || action.Risky || action.DisabledReason != "" {
+			t.Fatalf("action spec %s = %#v, want enabled safe control", action.Key, action)
 		}
 	}
-
-	got, err := BuildBrainGraph(db, root, BrainGraphFilters{Expand: map[string]bool{
-		"task:validator-task": true,
-		"task:steward-task":   true,
-		"task:default-task":   true,
-	}}, time.Date(2026, 6, 12, 10, 0, 0, 0, time.FixedZone("IST", 19800)))
-	if err != nil {
-		t.Fatalf("BuildBrainGraph: %v", err)
-	}
-
-	validator, ok := graphNodeByID(got, "run:validator-run-1")
-	if !ok {
-		t.Fatalf("missing validator run node: %#v", got.Nodes)
-	}
-	if validator.Type != "validator_run" || validator.Provider != "codex" || validator.PermissionMode != "bypass" || validator.Model != "gpt-5.4" {
-		t.Fatalf("validator run node = %#v, want validator metadata", validator)
-	}
-	if validator.Metadata["run_id"] != "validator-run-1" || validator.Metadata["role"] != "validator" || validator.Metadata["session_id"] != "validator-session" || validator.Metadata["log_path"] != "/tmp/validator.log" {
-		t.Fatalf("validator metadata = %#v, want run/session/log/role", validator.Metadata)
-	}
-	if !graphHasEdge(got, "run_of", "task:validator-task", "run:validator-run-1") {
-		t.Fatalf("missing validator run_of edge: %#v", got.Edges)
-	}
-	steward, ok := graphNodeByID(got, "run:steward-run-1")
-	if !ok || steward.Type != "steward_run" {
-		t.Fatalf("steward run node = %#v, ok=%v, want steward_run", steward, ok)
-	}
-	defaultRun, ok := graphNodeByID(got, "run:orchestrator-run-1")
-	if !ok || defaultRun.Type != "worker_run" {
-		t.Fatalf("default role run node = %#v, ok=%v, want worker_run", defaultRun, ok)
-	}
-}
-
-func TestBrainGraphCountsFailedTaskOnceForMultipleFailedRuns(t *testing.T) {
-	root, db := testRootDB(t)
-	insertBrainGraphTask(t, db, "worker", "Worker", "backlog", nil)
-	now := "2026-06-12T10:00:00+05:30"
-	for _, run := range []*flowdb.BrainRun{
-		{
-			RunID:          "worker-dead",
-			FamilySlug:     "worker",
-			TaskSlug:       "worker",
-			Role:           "worker",
-			Provider:       "codex",
-			PermissionMode: "auto",
-			Status:         "dead",
-			CreatedAt:      now,
-			UpdatedAt:      now,
-		},
-		{
-			RunID:          "worker-error",
-			FamilySlug:     "worker",
-			TaskSlug:       "worker",
-			Role:           "worker",
-			Provider:       "codex",
-			PermissionMode: "auto",
-			Status:         "error",
-			CreatedAt:      "2026-06-12T10:01:00+05:30",
-			UpdatedAt:      "2026-06-12T10:01:00+05:30",
-		},
-	} {
-		if err := flowdb.UpsertBrainRun(db, run); err != nil {
-			t.Fatalf("UpsertBrainRun(%s): %v", run.RunID, err)
+	for key := range want {
+		if !got[key] {
+			t.Fatalf("selected actions = %#v, want %s", view.SelectedActions, key)
 		}
 	}
-
-	got, err := BuildBrainGraph(db, root, BrainGraphFilters{Expand: map[string]bool{"task:worker": true}}, time.Date(2026, 6, 12, 10, 0, 0, 0, time.FixedZone("IST", 19800)))
-	if err != nil {
-		t.Fatalf("BuildBrainGraph: %v", err)
-	}
-
-	if _, ok := graphNodeByID(got, "run:worker-dead"); !ok {
-		t.Fatalf("missing dead run node: %#v", got.Nodes)
-	}
-	if _, ok := graphNodeByID(got, "run:worker-error"); !ok {
-		t.Fatalf("missing error run node: %#v", got.Nodes)
-	}
-	if got.Counts.Failed != 1 {
-		t.Fatalf("failed count = %d, want one failed visible task", got.Counts.Failed)
-	}
-}
-
-func TestBrainGraphIncludesOlderFailedRunBeyondFamilyRecentLimit(t *testing.T) {
-	root, db := testRootDB(t)
-	insertBrainGraphTask(t, db, "worker", "Worker", "backlog", nil)
-	oldFailed := &flowdb.BrainRun{
-		RunID:          "worker-old-dead",
-		FamilySlug:     "worker",
-		TaskSlug:       "worker",
-		Role:           "worker",
-		Provider:       "codex",
-		PermissionMode: "auto",
-		Status:         "dead",
-		CreatedAt:      "2026-06-12T08:00:00+05:30",
-		UpdatedAt:      "2026-06-12T08:00:00+05:30",
-		StartedAt:      sql.NullString{String: "2026-06-12T08:00:00+05:30", Valid: true},
-	}
-	if err := flowdb.UpsertBrainRun(db, oldFailed); err != nil {
-		t.Fatalf("UpsertBrainRun(%s): %v", oldFailed.RunID, err)
-	}
-	for i := 0; i < 55; i++ {
-		stamp := time.Date(2026, 6, 12, 9, i, 0, 0, time.FixedZone("IST", 19800)).Format(time.RFC3339)
-		run := &flowdb.BrainRun{
-			RunID:          fmt.Sprintf("worker-completed-%02d", i),
-			FamilySlug:     "worker",
-			TaskSlug:       "worker",
-			Role:           "worker",
-			Provider:       "codex",
-			PermissionMode: "auto",
-			Status:         "completed",
-			CreatedAt:      stamp,
-			UpdatedAt:      stamp,
-			StartedAt:      sql.NullString{String: stamp, Valid: true},
-		}
-		if err := flowdb.UpsertBrainRun(db, run); err != nil {
-			t.Fatalf("UpsertBrainRun(%s): %v", run.RunID, err)
-		}
-	}
-
-	got, err := BuildBrainGraph(db, root, BrainGraphFilters{}, time.Date(2026, 6, 12, 10, 0, 0, 0, time.FixedZone("IST", 19800)))
-	if err != nil {
-		t.Fatalf("BuildBrainGraph: %v", err)
-	}
-
-	if _, ok := graphNodeByID(got, "run:worker-old-dead"); !ok {
-		t.Fatalf("missing older failed run beyond recent family limit: %#v", got.Nodes)
-	}
-	if got.Counts.Failed != 1 {
-		t.Fatalf("failed count = %d, want one failed visible task", got.Counts.Failed)
+	if len(view.SelectedActions) != len(want) {
+		t.Fatalf("selected actions = %#v, want exactly session controls", view.SelectedActions)
 	}
 }
 
@@ -889,21 +397,6 @@ func assertBrainGraphEmptyResponse(t *testing.T, rec *httptest.ResponseRecorder)
 	t.Helper()
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d, body = %s", rec.Code, rec.Body.String())
-	}
-	var raw struct {
-		Policy struct {
-			RiskyWhitelist   json.RawMessage `json:"risky_whitelist"`
-			ApprovalRequired json.RawMessage `json:"approval_required"`
-		} `json:"policy"`
-	}
-	if err := json.Unmarshal(rec.Body.Bytes(), &raw); err != nil {
-		t.Fatalf("decode raw graph: %v", err)
-	}
-	if string(raw.Policy.RiskyWhitelist) != "[]" {
-		t.Fatalf("policy.risky_whitelist JSON = %s, want []", raw.Policy.RiskyWhitelist)
-	}
-	if string(raw.Policy.ApprovalRequired) == "null" || len(raw.Policy.ApprovalRequired) == 0 {
-		t.Fatalf("policy.approval_required JSON = %s, want non-null array", raw.Policy.ApprovalRequired)
 	}
 	var got BrainGraphView
 	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
@@ -946,33 +439,6 @@ func graphNodeByID(view BrainGraphView, id string) (BrainGraphNode, bool) {
 func graphHasEdge(view BrainGraphView, edgeType, source, target string) bool {
 	for _, edge := range view.Edges {
 		if edge.Type == edgeType && edge.Source == source && edge.Target == target {
-			return true
-		}
-	}
-	return false
-}
-
-func graphEdgeByID(view BrainGraphView, id string) (BrainGraphEdge, bool) {
-	for _, edge := range view.Edges {
-		if edge.ID == id {
-			return edge, true
-		}
-	}
-	return BrainGraphEdge{}, false
-}
-
-func graphOwnerBySlug(view BrainGraphView, slug string) (BrainGraphOwnerView, bool) {
-	for _, owner := range view.Owners {
-		if owner.Slug == slug {
-			return owner, true
-		}
-	}
-	return BrainGraphOwnerView{}, false
-}
-
-func stringSliceContains(values []string, want string) bool {
-	for _, value := range values {
-		if value == want {
 			return true
 		}
 	}

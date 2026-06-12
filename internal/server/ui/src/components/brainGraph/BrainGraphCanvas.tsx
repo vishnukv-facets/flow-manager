@@ -123,8 +123,6 @@ function ownerSummary(
         status: slug === 'unowned' ? 'active' : 'missing',
         task_count: 0,
         running_count: 0,
-        blocked_count: 0,
-        approval_count: 0,
       }
 
   if (!existing) {
@@ -132,8 +130,6 @@ function ownerSummary(
       if (effectiveOwners.get(node.id) !== slug) continue
       if (node.type === 'task') summary.task_count++
       if (node.type === 'task' && (node.status === 'running' || node.status === 'in-progress')) summary.running_count++
-      if (node.type === 'approval' || node.status === 'approval_required') summary.approval_count++
-      if (node.status === 'blocked' || node.status === 'approval_required') summary.blocked_count++
     }
   }
 

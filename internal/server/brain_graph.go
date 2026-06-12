@@ -2,7 +2,6 @@ package server
 
 import (
 	"database/sql"
-	"errors"
 	"net/http"
 	"net/url"
 	"sort"
@@ -51,11 +50,6 @@ func BuildBrainGraph(db *sql.DB, root string, filters BrainGraphFilters, now tim
 		SelectedActions: defaultBrainGraphActions(),
 		Warnings:        []BrainGraphWarning{},
 	}
-	policy, err := flowdb.GetBrainPolicy(db)
-	if err != nil {
-		return view, err
-	}
-	view.Policy = brainGraphPolicyView(policy)
 	allTasks, err := flowdb.ListTasks(db, flowdb.TaskFilter{Kind: ""})
 	if err != nil {
 		return view, err
@@ -117,10 +111,6 @@ func BuildBrainGraph(db *sql.DB, root string, filters BrainGraphFilters, now tim
 			})
 		}
 	}
-	appendBrainGraphApprovalGateNodes(&view, visibleTasks, visible, tagsByTask, taskOwners, policy)
-	if err := appendBrainGraphRunNodes(&view, db, visibleTasks, visible, filters); err != nil {
-		return view, err
-	}
 	appendBrainGraphEvidenceNodes(&view, visibleTasks, visible, tagsByTask, filters)
 	for _, task := range visibleTasks {
 		if !visible[task.Slug] || !task.ParentSlug.Valid || strings.TrimSpace(task.ParentSlug.String) == "" {
@@ -157,14 +147,6 @@ func BuildBrainGraph(db *sql.DB, root string, filters BrainGraphFilters, now tim
 	return view, nil
 }
 
-func brainGraphPolicyView(policy flowdb.BrainPolicy) BrainGraphPolicyView {
-	return BrainGraphPolicyView{
-		FullAuto:         policy.FullAuto,
-		RiskyWhitelist:   append(make([]string, 0, len(policy.RiskyWhitelist)), policy.RiskyWhitelist...),
-		ApprovalRequired: append(make([]string, 0, len(policy.RequiresReview)), policy.RequiresReview...),
-	}
-}
-
 func visibleBrainGraphWarnings(warnings []BrainGraphWarning, visible map[string]bool) []BrainGraphWarning {
 	out := make([]BrainGraphWarning, 0, len(warnings))
 	for _, warning := range warnings {
@@ -178,98 +160,6 @@ func visibleBrainGraphWarnings(warnings []BrainGraphWarning, visible map[string]
 		}
 	}
 	return out
-}
-
-func appendBrainGraphApprovalGateNodes(view *BrainGraphView, tasks []*flowdb.Task, visible map[string]bool, tagsByTask map[string][]string, taskOwners map[string]string, policy flowdb.BrainPolicy) {
-	for _, task := range tasks {
-		if !visible[task.Slug] {
-			continue
-		}
-		actions := brainGraphRiskyActionsForTask(tagsByTask[task.Slug])
-		if len(actions) == 0 {
-			continue
-		}
-		ownerSlug := taskOwners[task.Slug]
-		if ownerSlug == "" {
-			ownerSlug = "unowned"
-		}
-		for _, action := range flowdb.BrainRiskyActions {
-			if !actions[action] || policy.IsWhitelisted(action) {
-				continue
-			}
-			nodeID := "approval:" + action + ":" + task.Slug
-			view.Nodes = append(view.Nodes, BrainGraphNode{
-				ID:        nodeID,
-				Type:      "approval",
-				OwnerSlug: ownerSlug,
-				TaskSlug:  task.Slug,
-				Label:     "Approval: " + action,
-				Status:    "approval_required",
-				Ref: &BrainGraphRef{
-					Kind: "approval",
-					ID:   action + ":" + task.Slug,
-				},
-				Actions: []string{"approve"},
-				Metadata: map[string]string{
-					"action": action,
-					"policy": flowdb.BrainPolicyModeApprovalRequired,
-				},
-			})
-			view.Edges = append(view.Edges, BrainGraphEdge{
-				ID:     "blocks:" + nodeID + ":task:" + task.Slug,
-				Type:   "blocks",
-				Source: nodeID,
-				Target: "task:" + task.Slug,
-				Label:  "policy gate",
-				Status: "blocked",
-			})
-			view.Counts.ApprovalNeeded++
-			view.Counts.Blocked++
-			incrementBrainGraphOwnerGateCounts(view, ownerSlug)
-		}
-	}
-}
-
-func brainGraphRiskyActionsForTask(tags []string) map[string]bool {
-	actions := map[string]bool{}
-	for _, tag := range tags {
-		tag = flowdb.NormalizeTag(tag)
-		if strings.HasPrefix(tag, "gh-pr:") {
-			actions["merge"] = true
-			continue
-		}
-		for _, prefix := range []string{"risky:", "action:"} {
-			action, ok := strings.CutPrefix(tag, prefix)
-			if !ok {
-				continue
-			}
-			action = strings.TrimSpace(action)
-			if brainGraphKnownRiskyAction(action) {
-				actions[action] = true
-			}
-		}
-	}
-	return actions
-}
-
-func brainGraphKnownRiskyAction(action string) bool {
-	for _, known := range flowdb.BrainRiskyActions {
-		if action == known {
-			return true
-		}
-	}
-	return false
-}
-
-func incrementBrainGraphOwnerGateCounts(view *BrainGraphView, ownerSlug string) {
-	for i := range view.Owners {
-		if view.Owners[i].Slug != ownerSlug {
-			continue
-		}
-		view.Owners[i].ApprovalCount++
-		view.Owners[i].BlockedCount++
-		return
-	}
 }
 
 func filterBrainGraphTasks(tasks []*flowdb.Task, filters BrainGraphFilters) []*flowdb.Task {
@@ -428,169 +318,6 @@ func brainGraphTaskNode(task *flowdb.Task, ownerSlug string, tags []string, filt
 	}
 }
 
-func appendBrainGraphRunNodes(view *BrainGraphView, db *sql.DB, tasks []*flowdb.Task, visible map[string]bool, filters BrainGraphFilters) error {
-	expandedByTask := make(map[string]bool, len(tasks))
-	rootsByTask := make(map[string]string, len(tasks))
-	runsByRoot := map[string][]*flowdb.BrainRun{}
-	emitted := map[string]bool{}
-	failedTasks := map[string]bool{}
-
-	for _, task := range tasks {
-		if !visible[task.Slug] {
-			continue
-		}
-		expandedByTask[task.Slug] = brainGraphTaskExpanded(task, filters)
-		root, err := flowdb.TaskFamilyRoot(db, task.Slug)
-		if err != nil {
-			return err
-		}
-		rootsByTask[task.Slug] = root
-		if _, ok := runsByRoot[root]; ok {
-			continue
-		}
-		runs, err := flowdb.ListBrainRunsForFamily(db, root, 50)
-		if err != nil {
-			return err
-		}
-		runsByRoot[root] = runs
-	}
-	if err := appendBrainGraphUncappedActiveFailedRuns(db, tasks, visible, rootsByTask, runsByRoot); err != nil {
-		return err
-	}
-
-	for _, task := range tasks {
-		if !visible[task.Slug] {
-			continue
-		}
-		for _, run := range runsByRoot[rootsByTask[task.Slug]] {
-			if run == nil || run.TaskSlug != task.Slug {
-				continue
-			}
-			if !expandedByTask[task.Slug] && !brainGraphRunActiveOrFailed(run.Status) {
-				continue
-			}
-			nodeID := brainGraphRunNodeID(run)
-			if emitted[nodeID] {
-				continue
-			}
-			view.Nodes = append(view.Nodes, brainGraphRunNode(run, task, nodeID))
-			view.Edges = append(view.Edges, BrainGraphEdge{
-				ID:     "run_of:" + task.Slug + ":" + nodeID,
-				Type:   "run_of",
-				Source: "task:" + task.Slug,
-				Target: nodeID,
-			})
-			if brainGraphRunFailed(run.Status) {
-				failedTasks[task.Slug] = true
-			}
-			emitted[nodeID] = true
-		}
-	}
-	view.Counts.Failed += len(failedTasks)
-	return nil
-}
-
-func appendBrainGraphUncappedActiveFailedRuns(db *sql.DB, tasks []*flowdb.Task, visible map[string]bool, rootsByTask map[string]string, runsByRoot map[string][]*flowdb.BrainRun) error {
-	visibleSlugs := make([]string, 0, len(tasks))
-	for _, task := range tasks {
-		if visible[task.Slug] {
-			visibleSlugs = append(visibleSlugs, task.Slug)
-		}
-	}
-	if len(visibleSlugs) == 0 {
-		return nil
-	}
-	persistentTaskSlugs, err := listBrainGraphPersistentRunTaskSlugs(db, visibleSlugs)
-	if err != nil {
-		return err
-	}
-	activeFailed, err := listBrainGraphActiveFailedRunsForTasks(db, visibleSlugs)
-	if err != nil {
-		return err
-	}
-	for _, run := range activeFailed {
-		root := rootsByTask[run.TaskSlug]
-		if root == "" {
-			continue
-		}
-		runsByRoot[root] = append(runsByRoot[root], run)
-	}
-	for _, task := range tasks {
-		if !visible[task.Slug] || persistentTaskSlugs[task.Slug] || !brainGraphRunActiveOrFailed(nullStringValue(task.AutoRunStatus)) {
-			continue
-		}
-		legacy, err := flowdb.GetBrainRun(db, "legacy:auto-run:"+task.Slug)
-		if errors.Is(err, sql.ErrNoRows) {
-			continue
-		}
-		if err != nil {
-			return err
-		}
-		root := rootsByTask[task.Slug]
-		if root != "" {
-			runsByRoot[root] = append(runsByRoot[root], legacy)
-		}
-	}
-	return nil
-}
-
-func listBrainGraphPersistentRunTaskSlugs(db *sql.DB, taskSlugs []string) (map[string]bool, error) {
-	out := map[string]bool{}
-	if len(taskSlugs) == 0 {
-		return out, nil
-	}
-	placeholders := strings.Repeat("?,", len(taskSlugs)-1) + "?"
-	args := make([]any, 0, len(taskSlugs))
-	for _, slug := range taskSlugs {
-		args = append(args, slug)
-	}
-	rows, err := db.Query(`SELECT DISTINCT task_slug FROM brain_runs WHERE task_slug IN (`+placeholders+`)`, args...)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	for rows.Next() {
-		var slug string
-		if err := rows.Scan(&slug); err != nil {
-			return nil, err
-		}
-		out[slug] = true
-	}
-	return out, rows.Err()
-}
-
-func listBrainGraphActiveFailedRunsForTasks(db *sql.DB, taskSlugs []string) ([]*flowdb.BrainRun, error) {
-	if len(taskSlugs) == 0 {
-		return nil, nil
-	}
-	placeholders := strings.Repeat("?,", len(taskSlugs)-1) + "?"
-	args := make([]any, 0, len(taskSlugs)+3)
-	for _, slug := range taskSlugs {
-		args = append(args, slug)
-	}
-	args = append(args, "running", "dead", "error")
-	rows, err := db.Query(
-		`SELECT `+flowdb.BrainRunCols+` FROM brain_runs
-		 WHERE task_slug IN (`+placeholders+`)
-		   AND status IN (?, ?, ?)
-		 ORDER BY COALESCE(started_at, created_at) DESC, created_at DESC, run_id DESC`,
-		args...,
-	)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	var out []*flowdb.BrainRun
-	for rows.Next() {
-		run, err := flowdb.ScanBrainRun(rows)
-		if err != nil {
-			return nil, err
-		}
-		out = append(out, run)
-	}
-	return out, rows.Err()
-}
-
 func appendBrainGraphEvidenceNodes(view *BrainGraphView, tasks []*flowdb.Task, visible map[string]bool, tagsByTask map[string][]string, filters BrainGraphFilters) {
 	emittedRefs := map[string]bool{}
 	emittedEdges := map[string]bool{}
@@ -655,124 +382,6 @@ func brainGraphTaskExpanded(task *flowdb.Task, filters BrainGraphFilters) bool {
 	}
 	nodeID := "task:" + task.Slug
 	return filters.Expand[nodeID] || filters.Expand[task.Slug]
-}
-
-func brainGraphRunNodeID(run *flowdb.BrainRun) string {
-	if run == nil {
-		return "run:"
-	}
-	if run.Legacy {
-		return "run:auto:" + strings.TrimSpace(run.TaskSlug)
-	}
-	return "run:" + strings.TrimSpace(run.RunID)
-}
-
-func brainGraphRunNode(run *flowdb.BrainRun, task *flowdb.Task, nodeID string) BrainGraphNode {
-	metadata := map[string]string{}
-	addMetadata := func(key, value string) {
-		value = strings.TrimSpace(value)
-		if value != "" {
-			metadata[key] = value
-		}
-	}
-	addMetadata("run_id", run.RunID)
-	addMetadata("role", run.Role)
-	if run.Legacy {
-		metadata["legacy"] = "true"
-		if task != nil {
-			addMetadata("harness", task.Harness)
-		}
-	}
-	if run.LogPath.Valid {
-		addMetadata("log_path", run.LogPath.String)
-	}
-	if run.SessionID.Valid {
-		addMetadata("session_id", run.SessionID.String)
-	}
-	if run.RequestedModel.Valid {
-		addMetadata("requested_model", run.RequestedModel.String)
-	}
-	if run.RequestedTier.Valid {
-		addMetadata("requested_tier", run.RequestedTier.String)
-	}
-	if run.ResolvedModel.Valid {
-		addMetadata("resolved_model", run.ResolvedModel.String)
-	}
-
-	permissionMode := strings.TrimSpace(run.PermissionMode)
-	if permissionMode == "" {
-		permissionMode = flowdb.DefaultPermissionMode
-	}
-	return BrainGraphNode{
-		ID:             nodeID,
-		Type:           brainGraphRunNodeType(run.Role),
-		TaskSlug:       run.TaskSlug,
-		Label:          brainGraphRunLabel(run),
-		Status:         run.Status,
-		Provider:       run.Provider,
-		Harness:        brainGraphRunHarness(run, task),
-		PermissionMode: permissionMode,
-		Model:          brainGraphRunModel(run),
-		Ref: &BrainGraphRef{
-			Kind: "brain_run",
-			ID:   run.RunID,
-		},
-		Actions:  []string{"retry", "pause"},
-		Metadata: metadata,
-	}
-}
-
-func brainGraphRunHarness(run *flowdb.BrainRun, task *flowdb.Task) string {
-	if run == nil || !run.Legacy || task == nil {
-		return ""
-	}
-	return strings.TrimSpace(task.Harness)
-}
-
-func brainGraphRunNodeType(role string) string {
-	switch strings.TrimSpace(role) {
-	case "validator":
-		return "validator_run"
-	case "steward":
-		return "steward_run"
-	default:
-		return "worker_run"
-	}
-}
-
-func brainGraphRunLabel(run *flowdb.BrainRun) string {
-	role := strings.TrimSpace(run.Role)
-	if role == "" {
-		role = "worker"
-	}
-	return role + " run: " + run.TaskSlug
-}
-
-func brainGraphRunModel(run *flowdb.BrainRun) string {
-	for _, value := range []sql.NullString{run.ResolvedModel, run.RequestedModel, run.RequestedTier} {
-		if value.Valid && strings.TrimSpace(value.String) != "" {
-			return strings.TrimSpace(value.String)
-		}
-	}
-	return ""
-}
-
-func brainGraphRunActiveOrFailed(status string) bool {
-	switch strings.TrimSpace(status) {
-	case "running", "dead", "error":
-		return true
-	default:
-		return false
-	}
-}
-
-func brainGraphRunFailed(status string) bool {
-	switch strings.TrimSpace(status) {
-	case "dead", "error":
-		return true
-	default:
-		return false
-	}
 }
 
 func brainGraphGitHubTag(tag string) bool {
@@ -862,9 +471,6 @@ func defaultBrainGraphActions() []BrainGraphActionSpec {
 		{Key: "open_session", Label: "Open session", Enabled: true},
 		{Key: "send_event", Label: "Send event", Enabled: true},
 		{Key: "seed", Label: "Seed input", Enabled: true},
-		{Key: "retry", Label: "Retry", Enabled: true},
-		{Key: "pause", Label: "Pause", Enabled: false, DisabledReason: "No safe persisted stop primitive is available for Brain Graph runs yet."},
-		{Key: "approve", Label: "Approve", Risky: true, Enabled: true},
 	}
 }
 
