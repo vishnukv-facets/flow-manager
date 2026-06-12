@@ -354,6 +354,13 @@ export function BrainGraphCanvas({
     onSelectNode(node.data as BrainGraphNodeView)
   }
   const onSelectionChange: OnSelectionChangeFunc<FlowNode, FlowEdge> = ({ nodes: selectedNodes }) => {
+    if (selectedNodes.length === 0) {
+      if (selectedOwner || selectedId) {
+        onClearSelection()
+      }
+      return
+    }
+
     const ownerGroup = selectedNodes.find((node) => node.id.startsWith('owner-boundary:') && node.type === 'ownerGroup')
     if (!ownerGroup) return
     const ownerSlug = (ownerGroup.data as OwnerGroupData).owner.slug
