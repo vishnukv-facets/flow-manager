@@ -44,10 +44,10 @@ func (o listOpts) waitMax() int {
 	return waitingMaxRunes
 }
 
-// cmdList dispatches `flow list tasks|projects|playbooks|runs|tags`.
+// cmdList dispatches `flow list tasks|projects|playbooks|runs|owners|tags`.
 func cmdList(args []string) int {
 	if len(args) == 0 {
-		fmt.Fprintln(os.Stderr, "error: list requires 'tasks', 'projects', 'playbooks', 'runs', or 'tags'")
+		fmt.Fprintln(os.Stderr, "error: list requires 'tasks', 'projects', 'playbooks', 'runs', 'owners', or 'tags'")
 		return 2
 	}
 	switch args[0] {
@@ -59,6 +59,8 @@ func cmdList(args []string) int {
 		return listPlaybooksCmd(args[1:])
 	case "runs":
 		return listRunsCmd(args[1:])
+	case "owners":
+		return ownerList(args[1:])
 	case "tags":
 		return listTagsCmd(args[1:])
 	}
@@ -440,23 +442,23 @@ func boolStr(b bool) string {
 // taskListRow is the row shape that feeds table, JSON, and TSV rendering
 // for `flow list tasks`. Field order matters for JSON output stability.
 type taskListRow struct {
-	Slug      string   `json:"slug"`
-	Status    string   `json:"status"`
-	Priority  string   `json:"priority"`
-	Project   string   `json:"project,omitempty"`
-	AgeDays   int      `json:"age_days,omitempty"`
-	DueInDays *int     `json:"due_in_days,omitempty"`
-	DueLabel  string   `json:"due_label,omitempty"`
-	Stale     bool     `json:"stale,omitempty"`
-	StaleDays int      `json:"stale_days,omitempty"`
-	WaitingOn string   `json:"waiting_on,omitempty"`
-	Assignee  string   `json:"assignee,omitempty"`
-	Live      bool     `json:"live,omitempty"`
-	Archived  bool     `json:"archived,omitempty"`
-	Deleted   bool     `json:"deleted,omitempty"`
-	Tags      []string `json:"tags,omitempty"`
-	AutoRun   string   `json:"auto_run,omitempty"`
-	AutoRunPID int64   `json:"auto_run_pid,omitempty"`
+	Slug       string   `json:"slug"`
+	Status     string   `json:"status"`
+	Priority   string   `json:"priority"`
+	Project    string   `json:"project,omitempty"`
+	AgeDays    int      `json:"age_days,omitempty"`
+	DueInDays  *int     `json:"due_in_days,omitempty"`
+	DueLabel   string   `json:"due_label,omitempty"`
+	Stale      bool     `json:"stale,omitempty"`
+	StaleDays  int      `json:"stale_days,omitempty"`
+	WaitingOn  string   `json:"waiting_on,omitempty"`
+	Assignee   string   `json:"assignee,omitempty"`
+	Live       bool     `json:"live,omitempty"`
+	Archived   bool     `json:"archived,omitempty"`
+	Deleted    bool     `json:"deleted,omitempty"`
+	Tags       []string `json:"tags,omitempty"`
+	AutoRun    string   `json:"auto_run,omitempty"`
+	AutoRunPID int64    `json:"auto_run_pid,omitempty"`
 }
 
 func int64OrEmpty(n int64) string {

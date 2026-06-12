@@ -159,6 +159,27 @@ type WorkdirKnown struct {
 	GitRemote *string `json:"git_remote,omitempty"`
 }
 
+type OwnerView struct {
+	Slug           string        `json:"slug"`
+	Name           string        `json:"name"`
+	WorkDir        string        `json:"work_dir"`
+	WorkdirKnown   *WorkdirKnown `json:"workdir_known"`
+	ProjectSlug    *string       `json:"project_slug,omitempty"`
+	Status         string        `json:"status"`
+	Every          string        `json:"every"`
+	NextWakeAt     *string       `json:"next_wake_at,omitempty"`
+	NextDue        bool          `json:"next_due"`
+	LastTickAt     *string       `json:"last_tick_at,omitempty"`
+	LastTickStatus *string       `json:"last_tick_status,omitempty"`
+	TickPID        *int64        `json:"tick_pid,omitempty"`
+	TickStarted    *string       `json:"tick_started,omitempty"`
+	Harness        string        `json:"harness"`
+	CreatedAt      string        `json:"created_at"`
+	UpdatedAt      string        `json:"updated_at"`
+	ArchivedAt     *string       `json:"archived_at,omitempty"`
+	CharterPath    string        `json:"charter_path,omitempty"`
+}
+
 type TaskView struct {
 	Slug                string        `json:"slug"`
 	Name                string        `json:"name"`
@@ -187,6 +208,7 @@ type TaskView struct {
 	Tags                []string      `json:"tags"`
 	SessionID           *string       `json:"session_id"`
 	SessionProvider     *string       `json:"session_provider"`
+	Harness             *string       `json:"harness,omitempty"`
 	SessionStarted      *string       `json:"session_started"`
 	SessionLastResumed  *string       `json:"session_last_resumed"`
 	SessionPath         *string       `json:"session_path,omitempty"`

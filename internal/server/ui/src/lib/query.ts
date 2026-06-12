@@ -19,6 +19,7 @@ import type {
   InboxFeed,
   KBFileView,
   MemorySource,
+  OwnerView,
   OverviewView,
   PlaybookView,
   ProjectView,
@@ -246,6 +247,27 @@ export function useTaskTranscript(slug: string | undefined, enabled = true) {
     queryKey: ['task-transcript', slug],
     enabled: !!slug && enabled,
     queryFn: () => apiGet<TranscriptResponse>(`/api/tasks/${encodeURIComponent(slug!)}/transcript`),
+  })
+}
+
+export interface OwnerFilters {
+  status?: string
+  include_archived?: boolean
+}
+export function useOwners(filters: OwnerFilters = {}) {
+  return useQuery({
+    queryKey: ['owners', filters],
+    queryFn: () =>
+      apiGet<OwnerView[]>(
+        `/api/owners${qs(filters as Record<string, string | boolean | number | undefined>)}`,
+      ),
+  })
+}
+export function useOwner(slug: string | undefined) {
+  return useQuery({
+    queryKey: ['owner', slug],
+    enabled: !!slug,
+    queryFn: () => apiGet<OwnerView>(`/api/owners/${encodeURIComponent(slug!)}`),
   })
 }
 

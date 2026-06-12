@@ -198,6 +198,7 @@ export function SessionDetail({ slug }: { slug: string }) {
   if (!task) return null
 
   const provider = agent?.provider || task.session_provider || 'claude'
+  const harnessName = task.harness || provider
   const status = agent?.status || task.status
   const monitored = !!agent?.monitored
   const waitingWhy = agent?.waiting_for?.why || task.waiting_on || ''
@@ -533,7 +534,7 @@ export function SessionDetail({ slug }: { slug: string }) {
                 title={termConnTitle}
               />
               <span className="mono clip">
-                {provider} · {agent?.session_id || task.session_id || 'no session'}
+                {provider}{harnessName !== provider ? ` / ${harnessName}` : ''} · {agent?.session_id || task.session_id || 'no session'}
               </span>
               <div className="spacer" />
               <span className="faint clip" style={{ maxWidth: 280 }}>
@@ -916,6 +917,8 @@ function AgentDiagnostics({ agent }: { agent: UiAgent }) {
 
 function SideInfo({ task, agent }: { task: ReturnType<typeof useTask>['data']; agent?: UiAgent }) {
   if (!task) return null
+  const provider = task.session_provider || agent?.provider || 'claude'
+  const harness = task.harness || provider
   return (
     <div style={{ padding: 14, borderBottom: '1px solid var(--border)' }}>
       <div className="meta-grid">
@@ -926,6 +929,14 @@ function SideInfo({ task, agent }: { task: ReturnType<typeof useTask>['data']; a
         <div className="meta-cell">
           <div className="meta-k">branch</div>
           <div className="meta-v mono clip">{agent?.branch || '—'}</div>
+        </div>
+        <div className="meta-cell">
+          <div className="meta-k">provider</div>
+          <div className="meta-v mono clip">{provider}</div>
+        </div>
+        <div className="meta-cell">
+          <div className="meta-k">harness</div>
+          <div className="meta-v mono clip">{harness}</div>
         </div>
         <div className="meta-cell">
           <div className="meta-k">last activity</div>

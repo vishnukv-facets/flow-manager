@@ -22,6 +22,27 @@ export interface WorkdirKnown {
   git_remote?: string
 }
 
+export interface OwnerView {
+  slug: string
+  name: string
+  work_dir: string
+  workdir_known: WorkdirKnown | null
+  project_slug?: string | null
+  status: string
+  every: string
+  next_wake_at?: string | null
+  next_due: boolean
+  last_tick_at?: string | null
+  last_tick_status?: string | null
+  tick_pid?: number
+  tick_started?: string | null
+  harness: string
+  created_at: string
+  updated_at: string
+  archived_at?: string | null
+  charter_path?: string
+}
+
 export interface TaskView {
   slug: string
   name: string
@@ -50,6 +71,7 @@ export interface TaskView {
   tags: string[]
   session_id: string | null
   session_provider: string | null
+  harness?: string | null
   session_started: string | null
   session_last_resumed: string | null
   live: boolean
