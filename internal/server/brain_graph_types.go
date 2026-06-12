@@ -197,3 +197,23 @@ type BrainGraphAuditView struct {
 	ErrorText    *string         `json:"error_text,omitempty"`
 	CreatedAt    string          `json:"created_at"`
 }
+
+type BrainGraphActionRequest struct {
+	Action  string `json:"action"`
+	NodeID  string `json:"node_id"`
+	Prompt  string `json:"prompt,omitempty"`
+	Confirm bool   `json:"confirm,omitempty"`
+	Actor   string `json:"actor,omitempty"`
+}
+
+type BrainGraphActionResponse struct {
+	OK                   bool                  `json:"ok"`
+	Message              string                `json:"message"`
+	Action               string                `json:"action,omitempty"`
+	NodeID               string                `json:"node_id,omitempty"`
+	RequiresConfirmation bool                  `json:"requires_confirmation,omitempty"`
+	Output               string                `json:"output,omitempty"`
+	ActionResponse       *actionResponse       `json:"action_response,omitempty"`
+	Policy               *BrainGraphPolicyView `json:"policy,omitempty"`
+	Audit                *BrainGraphAuditView  `json:"audit,omitempty"`
+}

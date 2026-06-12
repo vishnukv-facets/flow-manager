@@ -1,4 +1,4 @@
-import { Link } from 'wouter'
+import { Link, useLocation } from 'wouter'
 import type { ReactNode } from 'react'
 import {
   Activity,
@@ -14,7 +14,8 @@ import {
   TerminalSquare,
 } from 'lucide-react'
 import { StatusDot } from '../ui'
-import { useBrainGraphNodeDetail } from '../../lib/query'
+import { confirmAction } from '../../lib/confirm'
+import { useBrainGraphAction, useBrainGraphNodeDetail } from '../../lib/query'
 import { dateTime } from '../../lib/format'
 import type {
   BrainGraphActionSpec,
@@ -372,14 +373,55 @@ function NodeRef({ node }: { node: BrainGraphNode }) {
 }
 
 function NodeActions({ node, actions }: { node: BrainGraphNode; actions: BrainGraphActionSpec[] }) {
+  const graphAction = useBrainGraphAction()
+  const [, navigate] = useLocation()
+  const pendingAction = graphAction.isPending ? graphAction.variables?.action : ''
+
+  const run = async (key: string, action?: BrainGraphActionSpec) => {
+    const enabled = action?.enabled ?? true
+    if (!enabled || graphAction.isPending) return
+    let confirm = false
+    if (key === 'approve') {
+      const ok = await confirmAction({
+        title: action?.label || 'Approve action',
+        body: `Set ${node.metadata?.action || 'this action'} to auto for the Brain policy.`,
+        confirmLabel: 'Approve',
+        cancelLabel: 'Cancel',
+        danger: true,
+      })
+      if (!ok) return
+      confirm = true
+    }
+    try {
+      const resp = await graphAction.mutateAsync({ action: key, node_id: node.id, confirm })
+      if ((key === 'open_session' || key === 'resume') && resp.action_response?.bridge) {
+        const slug = resp.action_response.agent?.slug || node.task_slug
+        if (slug) navigate(`/session/${encodeURIComponent(slug)}`)
+      }
+    } catch {
+      // The hook emits the toast; keep the click handler quiet.
+    }
+  }
+
   return (
     <div className="brain-action-list">
       {(node.actions ?? []).map((key) => {
         const action = actionByKey(actions, key)
+        const enabled = action?.enabled ?? true
+        const pending = pendingAction === key
         return (
-          <span className={`badge ${action?.risky ? 'warn' : ''}`} key={key} title={action?.disabled_reason || undefined}>
-            {action?.label ?? key.replace(/_/g, ' ')}
-          </span>
+          <button
+            type="button"
+            className={`brain-action-button ${action?.risky ? 'risky' : ''}`}
+            key={key}
+            title={action?.disabled_reason || undefined}
+            disabled={!enabled || graphAction.isPending}
+            aria-busy={pending}
+            onClick={() => void run(key, action)}
+          >
+            {pending ? <Loader2 size={13} className="spin" /> : null}
+            <span>{action?.label ?? key.replace(/_/g, ' ')}</span>
+          </button>
         )
       })}
     </div>

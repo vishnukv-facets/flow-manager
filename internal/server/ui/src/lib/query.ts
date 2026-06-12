@@ -1,5 +1,5 @@
 import { QueryClient, keepPreviousData, useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { apiAction, apiGet, apiGetText, apiPost } from './api'
+import { ApiError, apiAction, apiGet, apiGetText, apiPost } from './api'
 import { rpc } from './rpc'
 import { events } from './events'
 import { UI_DATA_IDLE_REFETCH_MS, focusedLiveInvalidationKeys } from './liveInvalidation'
@@ -8,6 +8,8 @@ import type {
   ActionRequest,
   AskFlowResponse,
   AttentionItem,
+  BrainGraphActionRequest,
+  BrainGraphActionResponse,
   AttentionTraceResponse,
   BrainGraphNodeDetail,
   BrainGraphView,
@@ -252,6 +254,35 @@ export function useBrainGraphNodeDetail(nodeId?: string | null) {
     queryKey: ['brain-graph-node', stableNodeId],
     queryFn: () => apiGet<BrainGraphNodeDetail>(`/api/brain/graph/node/${encodeURIComponent(stableNodeId)}`),
     enabled: Boolean(stableNodeId),
+  })
+}
+
+async function postBrainGraphAction(req: BrainGraphActionRequest): Promise<BrainGraphActionResponse> {
+  const r = await rpc.request({
+    method: 'POST',
+    path: '/api/brain/graph/actions',
+    body: req,
+    timeoutMs: 180000,
+  })
+  const data = (r.json ?? {}) as BrainGraphActionResponse
+  if (r.status >= 400 || data.ok === false) {
+    throw new ApiError(r.status, data.message || `graph action failed (${r.status})`)
+  }
+  return data
+}
+
+export function useBrainGraphAction() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: (req: BrainGraphActionRequest) => postBrainGraphAction(req),
+    onSuccess: (data) => {
+      if (data.message) pushToast('ok', data.message)
+      qc.invalidateQueries({ queryKey: ['brain-graph'] })
+      qc.invalidateQueries({ queryKey: ['brain-graph-node'] })
+    },
+    onError: (err: Error) => {
+      pushToast('error', err.message || 'graph action failed')
+    },
   })
 }
 

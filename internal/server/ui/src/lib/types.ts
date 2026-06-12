@@ -333,6 +333,26 @@ export interface BrainGraphAuditView {
   created_at: string
 }
 
+export interface BrainGraphActionRequest {
+  action: string
+  node_id: string
+  prompt?: string
+  confirm?: boolean
+  actor?: string
+}
+
+export interface BrainGraphActionResponse {
+  ok: boolean
+  message: string
+  action?: string
+  node_id?: string
+  requires_confirmation?: boolean
+  output?: string
+  action_response?: ActionResponse
+  policy?: BrainGraphPolicyView
+  audit?: BrainGraphAuditView
+}
+
 export interface TaskCounts {
   total: number
   in_progress: number
