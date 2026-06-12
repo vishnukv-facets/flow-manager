@@ -192,6 +192,93 @@ func SessionProviderCheck(task *flowdb.Task) *ValidatorCheckResult {
 	return check
 }
 
+// GitDiffCheck validates that the task modified code (has a git diff).
+func GitDiffCheck(task *flowdb.Task) *ValidatorCheckResult {
+	check := &ValidatorCheckResult{
+		Check: "git_diff_exists",
+	}
+	if task == nil {
+		check.Status = "unknown"
+		check.Evidence = "cannot check git diff without task"
+		return check
+	}
+	// This check would need git access and the task's work_dir
+	// For now, return unknown since we need external process execution
+	check.Status = "unknown"
+	check.Evidence = "git diff check requires external git process"
+	check.MissingContext = "would need to run: cd <work_dir> && git diff HEAD"
+	return check
+}
+
+// UpdatesFileCheck validates that task updates exist (work was logged).
+func UpdatesFileCheck(updatesPath string) *ValidatorCheckResult {
+	check := &ValidatorCheckResult{
+		Check: "updates_logged",
+	}
+	if strings.TrimSpace(updatesPath) == "" {
+		check.Status = "unknown"
+		check.Evidence = "updates path not provided"
+		check.MissingContext = "task should have updates/*.md files in work_dir"
+		return check
+	}
+	_, err := os.Stat(updatesPath)
+	if err != nil {
+		check.Status = "unknown"
+		check.Evidence = "could not access updates directory"
+		check.MissingContext = fmt.Sprintf("expected updates at: %s", updatesPath)
+		return check
+	}
+	// Check if directory is empty
+	entries, err := os.ReadDir(updatesPath)
+	if err != nil || len(entries) == 0 {
+		check.Status = "unknown"
+		check.Evidence = "no updates logged in updates directory"
+		check.MissingContext = "task should have at least one update file documenting progress"
+		return check
+	}
+	check.Status = "pass"
+	check.Evidence = fmt.Sprintf("%d update file(s) found", len(entries))
+	return check
+}
+
+// TestResultsCheck validates that tests pass (if present).
+func TestResultsCheck(task *flowdb.Task) *ValidatorCheckResult {
+	check := &ValidatorCheckResult{
+		Check: "tests_pass",
+	}
+	if task == nil {
+		check.Status = "unknown"
+		check.Evidence = "cannot check tests without task"
+		check.MissingContext = "task should have run tests before marking done"
+		return check
+	}
+	// This would require running tests which is external
+	check.Status = "unknown"
+	check.Evidence = "test execution requires external process"
+	check.MissingContext = "would run: make test or go test ./..."
+	return check
+}
+
+// PRMetadataCheck validates PR metadata if present.
+func PRMetadataCheck(task *flowdb.Task) *ValidatorCheckResult {
+	check := &ValidatorCheckResult{
+		Check: "pr_metadata",
+	}
+	if task == nil {
+		check.Status = "unknown"
+		check.Evidence = "cannot check PR metadata without task"
+		check.MissingContext = "task must be loaded from database"
+		return check
+	}
+	// For now, this check returns unknown since we can't determine PR state
+	// from the task model alone. Future implementation should check
+	// via GitHub API or task tags.
+	check.Status = "unknown"
+	check.Evidence = "PR metadata check requires external GitHub API"
+	check.MissingContext = "would check linked PR status via GitHub API or gh-pr tag"
+	return check
+}
+
 // RunValidationChecks performs a standard set of validation checks on a task.
 func RunValidationChecks(task *flowdb.Task, db *sql.DB) *ValidatorRunFindings {
 	if task == nil {
@@ -215,9 +302,20 @@ func RunValidationChecks(task *flowdb.Task, db *sql.DB) *ValidatorRunFindings {
 		{"task status", TaskStatusCheck},
 		{"transcript", TranscriptCheck},
 		{"session provider", SessionProviderCheck},
+		{"git diff", GitDiffCheck},
+		{"test results", TestResultsCheck},
+		{"pr metadata", PRMetadataCheck},
 	}
 	for _, c := range checks {
 		result := c.fn(task)
+		if result != nil {
+			findings.addCheck(result.Check, result.Status, result.Evidence, result.MissingContext)
+		}
+	}
+	// Check for updates directory if work_dir is available
+	if task.WorkDir != "" {
+		updatesPath := strings.TrimRight(task.WorkDir, "/") + "/.flow/tasks/" + task.Slug + "/updates"
+		result := UpdatesFileCheck(updatesPath)
 		if result != nil {
 			findings.addCheck(result.Check, result.Status, result.Evidence, result.MissingContext)
 		}

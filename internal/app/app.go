@@ -91,8 +91,6 @@ func Run(args []string) int {
 		return cmdAutoExec(rest)
 	case "__owner-tick":
 		return cmdOwnerTick(rest)
-	case "__validator-exec":
-		return cmdValidatorExec(rest)
 	case "-h", "--help", "help":
 		printUsage()
 		return 0
