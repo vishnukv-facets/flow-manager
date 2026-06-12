@@ -52,7 +52,7 @@ func (s *Server) handleOwnerRoute(w http.ResponseWriter, r *http.Request) {
 			writeNotFoundOrError(w, err)
 			return
 		}
-		writeJSON(w, BuildOwnerView(s.cfg.DB, s.cfg.FlowRoot, o, time.Now()))
+		writeJSON(w, BuildOwnerDetail(s.cfg.DB, s.cfg.FlowRoot, o, time.Now()))
 		return
 	}
 	if len(parts) != 2 {

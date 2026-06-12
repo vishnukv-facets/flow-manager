@@ -1,14 +1,14 @@
 import { useMemo, useState } from 'react'
 import { Link } from 'wouter'
-import { Archive, Bot, Loader2, Pause, Play, Search, TimerReset, Zap } from 'lucide-react'
+import { Archive, Bot, ChevronDown, ChevronRight, Loader2, Pause, Play, ScrollText, Search, TimerReset, Zap } from 'lucide-react'
 import { apiPost } from '../lib/api'
-import { queryClient, useOwners } from '../lib/query'
+import { queryClient, useOwner, useOwners } from '../lib/query'
 import { useDocumentTitle } from '../lib/useDocumentTitle'
 import { confirmAction } from '../lib/confirm'
 import { pushToast } from '../lib/toast'
 import { ago, dateTime } from '../lib/format'
 import { EmptyState, ErrorNote, Loading, ProviderIcon } from '../components/ui'
-import type { OwnerView } from '../lib/types'
+import type { OwnerTaskRow, OwnerView } from '../lib/types'
 
 const STATUS_FILTERS = [
   { v: '', label: 'All' },
@@ -127,6 +127,7 @@ export function Owners() {
 
 function OwnerRow({ owner }: { owner: OwnerView }) {
   const [busy, setBusy] = useState<string | null>(null)
+  const [expanded, setExpanded] = useState(false)
   const tickRunning = typeof owner.tick_pid === 'number'
   const project = owner.project_slug ? (
     <Link className="link-subtle" href={`/project/${encodeURIComponent(owner.project_slug)}`}>
@@ -165,12 +166,24 @@ function OwnerRow({ owner }: { owner: OwnerView }) {
   }
 
   return (
-    <tr style={{ cursor: 'default' }}>
+    <>
+    <tr style={{ cursor: 'default' }} className={expanded ? 'owner-row-open' : undefined}>
       <td>
-        <div className="row gap" style={{ minWidth: 0 }}>
+        <div className="owner-name-cell">
+          <button
+            type="button"
+            className="owner-expand-btn"
+            aria-expanded={expanded}
+            aria-label={expanded ? 'Collapse owner detail' : 'Expand owner detail'}
+            onClick={() => setExpanded((v) => !v)}
+          >
+            {expanded ? <ChevronDown size={15} /> : <ChevronRight size={15} />}
+          </button>
           <Bot size={15} className="dim" />
           <div style={{ minWidth: 0 }}>
-            <div className="strong truncate">{owner.name}</div>
+            <button type="button" className="owner-name-link strong truncate" onClick={() => setExpanded((v) => !v)}>
+              {owner.name}
+            </button>
             <div className="subtle truncate">
               {owner.slug} · {project} · {owner.workdir_known?.name || owner.work_dir}
             </div>
@@ -229,6 +242,122 @@ function OwnerRow({ owner }: { owner: OwnerView }) {
         </div>
       </td>
     </tr>
+    {expanded ? (
+      <tr className="owner-detail-row">
+        <td colSpan={7}>
+          <OwnerDetailPanel slug={owner.slug} tickRunning={tickRunning} />
+        </td>
+      </tr>
+    ) : null}
+    </>
+  )
+}
+
+function OwnerDetailPanel({ slug, tickRunning }: { slug: string; tickRunning: boolean }) {
+  const { data, isLoading, error } = useOwner(slug, { poll: tickRunning })
+  if (isLoading && !data) {
+    return (
+      <div className="owner-detail muted">
+        <Loader2 size={14} className="spin" /> loading owner detail…
+      </div>
+    )
+  }
+  if (error) return <div className="owner-detail"><ErrorNote error={error} /></div>
+  if (!data) return null
+
+  // Defensive: tolerate an older server build that doesn't yet return these.
+  const tasks = data.tasks ?? []
+  const journal = data.journal ?? []
+  const latest = journal[0]
+  const earlier = journal.slice(1)
+  return (
+    <div className="owner-detail">
+      {tickRunning ? (
+        <section className="owner-detail-block">
+          <div className="owner-detail-head">
+            <span className="dot waiting" /> Tick activity · live
+          </div>
+          {data.tick_log_tail ? (
+            <pre className="owner-tick-log live">{data.tick_log_tail}</pre>
+          ) : (
+            <div className="muted">
+              <Loader2 size={13} className="spin" /> tick starting — activity will stream here…
+            </div>
+          )}
+        </section>
+      ) : null}
+
+      <section className="owner-detail-block">
+        <div className="owner-detail-head">
+          Owned tasks <span className="dim">{tasks.length}</span>
+        </div>
+        {tasks.length === 0 ? (
+          <div className="muted">No tasks tagged for this owner yet.</div>
+        ) : (
+          <div className="owner-task-list">
+            {tasks.map((task) => (
+              <OwnerTaskItem key={task.slug} task={task} />
+            ))}
+          </div>
+        )}
+      </section>
+
+      <section className="owner-detail-block">
+        <div className="owner-detail-head">
+          <ScrollText size={13} />
+          Last tick {data.last_tick_at ? `· ${ago(data.last_tick_at)}` : ''}
+          {tickRunning ? <span className="chip active">running</span> : null}
+        </div>
+        {latest ? (
+          <article className="owner-journal">
+            <div className="owner-journal-meta">{latest.filename}</div>
+            <pre className="owner-journal-body">{latest.content}</pre>
+          </article>
+        ) : (
+          <div className="muted">No journal notes yet — the next tick will record what it dispatched here.</div>
+        )}
+        {earlier.length > 0 ? (
+          <details className="owner-journal-more">
+            <summary>{earlier.length} earlier note{earlier.length === 1 ? '' : 's'}</summary>
+            {earlier.map((note) => (
+              <article className="owner-journal" key={note.path}>
+                <div className="owner-journal-meta">{note.filename}</div>
+                <pre className="owner-journal-body">{note.content}</pre>
+              </article>
+            ))}
+          </details>
+        ) : null}
+      </section>
+
+      {!tickRunning && data.tick_log_tail ? (
+        <details className="owner-detail-block">
+          <summary className="owner-detail-head">Tick log (latest)</summary>
+          <pre className="owner-tick-log">{data.tick_log_tail}</pre>
+        </details>
+      ) : null}
+    </div>
+  )
+}
+
+function OwnerTaskItem({ task }: { task: OwnerTaskRow }) {
+  const running = task.auto_run_status === 'running' || task.status === 'in-progress'
+  const done = task.status === 'done' || task.auto_run_status === 'completed'
+  const dead = task.auto_run_status === 'dead'
+  const tone = task.is_question ? 'warn' : dead ? 'danger' : running ? 'ok' : done ? 'info' : ''
+  const label = task.is_question ? 'question' : dead ? 'dead' : running ? 'running' : done ? 'done' : task.status
+  const inner = (
+    <>
+      <span className={`chip ${tone}`}>{label}</span>
+      <span className="owner-task-name truncate" title={task.name}>{task.name}</span>
+      <span className="owner-task-slug dim truncate">{task.slug}</span>
+    </>
+  )
+  return task.has_session ? (
+    <Link className="owner-task-item link" href={`/session/${encodeURIComponent(task.slug)}`}>
+      {inner}
+    </Link>
+  ) : (
+    <div className="owner-task-item">{inner}</div>
   )
 }
 

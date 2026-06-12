@@ -19,8 +19,8 @@ export function BrainGraphToolbar({
   return (
     <div className="brain-toolbar">
       <div className="brain-toolbar-title">
-        <div className="eyebrow">brain</div>
-        <h1 className="h-xl">Brain Graph</h1>
+        <div className="eyebrow">workspace</div>
+        <h1 className="h-xl">Graph</h1>
       </div>
       <div className="brain-toolbar-counts">
         <span className="badge"><GitPullRequestArrow size={13} />{counts?.total_tasks ?? 0} tasks</span>
@@ -34,7 +34,7 @@ export function BrainGraphToolbar({
           <Search size={14} className="dim" />
           <input
             className="input"
-            aria-label="Search Brain Graph"
+            aria-label="Search Graph"
             placeholder="Search graph..."
             value={q}
             onChange={(event) => onQ(event.target.value)}

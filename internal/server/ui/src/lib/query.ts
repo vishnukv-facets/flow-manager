@@ -26,6 +26,7 @@ import type {
   KBFileView,
   MemorySource,
   OwnerView,
+  OwnerDetailView,
   OverviewView,
   PlaybookView,
   ProjectView,
@@ -379,11 +380,14 @@ export function useOwners(filters: OwnerFilters = {}) {
       ),
   })
 }
-export function useOwner(slug: string | undefined) {
+export function useOwner(slug: string | undefined, opts: { enabled?: boolean; poll?: boolean } = {}) {
+  const enabled = (opts.enabled ?? true) && !!slug
   return useQuery({
     queryKey: ['owner', slug],
-    enabled: !!slug,
-    queryFn: () => apiGet<OwnerView>(`/api/owners/${encodeURIComponent(slug!)}`),
+    enabled,
+    queryFn: () => apiGet<OwnerDetailView>(`/api/owners/${encodeURIComponent(slug!)}`),
+    // While a tick is running, poll so the journal + owned-task status refresh.
+    refetchInterval: opts.poll ? 4000 : false,
   })
 }
 

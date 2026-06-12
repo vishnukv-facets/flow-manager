@@ -6,6 +6,12 @@
 .shell {
   display: grid;
   grid-template-columns: var(--rail-w) 1fr;
+  /* Bound the single grid row to the viewport so the rail + main can't grow
+     past it. Without this the implicit row is content-sized, the rail balloons
+     taller than the screen, and its pinned foot (theme toggle, DB size) gets
+     clipped off the bottom on short viewports. minmax(0,1fr) lets the columns
+     shrink so their min-height:0 children scroll instead of overflowing. */
+  grid-template-rows: minmax(0, 1fr);
   height: 100vh;
   height: 100dvh;
   overflow: hidden;
@@ -52,7 +58,11 @@
   display: flex;
   flex-direction: column;
   gap: 14px;
-  flex: 1;
+  flex: 1 1 auto;
+  /* min-height:0 lets the nav shrink below its content height so it (not the
+     foot) absorbs the overflow and scrolls — otherwise the mascot + foot
+     (DB size, theme toggle) get pushed off the bottom on short viewports. */
+  min-height: 0;
   overflow-y: auto;
   padding-right: 2px;
 }
@@ -128,10 +138,14 @@
   flex-direction: column;
   gap: 7px;
   padding: 10px 10px 2px;
+  /* Always pinned and fully visible at the bottom — never shrinks or scrolls. */
+  flex: none;
+  margin-top: auto;
 }
 /* the little Claude runs along this line, above the foot stats */
 .rail-runner {
   position: relative;
+  flex: none;
   height: 42px;
   margin: 6px 10px 0;
   border-bottom: 1px solid var(--border-faint);
@@ -7042,4 +7056,162 @@ a.srun-where:hover .srun-chan {
     grid-template-columns: 1fr;
     gap: 2px;
   }
+}
+
+/* Owners — expandable detail panel (journal + owned-task status + tick log) */
+.owner-name-cell {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  min-width: 0;
+}
+.owner-expand-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: none;
+  width: 22px;
+  height: 22px;
+  margin-top: 1px;
+  border: 1px solid var(--border-faint);
+  border-radius: var(--r-sm);
+  background: var(--bg-2);
+  color: var(--text-2);
+  cursor: pointer;
+}
+.owner-expand-btn:hover {
+  background: var(--surface-hover);
+  color: var(--text);
+}
+.owner-name-link {
+  display: block;
+  max-width: 100%;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--text);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.owner-name-link:hover {
+  color: var(--accent-hi);
+}
+.owner-row-open > td {
+  border-bottom: 0;
+}
+.owner-detail-row > td {
+  padding: 0 14px 14px;
+  background: var(--bg-1);
+}
+.owner-detail {
+  display: grid;
+  gap: 14px;
+  padding: 14px;
+  border: 1px solid var(--border);
+  border-radius: var(--r);
+  background: var(--bg);
+}
+.owner-detail.muted {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--text-3);
+}
+.owner-detail-block {
+  display: grid;
+  gap: 8px;
+  min-width: 0;
+}
+.owner-detail-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--text-3);
+}
+summary.owner-detail-head {
+  cursor: pointer;
+}
+.owner-task-list {
+  display: grid;
+  gap: 6px;
+}
+.owner-task-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+  padding: 7px 10px;
+  border: 1px solid var(--border-faint);
+  border-radius: var(--r-sm);
+  background: var(--bg-2);
+  color: var(--text);
+  text-decoration: none;
+}
+a.owner-task-item:hover {
+  border-color: var(--accent-line);
+  background: var(--surface-hover);
+}
+.owner-task-item .chip {
+  flex: none;
+}
+.owner-task-name {
+  flex: 1 1 auto;
+  min-width: 0;
+  font-size: 13px;
+}
+.owner-task-slug {
+  flex: none;
+  max-width: 220px;
+  font-family: var(--font-mono);
+  font-size: 11px;
+}
+.owner-journal {
+  display: grid;
+  gap: 4px;
+}
+.owner-journal-meta {
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  color: var(--text-3);
+}
+.owner-journal-body,
+.owner-tick-log {
+  margin: 0;
+  padding: 10px 12px;
+  max-height: 300px;
+  overflow: auto;
+  border: 1px solid var(--border-faint);
+  border-radius: var(--r-sm);
+  background: var(--bg-2);
+  color: var(--text-2);
+  font-family: var(--font-mono);
+  font-size: 11.5px;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+.owner-tick-log {
+  margin-top: 6px;
+  color: var(--text-3);
+  font-size: 11px;
+}
+.owner-tick-log.live {
+  max-height: 340px;
+  border-color: var(--accent-line);
+  background: color-mix(in srgb, var(--accent) 6%, var(--bg-2));
+  color: var(--text-2);
+}
+.owner-journal-more {
+  display: grid;
+  gap: 8px;
+}
+.owner-journal-more > summary {
+  cursor: pointer;
+  font-size: 12px;
+  color: var(--text-3);
 }

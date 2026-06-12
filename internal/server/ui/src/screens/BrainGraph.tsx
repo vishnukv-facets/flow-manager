@@ -62,7 +62,7 @@ function brainGraphReducer(state: BrainGraphState, action: BrainGraphAction): Br
 }
 
 export function BrainGraph() {
-  useDocumentTitle('Brain Graph')
+  useDocumentTitle('Graph')
   const [state, dispatch] = useReducer(brainGraphReducer, initialBrainGraphState)
   const { q, includeDone, expanded, selectedId, selectedOwner } = state
   const expand = useMemo(() => [...expanded].sort(), [expanded])

@@ -195,6 +195,122 @@ func BuildOwnerView(db *sql.DB, root string, o *flowdb.Owner, now time.Time) Own
 	return view
 }
 
+// BuildOwnerDetail is the single-owner payload: the base view plus the
+// observability surface a human needs to see what a tick actually did —
+// the owner's journal notes, the live status of every task it controls, and
+// the tail of the most recent tick log.
+func BuildOwnerDetail(db *sql.DB, root string, o *flowdb.Owner, now time.Time) OwnerDetailView {
+	detail := OwnerDetailView{OwnerView: BuildOwnerView(db, root, o, now)}
+	ownerDir := filepath.Join(root, "owners", o.Slug)
+	detail.Journal = ownerJournalNotes(filepath.Join(ownerDir, "updates"), 6)
+	detail.Tasks = ownerOwnedTasks(db, o.Slug)
+	detail.TickLogTail = ownerTickLogTail(filepath.Join(ownerDir, "ticks"))
+	return detail
+}
+
+// ownerJournalNotes reads the newest journal notes (with content) the owner
+// wrote under updates/, newest first.
+func ownerJournalNotes(dir string, limit int) []OwnerJournalNote {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return nil
+	}
+	names := make([]string, 0, len(entries))
+	for _, e := range entries {
+		if e.IsDir() || filepath.Ext(e.Name()) != ".md" {
+			continue
+		}
+		names = append(names, e.Name())
+	}
+	sort.Sort(sort.Reverse(sort.StringSlice(names)))
+	if limit > 0 && len(names) > limit {
+		names = names[:limit]
+	}
+	out := make([]OwnerJournalNote, 0, len(names))
+	for _, name := range names {
+		path := filepath.Join(dir, name)
+		note := OwnerJournalNote{Filename: name, Path: path}
+		if info, err := os.Stat(path); err == nil {
+			note.MTime = info.ModTime().Format(time.RFC3339)
+		}
+		if body, err := os.ReadFile(path); err == nil {
+			note.Content = string(body)
+		}
+		out = append(out, note)
+	}
+	return out
+}
+
+// ownerOwnedTasks returns the live status of every task tagged owner:<slug>.
+func ownerOwnedTasks(db *sql.DB, slug string) []OwnerTaskRow {
+	owned, err := flowdb.ListTasks(db, flowdb.TaskFilter{Tag: flowdb.NormalizeTag("owner:" + slug)})
+	if err != nil {
+		return nil
+	}
+	slugs := make([]string, 0, len(owned))
+	for _, t := range owned {
+		slugs = append(slugs, t.Slug)
+	}
+	tagsBySlug, _ := flowdb.GetTaskTagsBatch(db, slugs)
+	rows := make([]OwnerTaskRow, 0, len(owned))
+	for _, t := range owned {
+		row := OwnerTaskRow{
+			Slug:          t.Slug,
+			Name:          t.Name,
+			Status:        t.Status,
+			Priority:      t.Priority,
+			AutoRunStatus: nullStringPtr(t.AutoRunStatus),
+			HasSession:    t.SessionID.Valid && strings.TrimSpace(t.SessionID.String) != "",
+		}
+		if t.WorktreePath.Valid && strings.TrimSpace(t.WorktreePath.String) != "" {
+			wp := t.WorktreePath.String
+			row.WorktreePath = &wp
+		}
+		for _, tag := range tagsBySlug[t.Slug] {
+			if tag == "question" {
+				row.IsQuestion = true
+			}
+		}
+		rows = append(rows, row)
+	}
+	return rows
+}
+
+// ownerTickLogTail returns the tail of the most recent tick log, if any.
+func ownerTickLogTail(dir string) string {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return ""
+	}
+	var newestPath string
+	var newestMod time.Time
+	for _, e := range entries {
+		if e.IsDir() || filepath.Ext(e.Name()) != ".log" {
+			continue
+		}
+		info, err := e.Info()
+		if err != nil {
+			continue
+		}
+		if newestPath == "" || info.ModTime().After(newestMod) {
+			newestMod = info.ModTime()
+			newestPath = filepath.Join(dir, e.Name())
+		}
+	}
+	if newestPath == "" {
+		return ""
+	}
+	body, err := os.ReadFile(newestPath)
+	if err != nil {
+		return ""
+	}
+	const maxTail = 4000
+	if len(body) > maxTail {
+		body = body[len(body)-maxTail:]
+	}
+	return strings.TrimSpace(string(body))
+}
+
 func BuildOwnerViews(db *sql.DB, root string, owners []*flowdb.Owner) []OwnerView {
 	views := make([]OwnerView, 0, len(owners))
 	now := time.Now()

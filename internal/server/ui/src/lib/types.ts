@@ -43,6 +43,30 @@ export interface OwnerView {
   charter_path?: string
 }
 
+export interface OwnerJournalNote {
+  filename: string
+  path: string
+  mtime: string
+  content: string
+}
+
+export interface OwnerTaskRow {
+  slug: string
+  name: string
+  status: string
+  priority: string
+  auto_run_status?: string | null
+  worktree_path?: string | null
+  has_session: boolean
+  is_question: boolean
+}
+
+export interface OwnerDetailView extends OwnerView {
+  journal: OwnerJournalNote[]
+  tasks: OwnerTaskRow[]
+  tick_log_tail?: string
+}
+
 export interface TaskView {
   slug: string
   name: string

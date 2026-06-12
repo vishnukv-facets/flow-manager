@@ -1,7 +1,10 @@
 package app
 
 import (
+	"bufio"
+	"bytes"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"flow/internal/flowdb"
 	"flow/internal/spawner"
@@ -20,20 +23,117 @@ var ownerTickRunner = func(provider, workDir, flowRootPath, prompt string) error
 	if provider == "" {
 		provider = sessionProviderClaude
 	}
-	var cmd *exec.Cmd
 	if provider == sessionProviderCodex {
-		cmd = commandRunner("codex", codexExecCLIArgs(workDir, flowRootPath, "bypass", "")...)
+		cmd := commandRunner("codex", codexExecCLIArgs(workDir, flowRootPath, "bypass", "")...)
 		cmd.Stdin = strings.NewReader(prompt)
 		cmd.Stdout = os.Stdout
 		cmd.Stderr = os.Stderr
-	} else {
-		cmd = exec.Command("claude", "-p", prompt, "--dangerously-skip-permissions")
-		cmd.Stdout = io.Discard
-		cmd.Stderr = io.Discard
+		cmd.Dir = workDir
+		cmd.Env = autoRunEnv(flowRootPath, "", provider, "bypass")
+		return cmd.Run()
 	}
+	// Claude: run in streaming mode and distill each event into a readable line
+	// written live to this process's stdout — which, for the detached
+	// `__owner-tick`, is the tick log file. So the tick log fills in real time
+	// (tool calls, reasoning, result) instead of staying empty until the
+	// one-shot `claude -p` finally dumps its result at exit. This is what makes
+	// "what is the tick doing right now" visible while it runs.
+	cmd := exec.Command("claude", "-p", prompt, "--output-format", "stream-json", "--verbose", "--dangerously-skip-permissions")
 	cmd.Dir = workDir
 	cmd.Env = autoRunEnv(flowRootPath, "", provider, "bypass")
-	return cmd.Run()
+	cmd.Stderr = os.Stderr
+	stdout, err := cmd.StdoutPipe()
+	if err != nil {
+		return err
+	}
+	if err := cmd.Start(); err != nil {
+		return err
+	}
+	streamTickActivity(stdout, os.Stdout)
+	return cmd.Wait()
+}
+
+// tickStreamEvent is the subset of Claude's --output-format stream-json events
+// the tick activity log cares about.
+type tickStreamEvent struct {
+	Type    string `json:"type"`
+	Subtype string `json:"subtype"`
+	IsError bool   `json:"is_error"`
+	Result  string `json:"result"`
+	Message struct {
+		Content []struct {
+			Type  string          `json:"type"`
+			Text  string          `json:"text"`
+			Name  string          `json:"name"`
+			Input json.RawMessage `json:"input"`
+		} `json:"content"`
+	} `json:"message"`
+}
+
+// streamTickActivity reads Claude's NDJSON event stream and writes a compact,
+// human-readable activity line per meaningful event (start, reasoning, tool
+// call, result), skipping hook/rate-limit/tool-result noise.
+func streamTickActivity(r io.Reader, w io.Writer) {
+	sc := bufio.NewScanner(r)
+	sc.Buffer(make([]byte, 0, 64*1024), 16*1024*1024)
+	for sc.Scan() {
+		line := bytes.TrimSpace(sc.Bytes())
+		if len(line) == 0 || line[0] != '{' {
+			continue
+		}
+		var ev tickStreamEvent
+		if err := json.Unmarshal(line, &ev); err != nil {
+			continue
+		}
+		switch ev.Type {
+		case "system":
+			if ev.Subtype == "init" {
+				fmt.Fprintln(w, "▸ tick started")
+			}
+		case "assistant":
+			for _, c := range ev.Message.Content {
+				switch c.Type {
+				case "text":
+					if t := oneLine(c.Text, 280); t != "" {
+						fmt.Fprintln(w, t)
+					}
+				case "tool_use":
+					fmt.Fprintf(w, "→ %s %s\n", c.Name, toolUseBrief(c.Input))
+				}
+			}
+		case "result":
+			if ev.IsError {
+				fmt.Fprintln(w, "✗ tick ended with an error")
+			} else if t := oneLine(ev.Result, 280); t != "" {
+				fmt.Fprintf(w, "✓ %s\n", t)
+			} else {
+				fmt.Fprintln(w, "✓ tick finished")
+			}
+		}
+	}
+}
+
+// toolUseBrief renders a one-line summary of a tool call for the activity log.
+func toolUseBrief(input json.RawMessage) string {
+	var m map[string]any
+	if json.Unmarshal(input, &m) != nil {
+		return ""
+	}
+	for _, key := range []string{"command", "file_path", "path", "pattern", "query", "url"} {
+		if v, ok := m[key].(string); ok && strings.TrimSpace(v) != "" {
+			return oneLine(v, 160)
+		}
+	}
+	return ""
+}
+
+// oneLine collapses whitespace/newlines and truncates for a single log line.
+func oneLine(s string, max int) string {
+	s = strings.TrimSpace(strings.Join(strings.Fields(s), " "))
+	if max > 0 && len(s) > max {
+		s = strings.TrimSpace(s[:max-1]) + "…"
+	}
+	return s
 }
 
 var ownerTickLauncher = func(slug, workDir, logPath string, env []string) (int, error) {

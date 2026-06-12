@@ -181,6 +181,36 @@ type OwnerView struct {
 	CharterPath    string        `json:"charter_path,omitempty"`
 }
 
+// OwnerJournalNote is one dated note the owner wrote under owners/<slug>/updates/.
+type OwnerJournalNote struct {
+	Filename string `json:"filename"`
+	Path     string `json:"path"`
+	MTime    string `json:"mtime"`
+	Content  string `json:"content"`
+}
+
+// OwnerTaskRow is a compact, live view of one task the owner controls
+// (tagged owner:<slug>) — enough to show what a tick dispatched and where it is.
+type OwnerTaskRow struct {
+	Slug          string  `json:"slug"`
+	Name          string  `json:"name"`
+	Status        string  `json:"status"`
+	Priority      string  `json:"priority"`
+	AutoRunStatus *string `json:"auto_run_status,omitempty"`
+	WorktreePath  *string `json:"worktree_path,omitempty"`
+	HasSession    bool    `json:"has_session"`
+	IsQuestion    bool    `json:"is_question"`
+}
+
+// OwnerDetailView is the single-owner payload: the base view plus the
+// observability surface (journal notes, owned-task status, latest tick log).
+type OwnerDetailView struct {
+	OwnerView
+	Journal     []OwnerJournalNote `json:"journal"`
+	Tasks       []OwnerTaskRow     `json:"tasks"`
+	TickLogTail string             `json:"tick_log_tail,omitempty"`
+}
+
 type TaskView struct {
 	Slug                string        `json:"slug"`
 	Name                string        `json:"name"`

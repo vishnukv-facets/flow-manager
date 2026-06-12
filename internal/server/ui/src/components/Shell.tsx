@@ -172,7 +172,7 @@ export function Shell({ children }: { children: ReactNode }) {
         },
         { to: '/tasks', label: 'Tasks', icon: <ListTodo size={16} />, match: (p) => p === '/tasks', badge: backlog || undefined },
         { to: '/owners', label: 'Owners', icon: <Bot size={16} />, match: (p) => p === '/owners' },
-        { to: '/brain', label: 'Brain Graph', icon: <Network size={16} />, match: (p) => p === '/brain' },
+        { to: '/graph', label: 'Graph', icon: <Network size={16} />, match: (p) => p === '/graph' || p === '/brain' },
         {
           to: '/inbox',
           label: 'Inbox',
