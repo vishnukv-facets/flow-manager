@@ -20,6 +20,7 @@ import {
   CheckCircle2,
   Ban,
   Send,
+  Network,
 } from 'lucide-react'
 import { useAction, useSearch, useUiData } from '../lib/query'
 import { confirmAction } from '../lib/confirm'
@@ -63,6 +64,7 @@ const NAV: Item[] = [
   { key: 'nav-sessions', label: 'Sessions', to: '/sessions', icon: <Hash size={15} /> },
   { key: 'nav-tasks', label: 'Tasks', to: '/tasks', icon: <FileText size={15} /> },
   { key: 'nav-owners', label: 'Owners', to: '/owners', icon: <Bot size={15} /> },
+  { key: 'nav-brain', label: 'Brain Graph', to: '/brain', icon: <Network size={15} /> },
   { key: 'nav-projects', label: 'Projects', to: '/projects', icon: <FolderGit2 size={15} /> },
   { key: 'nav-playbooks', label: 'Playbooks', to: '/playbooks', icon: <Repeat size={15} /> },
   { key: 'nav-inbox', label: 'Inbox', to: '/inbox', icon: <FileText size={15} /> },

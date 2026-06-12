@@ -5,6 +5,7 @@ import { Sessions } from './screens/Sessions'
 import { SessionDetail } from './screens/SessionDetail'
 import { Tasks } from './screens/Tasks'
 import { Owners } from './screens/Owners'
+import { BrainGraph } from './screens/BrainGraph'
 import { Projects } from './screens/Projects'
 import { ProjectDetail } from './screens/ProjectDetail'
 import { Playbooks } from './screens/Playbooks'
@@ -31,6 +32,7 @@ export function App() {
         <Route path="/session/:slug">{(p) => <SessionDetail slug={p.slug} />}</Route>
         <Route path="/tasks" component={Tasks} />
         <Route path="/owners" component={Owners} />
+        <Route path="/brain" component={BrainGraph} />
         <Route path="/projects" component={Projects} />
         <Route path="/project/:slug">{(p) => <ProjectDetail slug={p.slug} />}</Route>
         <Route path="/playbooks" component={Playbooks} />

@@ -9,6 +9,7 @@ import type {
   AskFlowResponse,
   AttentionItem,
   AttentionTraceResponse,
+  BrainGraphView,
   BrainRunView,
   BrainRunsResponse,
   GitHubAuthStatus,
@@ -208,6 +209,40 @@ export function useOverview() {
 // Refetched on each steering_stage WS delta via focusedLiveInvalidationKeys.
 export function useSteeringRuns() {
   return useQuery({ queryKey: ['steering-runs'], queryFn: () => apiGet<SteeringRunsResponse>('/api/steering/runs') })
+}
+
+export interface BrainGraphFilters {
+  project?: string
+  owner?: string
+  status?: string
+  includeDone?: boolean
+  expand?: string[]
+  q?: string
+}
+export function useBrainGraph(filters: BrainGraphFilters = {}) {
+  const stableFilters = {
+    project: filters.project || '',
+    owner: filters.owner || '',
+    status: filters.status || '',
+    include_done: !!filters.includeDone,
+    expand: [...(filters.expand ?? [])].filter(Boolean).sort(),
+    q: filters.q || '',
+  }
+  return useQuery({
+    queryKey: ['brain-graph', stableFilters],
+    queryFn: () =>
+      apiGet<BrainGraphView>(
+        `/api/brain/graph${qs({
+          project: stableFilters.project,
+          owner: stableFilters.owner,
+          status: stableFilters.status,
+          include_done: stableFilters.include_done,
+          expand: stableFilters.expand.join(','),
+          q: stableFilters.q,
+        })}`,
+      ),
+    placeholderData: keepPreviousData,
+  })
 }
 
 export interface TaskFilters {

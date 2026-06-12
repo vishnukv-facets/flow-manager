@@ -130,6 +130,121 @@ export interface BrainRunsResponse {
   runs: BrainRunView[]
 }
 
+export type BrainGraphNodeType =
+  | 'task'
+  | 'worker_run'
+  | 'validator_run'
+  | 'steward_run'
+  | 'approval'
+  | 'transcript_ref'
+  | 'github_ref'
+  | 'event'
+  | 'transcript'
+  | 'log'
+  | 'pr'
+  | 'closeout'
+  | 'owner'
+  | (string & {})
+
+export interface BrainGraphView {
+  generated_at: string
+  freshness: string
+  controller: BrainGraphController
+  policy: BrainGraphPolicyView
+  owners: BrainGraphOwnerView[]
+  nodes: BrainGraphNode[]
+  edges: BrainGraphEdge[]
+  counts: BrainGraphCounts
+  selected_actions: BrainGraphActionSpec[]
+  warnings: BrainGraphWarning[]
+}
+
+export interface BrainGraphController {
+  mode: string
+  display_name: string
+  status: string
+}
+
+export interface BrainGraphPolicyView {
+  full_auto: boolean
+  risky_whitelist: string[] | null
+  approval_required: string[] | null
+  last_decision_at?: string | null
+  last_decision_state?: string | null
+}
+
+export interface BrainGraphOwnerView {
+  id: string
+  slug: string
+  name: string
+  status: string
+  task_count: number
+  running_count: number
+  blocked_count: number
+  approval_count: number
+}
+
+export interface BrainGraphNode extends Record<string, unknown> {
+  id: string
+  type: BrainGraphNodeType
+  owner_slug?: string
+  task_slug?: string
+  parent_task_slug?: string
+  label: string
+  status: string
+  priority?: string
+  provider?: string
+  harness?: string
+  permission_mode?: string
+  model?: string
+  summary?: string
+  expanded: boolean
+  ref?: BrainGraphRef
+  badges?: string[]
+  actions?: string[]
+  metadata?: Record<string, string>
+}
+
+export interface BrainGraphRef {
+  kind: string
+  id: string
+  url?: string
+}
+
+export interface BrainGraphEdge {
+  id: string
+  type: string
+  source: string
+  target: string
+  label?: string
+  status?: string
+}
+
+export interface BrainGraphCounts {
+  total_tasks: number
+  running: number
+  blocked: number
+  failed: number
+  approval_needed: number
+  done: number
+  owners: number
+  warnings: number
+}
+
+export interface BrainGraphActionSpec {
+  key: string
+  label: string
+  risky: boolean
+  enabled: boolean
+  disabled_reason?: string
+}
+
+export interface BrainGraphWarning {
+  code: string
+  message: string
+  node_id?: string
+}
+
 export interface TaskCounts {
   total: number
   in_progress: number
