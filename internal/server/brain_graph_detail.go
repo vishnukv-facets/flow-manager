@@ -206,7 +206,7 @@ func brainGraphGitHubEvidenceDetail(db *sql.DB, escapedTag, nodeID string) (Brai
 		Available: true,
 	}
 	return BrainGraphNodeDetail{
-		ID:       nodeID,
+		ID:       brainGraphGitHubRefNodeID(tag),
 		Type:     "github_ref",
 		Evidence: evidence,
 		Audit:    []BrainGraphAuditView{},

@@ -243,6 +243,47 @@ func TestBrainGraphEvidenceDetailIncludesTranscriptAvailability(t *testing.T) {
 	}
 }
 
+func TestBrainGraphGitHubEvidenceDetailPreservesGraphNodeID(t *testing.T) {
+	root, db := testRootDB(t)
+	s := New(Config{DB: db, FlowRoot: root})
+	insertBrainGraphTask(t, db, "ship", "Ship Feature", "backlog", nil)
+	if err := flowdb.AddTaskTag(db, "ship", "gh-pr:Facets-cloud/flow-manager#44"); err != nil {
+		t.Fatalf("AddTaskTag: %v", err)
+	}
+	view, err := BuildBrainGraph(db, root, BrainGraphFilters{Expand: map[string]bool{"task:ship": true}}, time.Date(2026, 6, 12, 10, 0, 0, 0, time.FixedZone("IST", 19800)))
+	if err != nil {
+		t.Fatalf("BuildBrainGraph: %v", err)
+	}
+	var githubNode BrainGraphNode
+	for _, node := range view.Nodes {
+		if node.Type == "github_ref" {
+			githubNode = node
+			break
+		}
+	}
+	if githubNode.ID == "" {
+		t.Fatalf("graph nodes = %#v, want github evidence node", view.Nodes)
+	}
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/api/brain/graph/node/"+url.PathEscape(githubNode.ID), nil)
+	s.Handler().ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, body = %s", rec.Code, rec.Body.String())
+	}
+	var got BrainGraphNodeDetail
+	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
+		t.Fatalf("decode detail: %v", err)
+	}
+
+	if got.ID != githubNode.ID {
+		t.Fatalf("detail id = %q, want selected graph node id %q", got.ID, githubNode.ID)
+	}
+	if got.Evidence == nil || got.Evidence.URL == nil || *got.Evidence.URL != "https://github.com/facets-cloud/flow-manager/pull/44" {
+		t.Fatalf("github evidence = %#v, want pull request URL", got.Evidence)
+	}
+}
+
 func TestBrainGraphApprovalDetailIncludesPolicyAndAudit(t *testing.T) {
 	root, db := testRootDB(t)
 	s := New(Config{DB: db, FlowRoot: root})
