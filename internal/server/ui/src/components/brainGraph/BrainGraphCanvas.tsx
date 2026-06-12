@@ -10,6 +10,7 @@ import {
   type Node,
   type NodeMouseHandler,
   type NodeProps,
+  type OnSelectionChangeFunc,
   type ReactFlowInstance,
 } from '@xyflow/react'
 import '@xyflow/react/dist/style.css'
@@ -131,6 +132,15 @@ function taskSlugFromNode(node: BrainGraphNodeView) {
   return node.task_slug || ''
 }
 
+function appendToBucket<K, V>(map: Map<K, V[]>, key: K, value: V) {
+  const existing = map.get(key)
+  if (existing) {
+    existing.push(value)
+    return
+  }
+  map.set(key, [value])
+}
+
 function layoutNodes(
   nodes: BrainGraphNodeView[],
   owners: BrainGraphOwnerView[],
@@ -176,11 +186,11 @@ function layoutNodes(
     const taskSlug = node.task_slug || ''
     if (taskSlug && taskIdBySlug.has(taskSlug)) {
       const key = taskIdBySlug.get(taskSlug) || ''
-      childrenByTask.set(key, [...(childrenByTask.get(key) ?? []), node])
+      appendToBucket(childrenByTask, key, node)
       continue
     }
     const owner = effectiveOwners.get(node.id) || 'unowned'
-    orphanNodes.set(owner, [...(orphanNodes.get(owner) ?? []), node])
+    appendToBucket(orphanNodes, owner, node)
   }
   for (const children of childrenByTask.values()) {
     children.sort((a, b) => {
@@ -204,7 +214,7 @@ function layoutNodes(
   const tasksByOwner = new Map<string, BrainGraphNodeView[]>()
   for (const task of taskNodes) {
     const owner = effectiveOwners.get(task.id) || 'unowned'
-    tasksByOwner.set(owner, [...(tasksByOwner.get(owner) ?? []), task])
+    appendToBucket(tasksByOwner, owner, task)
   }
 
   for (const owner of orderedOwners) {
@@ -343,6 +353,14 @@ export function BrainGraphCanvas({
     }
     onSelectNode(node.data as BrainGraphNodeView)
   }
+  const onSelectionChange: OnSelectionChangeFunc<FlowNode, FlowEdge> = ({ nodes: selectedNodes }) => {
+    const ownerGroup = selectedNodes.find((node) => node.id.startsWith('owner-boundary:') && node.type === 'ownerGroup')
+    if (!ownerGroup) return
+    const ownerSlug = (ownerGroup.data as OwnerGroupData).owner.slug
+    if (ownerSlug !== selectedOwner || selectedId) {
+      onSelectOwner(ownerSlug)
+    }
+  }
 
   return (
     <div className="brain-canvas">
@@ -352,6 +370,7 @@ export function BrainGraphCanvas({
         nodeTypes={nodeTypes}
         onInit={setInstance}
         onNodeClick={onNodeClick}
+        onSelectionChange={onSelectionChange}
         onPaneClick={onClearSelection}
         fitView
         minZoom={0.22}
