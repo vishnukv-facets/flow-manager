@@ -209,6 +209,9 @@ func TestBrainGraphExpandsFailedLegacyAutoRun(t *testing.T) {
 	if run.Type != "worker_run" || run.Status != "dead" {
 		t.Fatalf("legacy run node = %#v, want worker_run/dead", run)
 	}
+	if run.Harness != "codex" || run.Metadata["harness"] != "codex" {
+		t.Fatalf("legacy run harness = %q metadata=%#v, want codex", run.Harness, run.Metadata)
+	}
 	if run.Metadata["log_path"] != "/tmp/worker.log" {
 		t.Fatalf("legacy run log_path metadata = %#v, want /tmp/worker.log", run.Metadata)
 	}

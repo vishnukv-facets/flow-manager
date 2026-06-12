@@ -367,7 +367,7 @@ func appendBrainGraphRunNodes(view *BrainGraphView, db *sql.DB, tasks []*flowdb.
 			if emitted[nodeID] {
 				continue
 			}
-			view.Nodes = append(view.Nodes, brainGraphRunNode(run, nodeID))
+			view.Nodes = append(view.Nodes, brainGraphRunNode(run, task, nodeID))
 			view.Edges = append(view.Edges, BrainGraphEdge{
 				ID:     "run_of:" + task.Slug + ":" + nodeID,
 				Type:   "run_of",
@@ -459,7 +459,7 @@ func brainGraphRunNodeID(run *flowdb.BrainRun) string {
 	return "run:" + strings.TrimSpace(run.RunID)
 }
 
-func brainGraphRunNode(run *flowdb.BrainRun, nodeID string) BrainGraphNode {
+func brainGraphRunNode(run *flowdb.BrainRun, task *flowdb.Task, nodeID string) BrainGraphNode {
 	metadata := map[string]string{}
 	addMetadata := func(key, value string) {
 		value = strings.TrimSpace(value)
@@ -471,6 +471,9 @@ func brainGraphRunNode(run *flowdb.BrainRun, nodeID string) BrainGraphNode {
 	addMetadata("role", run.Role)
 	if run.Legacy {
 		metadata["legacy"] = "true"
+		if task != nil {
+			addMetadata("harness", task.Harness)
+		}
 	}
 	if run.LogPath.Valid {
 		addMetadata("log_path", run.LogPath.String)
@@ -499,6 +502,7 @@ func brainGraphRunNode(run *flowdb.BrainRun, nodeID string) BrainGraphNode {
 		Label:          brainGraphRunLabel(run),
 		Status:         run.Status,
 		Provider:       run.Provider,
+		Harness:        brainGraphRunHarness(run, task),
 		PermissionMode: permissionMode,
 		Model:          brainGraphRunModel(run),
 		Ref: &BrainGraphRef{
@@ -508,6 +512,13 @@ func brainGraphRunNode(run *flowdb.BrainRun, nodeID string) BrainGraphNode {
 		Actions:  []string{"retry", "pause"},
 		Metadata: metadata,
 	}
+}
+
+func brainGraphRunHarness(run *flowdb.BrainRun, task *flowdb.Task) string {
+	if run == nil || !run.Legacy || task == nil {
+		return ""
+	}
+	return strings.TrimSpace(task.Harness)
 }
 
 func brainGraphRunNodeType(role string) string {
