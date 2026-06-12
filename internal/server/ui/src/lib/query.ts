@@ -9,6 +9,7 @@ import type {
   AskFlowResponse,
   AttentionItem,
   AttentionTraceResponse,
+  BrainGraphNodeDetail,
   BrainGraphView,
   BrainRunView,
   BrainRunsResponse,
@@ -242,6 +243,15 @@ export function useBrainGraph(filters: BrainGraphFilters = {}) {
         })}`,
       ),
     placeholderData: keepPreviousData,
+  })
+}
+
+export function useBrainGraphNodeDetail(nodeId?: string | null) {
+  const stableNodeId = nodeId || ''
+  return useQuery({
+    queryKey: ['brain-graph-node', stableNodeId],
+    queryFn: () => apiGet<BrainGraphNodeDetail>(`/api/brain/graph/node/${encodeURIComponent(stableNodeId)}`),
+    enabled: Boolean(stableNodeId),
   })
 }
 

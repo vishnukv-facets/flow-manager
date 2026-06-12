@@ -146,6 +146,7 @@ func (s *Server) registerAPIRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/playbooks", s.handlePlaybooks)
 	mux.HandleFunc("/api/playbooks/", s.handlePlaybookRoute)
 	mux.HandleFunc("/api/brain/graph", s.handleBrainGraph)
+	mux.HandleFunc("/api/brain/graph/node/", s.handleBrainGraphNodeDetail)
 	mux.HandleFunc("/api/brain/plans", s.handleBrainPlans)
 	mux.HandleFunc("/api/brain/plans/", s.handleBrainPlanRoute)
 	mux.HandleFunc("/api/owners", s.handleOwners)

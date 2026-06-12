@@ -1,5 +1,7 @@
 package server
 
+import "encoding/json"
+
 type BrainGraphFilters struct {
 	Project     string
 	Owner       string
@@ -106,4 +108,92 @@ type BrainGraphWarning struct {
 	Code    string `json:"code"`
 	Message string `json:"message"`
 	NodeID  string `json:"node_id,omitempty"`
+}
+
+type BrainGraphNodeDetail struct {
+	ID       string                    `json:"id"`
+	Type     string                    `json:"type"`
+	Task     *BrainGraphTaskDetail     `json:"task,omitempty"`
+	Run      *BrainGraphRunDetail      `json:"run,omitempty"`
+	Evidence *BrainGraphEvidenceDetail `json:"evidence,omitempty"`
+	Approval *BrainGraphApprovalDetail `json:"approval,omitempty"`
+	Audit    []BrainGraphAuditView     `json:"audit"`
+}
+
+type BrainGraphTaskDetail struct {
+	Slug            string                    `json:"slug"`
+	Name            string                    `json:"name"`
+	Status          string                    `json:"status"`
+	Priority        string                    `json:"priority"`
+	ProjectSlug     *string                   `json:"project_slug,omitempty"`
+	ParentSlug      *string                   `json:"parent_slug,omitempty"`
+	WorkDir         string                    `json:"work_dir"`
+	WorktreePath    *string                   `json:"worktree_path,omitempty"`
+	SessionProvider string                    `json:"session_provider"`
+	Harness         string                    `json:"harness"`
+	PermissionMode  string                    `json:"permission_mode"`
+	Model           *string                   `json:"model,omitempty"`
+	SessionID       *string                   `json:"session_id,omitempty"`
+	SessionPath     *string                   `json:"session_path,omitempty"`
+	Transcript      *BrainGraphEvidenceDetail `json:"transcript,omitempty"`
+	BriefPath       string                    `json:"brief_path"`
+	Updates         []FileRef                 `json:"updates"`
+}
+
+type BrainGraphRunDetail struct {
+	RunID          string          `json:"run_id"`
+	FamilySlug     string          `json:"family_slug"`
+	TaskSlug       string          `json:"task_slug"`
+	TaskName       *string         `json:"task_name,omitempty"`
+	TaskStatus     *string         `json:"task_status,omitempty"`
+	PlanID         *string         `json:"plan_id,omitempty"`
+	Role           string          `json:"role"`
+	Provider       string          `json:"provider"`
+	RequestedModel *string         `json:"requested_model,omitempty"`
+	RequestedTier  *string         `json:"requested_tier,omitempty"`
+	ResolvedModel  *string         `json:"resolved_model,omitempty"`
+	PermissionMode string          `json:"permission_mode"`
+	Status         string          `json:"status"`
+	PID            *int64          `json:"pid,omitempty"`
+	SessionID      *string         `json:"session_id,omitempty"`
+	LogPath        *string         `json:"log_path,omitempty"`
+	InputSummary   *string         `json:"input_summary,omitempty"`
+	OutputJSON     json.RawMessage `json:"output_json,omitempty"`
+	EvidenceJSON   json.RawMessage `json:"evidence_json,omitempty"`
+	ErrorText      *string         `json:"error_text,omitempty"`
+	StartedAt      *string         `json:"started_at,omitempty"`
+	FinishedAt     *string         `json:"finished_at,omitempty"`
+	CreatedAt      string          `json:"created_at"`
+	UpdatedAt      string          `json:"updated_at"`
+	Legacy         bool            `json:"legacy,omitempty"`
+}
+
+type BrainGraphEvidenceDetail struct {
+	Kind      string  `json:"kind"`
+	TaskSlug  string  `json:"task_slug,omitempty"`
+	RefID     string  `json:"ref_id,omitempty"`
+	Path      *string `json:"path,omitempty"`
+	URL       *string `json:"url,omitempty"`
+	Available bool    `json:"available"`
+	Message   string  `json:"message,omitempty"`
+}
+
+type BrainGraphApprovalDetail struct {
+	Action     string  `json:"action"`
+	TaskSlug   string  `json:"task_slug"`
+	TaskName   *string `json:"task_name,omitempty"`
+	PolicyMode string  `json:"policy_mode"`
+}
+
+type BrainGraphAuditView struct {
+	ID           string          `json:"id"`
+	Action       string          `json:"action"`
+	TargetType   string          `json:"target_type"`
+	TargetID     string          `json:"target_id"`
+	Actor        string          `json:"actor"`
+	Policy       string          `json:"policy"`
+	EvidenceJSON json.RawMessage `json:"evidence_json,omitempty"`
+	Result       string          `json:"result"`
+	ErrorText    *string         `json:"error_text,omitempty"`
+	CreatedAt    string          `json:"created_at"`
 }

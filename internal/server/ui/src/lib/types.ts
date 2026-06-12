@@ -245,6 +245,94 @@ export interface BrainGraphWarning {
   node_id?: string
 }
 
+export interface BrainGraphNodeDetail {
+  id: string
+  type: BrainGraphNodeType
+  task?: BrainGraphTaskDetail
+  run?: BrainGraphRunDetail
+  evidence?: BrainGraphEvidenceDetail
+  approval?: BrainGraphApprovalDetail
+  audit: BrainGraphAuditView[]
+}
+
+export interface BrainGraphTaskDetail {
+  slug: string
+  name: string
+  status: string
+  priority: string
+  project_slug?: string | null
+  parent_slug?: string | null
+  work_dir: string
+  worktree_path?: string | null
+  session_provider: string
+  harness: string
+  permission_mode: string
+  model?: string | null
+  session_id?: string | null
+  session_path?: string | null
+  transcript?: BrainGraphEvidenceDetail
+  brief_path: string
+  updates: FileRef[]
+}
+
+export interface BrainGraphRunDetail {
+  run_id: string
+  family_slug: string
+  task_slug: string
+  task_name?: string | null
+  task_status?: string | null
+  plan_id?: string | null
+  role: string
+  provider: string
+  requested_model?: string | null
+  requested_tier?: string | null
+  resolved_model?: string | null
+  permission_mode: string
+  status: string
+  pid?: number | null
+  session_id?: string | null
+  log_path?: string | null
+  input_summary?: string | null
+  output_json?: unknown
+  evidence_json?: unknown
+  error_text?: string | null
+  started_at?: string | null
+  finished_at?: string | null
+  created_at: string
+  updated_at: string
+  legacy?: boolean
+}
+
+export interface BrainGraphEvidenceDetail {
+  kind: string
+  task_slug?: string
+  ref_id?: string
+  path?: string | null
+  url?: string | null
+  available: boolean
+  message?: string
+}
+
+export interface BrainGraphApprovalDetail {
+  action: string
+  task_slug: string
+  task_name?: string | null
+  policy_mode: string
+}
+
+export interface BrainGraphAuditView {
+  id: string
+  action: string
+  target_type: string
+  target_id: string
+  actor: string
+  policy: string
+  evidence_json?: unknown
+  result: string
+  error_text?: string | null
+  created_at: string
+}
+
 export interface TaskCounts {
   total: number
   in_progress: number

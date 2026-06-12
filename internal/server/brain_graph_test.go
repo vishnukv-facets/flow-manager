@@ -6,6 +6,9 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -33,6 +36,272 @@ func TestBrainGraphEmptyRouteRegistered(t *testing.T) {
 	s.Handler().ServeHTTP(rec, req)
 
 	assertBrainGraphEmptyResponse(t, rec)
+}
+
+func TestBrainGraphTaskDetailIncludesTaskAndTranscriptRef(t *testing.T) {
+	root, db := testRootDB(t)
+	s := New(Config{DB: db, FlowRoot: root})
+	if _, err := db.Exec(
+		`INSERT INTO projects (slug, name, status, priority, work_dir, created_at, updated_at)
+		 VALUES ('flow-manager', 'Flow Manager', 'active', 'high', ?, '2026-06-12T10:00:00+05:30', '2026-06-12T10:00:00+05:30')`,
+		root,
+	); err != nil {
+		t.Fatalf("seed project: %v", err)
+	}
+	insertBrainGraphTask(t, db, "parent", "Parent", "backlog", nil)
+	insertBrainGraphTask(t, db, "worker", "Worker", "backlog", strPtr("parent"))
+	taskDir := filepath.Join(root, "tasks", "worker")
+	updatesDir := filepath.Join(taskDir, "updates")
+	if err := os.MkdirAll(updatesDir, 0o755); err != nil {
+		t.Fatalf("mkdir updates: %v", err)
+	}
+	briefPath := filepath.Join(taskDir, "brief.md")
+	if err := os.WriteFile(briefPath, []byte("# Worker\n"), 0o644); err != nil {
+		t.Fatalf("write brief: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(updatesDir, "2026-06-12-progress.md"), []byte("progress\n"), 0o644); err != nil {
+		t.Fatalf("write update: %v", err)
+	}
+	missingTranscript := filepath.Join(root, "missing", "session.jsonl")
+	worktreePath := filepath.Join(root, "worktrees", "worker")
+	if _, err := db.Exec(
+		`UPDATE tasks
+		 SET project_slug='flow-manager',
+		     status='in-progress',
+		     work_dir=?,
+		     worktree_path=?,
+		     session_provider='codex',
+		     harness='codex',
+		     permission_mode='bypass',
+		     model='gpt-5.4-mini',
+		     session_id='session-123',
+		     session_path=?
+		 WHERE slug='worker'`,
+		root,
+		worktreePath,
+		missingTranscript,
+	); err != nil {
+		t.Fatalf("seed task detail: %v", err)
+	}
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/api/brain/graph/node/"+url.PathEscape("task:worker"), nil)
+	s.Handler().ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, body = %s", rec.Code, rec.Body.String())
+	}
+	var got BrainGraphNodeDetail
+	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
+		t.Fatalf("decode detail: %v", err)
+	}
+
+	if got.ID != "task:worker" || got.Type != "task" || got.Task == nil {
+		t.Fatalf("detail identity = %#v, want task detail", got)
+	}
+	if got.Task.Slug != "worker" || got.Task.Name != "Worker" || got.Task.Status != "in-progress" {
+		t.Fatalf("task detail = %#v, want worker task metadata", got.Task)
+	}
+	if got.Task.ProjectSlug == nil || *got.Task.ProjectSlug != "flow-manager" {
+		t.Fatalf("project_slug = %#v, want flow-manager", got.Task.ProjectSlug)
+	}
+	if got.Task.ParentSlug == nil || *got.Task.ParentSlug != "parent" {
+		t.Fatalf("parent_slug = %#v, want parent", got.Task.ParentSlug)
+	}
+	if got.Task.WorkDir != root || got.Task.WorktreePath == nil || *got.Task.WorktreePath != worktreePath {
+		t.Fatalf("work paths = work_dir=%q worktree=%#v", got.Task.WorkDir, got.Task.WorktreePath)
+	}
+	if got.Task.SessionProvider != "codex" || got.Task.Harness != "codex" || got.Task.PermissionMode != "bypass" {
+		t.Fatalf("session metadata = %#v, want codex/bypass", got.Task)
+	}
+	if got.Task.Model == nil || *got.Task.Model != "gpt-5.4-mini" {
+		t.Fatalf("model = %#v, want gpt-5.4-mini", got.Task.Model)
+	}
+	if got.Task.SessionID == nil || *got.Task.SessionID != "session-123" {
+		t.Fatalf("session_id = %#v, want session-123", got.Task.SessionID)
+	}
+	if got.Task.SessionPath == nil || *got.Task.SessionPath != missingTranscript {
+		t.Fatalf("session_path = %#v, want stored transcript path", got.Task.SessionPath)
+	}
+	if got.Task.Transcript == nil || got.Task.Transcript.Kind != "transcript" || got.Task.Transcript.RefID != "session-123" {
+		t.Fatalf("transcript ref = %#v, want unavailable transcript ref", got.Task.Transcript)
+	}
+	if got.Task.Transcript.Available {
+		t.Fatalf("transcript should be unavailable when stored file is missing: %#v", got.Task.Transcript)
+	}
+	if got.Task.BriefPath != briefPath {
+		t.Fatalf("brief_path = %q, want %q", got.Task.BriefPath, briefPath)
+	}
+	if len(got.Task.Updates) != 1 || got.Task.Updates[0].Filename != "2026-06-12-progress.md" {
+		t.Fatalf("updates = %#v, want recent update ref", got.Task.Updates)
+	}
+}
+
+func TestBrainGraphRunDetailIncludesPersistedRunContext(t *testing.T) {
+	root, db := testRootDB(t)
+	s := New(Config{DB: db, FlowRoot: root})
+	insertBrainGraphTask(t, db, "worker", "Worker", "backlog", nil)
+	run := &flowdb.BrainRun{
+		RunID:          "run-1",
+		FamilySlug:     "worker",
+		TaskSlug:       "worker",
+		Role:           "validator",
+		Provider:       "codex",
+		RequestedModel: sql.NullString{String: "gpt-5.4", Valid: true},
+		ResolvedModel:  sql.NullString{String: "gpt-5.4-mini", Valid: true},
+		PermissionMode: "auto",
+		Status:         "error",
+		SessionID:      sql.NullString{String: "run-session", Valid: true},
+		LogPath:        sql.NullString{String: "/tmp/run.log", Valid: true},
+		InputSummary:   sql.NullString{String: "validate worker", Valid: true},
+		OutputJSON:     sql.NullString{String: `{"summary":"failed"}`, Valid: true},
+		EvidenceJSON:   sql.NullString{String: `{"checks":["typecheck"]}`, Valid: true},
+		ErrorText:      sql.NullString{String: "typecheck failed", Valid: true},
+		StartedAt:      sql.NullString{String: "2026-06-12T10:00:00+05:30", Valid: true},
+		FinishedAt:     sql.NullString{String: "2026-06-12T10:02:00+05:30", Valid: true},
+		CreatedAt:      "2026-06-12T10:00:00+05:30",
+		UpdatedAt:      "2026-06-12T10:02:00+05:30",
+	}
+	if err := flowdb.UpsertBrainRun(db, run); err != nil {
+		t.Fatalf("UpsertBrainRun: %v", err)
+	}
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/api/brain/graph/node/"+url.PathEscape("run:run-1"), nil)
+	s.Handler().ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, body = %s", rec.Code, rec.Body.String())
+	}
+	var got BrainGraphNodeDetail
+	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
+		t.Fatalf("decode detail: %v", err)
+	}
+
+	if got.ID != "run:run-1" || got.Type != "validator_run" || got.Run == nil {
+		t.Fatalf("detail identity = %#v, want validator run detail", got)
+	}
+	if got.Run.RunID != "run-1" || got.Run.Role != "validator" || got.Run.Status != "error" || got.Run.Provider != "codex" {
+		t.Fatalf("run detail = %#v, want persisted run metadata", got.Run)
+	}
+	if got.Run.TaskSlug != "worker" || got.Run.TaskName == nil || *got.Run.TaskName != "Worker" {
+		t.Fatalf("run task refs = %#v, want worker task context", got.Run)
+	}
+	if got.Run.ResolvedModel == nil || *got.Run.ResolvedModel != "gpt-5.4-mini" {
+		t.Fatalf("resolved model = %#v, want gpt-5.4-mini", got.Run.ResolvedModel)
+	}
+	if got.Run.SessionID == nil || *got.Run.SessionID != "run-session" || got.Run.LogPath == nil || *got.Run.LogPath != "/tmp/run.log" {
+		t.Fatalf("session/log refs = %#v, want persisted refs", got.Run)
+	}
+	if string(got.Run.OutputJSON) != `{"summary":"failed"}` || string(got.Run.EvidenceJSON) != `{"checks":["typecheck"]}` {
+		t.Fatalf("run json = output:%s evidence:%s", got.Run.OutputJSON, got.Run.EvidenceJSON)
+	}
+	if got.Run.ErrorText == nil || *got.Run.ErrorText != "typecheck failed" {
+		t.Fatalf("error_text = %#v, want typecheck failed", got.Run.ErrorText)
+	}
+}
+
+func TestBrainGraphEvidenceDetailIncludesTranscriptAvailability(t *testing.T) {
+	root, db := testRootDB(t)
+	s := New(Config{DB: db, FlowRoot: root})
+	insertBrainGraphTask(t, db, "worker", "Worker", "backlog", nil)
+	transcriptPath := filepath.Join(root, "sessions", "session.jsonl")
+	if err := os.MkdirAll(filepath.Dir(transcriptPath), 0o755); err != nil {
+		t.Fatalf("mkdir transcript dir: %v", err)
+	}
+	if err := os.WriteFile(transcriptPath, []byte(`{"type":"user"}`+"\n"), 0o644); err != nil {
+		t.Fatalf("write transcript: %v", err)
+	}
+	if _, err := db.Exec(
+		`UPDATE tasks
+		 SET session_provider='codex',
+		     session_id='session-123',
+		     session_path=?
+		 WHERE slug='worker'`,
+		transcriptPath,
+	); err != nil {
+		t.Fatalf("seed transcript: %v", err)
+	}
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/api/brain/graph/node/"+url.PathEscape("transcript:worker"), nil)
+	s.Handler().ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, body = %s", rec.Code, rec.Body.String())
+	}
+	var got BrainGraphNodeDetail
+	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
+		t.Fatalf("decode detail: %v", err)
+	}
+
+	if got.ID != "transcript:worker" || got.Type != "transcript_ref" || got.Evidence == nil {
+		t.Fatalf("detail identity = %#v, want transcript evidence detail", got)
+	}
+	if got.Evidence.Kind != "transcript" || got.Evidence.TaskSlug != "worker" || got.Evidence.RefID != "session-123" {
+		t.Fatalf("evidence = %#v, want transcript refs", got.Evidence)
+	}
+	if got.Evidence.Path == nil || *got.Evidence.Path != transcriptPath || !got.Evidence.Available {
+		t.Fatalf("evidence availability = %#v, want available transcript path", got.Evidence)
+	}
+}
+
+func TestBrainGraphApprovalDetailIncludesPolicyAndAudit(t *testing.T) {
+	root, db := testRootDB(t)
+	s := New(Config{DB: db, FlowRoot: root})
+	insertBrainGraphTask(t, db, "ship", "Ship Feature", "backlog", nil)
+	if err := flowdb.AddTaskTag(db, "ship", "gh-pr:Facets-cloud/flow-manager#44"); err != nil {
+		t.Fatalf("AddTaskTag: %v", err)
+	}
+	for _, audit := range []*flowdb.BrainActionAudit{
+		{
+			ID:           "audit-old",
+			Action:       "merge",
+			TargetType:   "task",
+			TargetID:     "ship",
+			Actor:        "brain",
+			Policy:       "approval_required",
+			EvidenceJSON: `{"pr":"44"}`,
+			Result:       "blocked",
+			CreatedAt:    "2026-06-12T10:00:00+05:30",
+		},
+		{
+			ID:           "audit-new",
+			Action:       "merge",
+			TargetType:   "task",
+			TargetID:     "ship",
+			Actor:        "operator",
+			Policy:       "auto",
+			EvidenceJSON: `{"approval":"manual"}`,
+			Result:       "allowed",
+			CreatedAt:    "2026-06-12T10:02:00+05:30",
+		},
+	} {
+		if err := flowdb.InsertBrainActionAudit(db, audit); err != nil {
+			t.Fatalf("InsertBrainActionAudit(%s): %v", audit.ID, err)
+		}
+	}
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/api/brain/graph/node/"+url.PathEscape("approval:merge:ship"), nil)
+	s.Handler().ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, body = %s", rec.Code, rec.Body.String())
+	}
+	var got BrainGraphNodeDetail
+	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
+		t.Fatalf("decode detail: %v", err)
+	}
+
+	if got.ID != "approval:merge:ship" || got.Type != "approval" || got.Approval == nil {
+		t.Fatalf("detail identity = %#v, want approval detail", got)
+	}
+	if got.Approval.Action != "merge" || got.Approval.TaskSlug != "ship" || got.Approval.PolicyMode != "approval_required" {
+		t.Fatalf("approval detail = %#v, want merge approval gate", got.Approval)
+	}
+	if len(got.Audit) != 2 || got.Audit[0].ID != "audit-new" || got.Audit[1].ID != "audit-old" {
+		t.Fatalf("audit = %#v, want newest-first task audit", got.Audit)
+	}
+	if string(got.Audit[0].EvidenceJSON) != `{"approval":"manual"}` {
+		t.Fatalf("audit evidence = %s, want manual approval JSON", got.Audit[0].EvidenceJSON)
+	}
 }
 
 func TestBrainGraphGroupsTasksByOwnerTagAndInheritance(t *testing.T) {
