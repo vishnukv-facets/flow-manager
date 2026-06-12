@@ -116,12 +116,10 @@ func TestHandleSettingsExcludesHiddenKeys(t *testing.T) {
 }
 
 // mockSlackAPI fakes the four Slack endpoints the wizard calls.
-func mockSlackAPI(t *testing.T, handler http.HandlerFunc) *httptest.Server {
+func mockSlackAPI(t *testing.T, handler http.HandlerFunc) {
 	t.Helper()
-	ts := httptest.NewServer(handler)
-	t.Cleanup(ts.Close)
-	t.Setenv("FLOW_SLACK_API_BASE_URL", ts.URL)
-	return ts
+	useMockHTTPTransport(t, handler)
+	t.Setenv("FLOW_SLACK_API_BASE_URL", "https://slack.test")
 }
 
 func TestSlackSetupCreateApp(t *testing.T) {
@@ -322,6 +320,9 @@ func TestSlackOAuthDanceRoundTrip(t *testing.T) {
 
 	dance, err := srv.startSlackOAuthDance("client-1", "secret-1", 0)
 	if err != nil {
+		if strings.Contains(err.Error(), "operation not permitted") || strings.Contains(err.Error(), "permission denied") {
+			t.Skipf("sandbox cannot bind loopback TLS listener: %v", err)
+		}
 		t.Fatalf("start dance: %v", err)
 	}
 	defer dance.shutdown()
@@ -344,6 +345,9 @@ func TestSlackOAuthDanceRoundTrip(t *testing.T) {
 	// New dance for the happy path (the failed one is now in error state).
 	dance2, err := srv.startSlackOAuthDance("client-1", "secret-1", 0)
 	if err != nil {
+		if strings.Contains(err.Error(), "operation not permitted") || strings.Contains(err.Error(), "permission denied") {
+			t.Skipf("sandbox cannot bind loopback TLS listener: %v", err)
+		}
 		t.Fatalf("restart dance: %v", err)
 	}
 	defer dance2.shutdown()

@@ -295,6 +295,12 @@ type uiAgent struct {
 	// Monitored reports whether a persistent background monitor is watching
 	// this task's inbox (independent of whether the session is live).
 	Monitored bool `json:"monitored"`
+	// AutoRun fields carry the supervisor lifecycle for `flow do --auto` runs.
+	// Display-only reconcile: the server never writes auto_run_status to DB.
+	AutoRunStatus   string `json:"auto_run_status,omitempty"`
+	AutoRunStarted  string `json:"auto_run_started,omitempty"`
+	AutoRunFinished string `json:"auto_run_finished,omitempty"`
+	AutoRunLog      string `json:"auto_run_log,omitempty"`
 }
 
 type uiWaitingFor struct {
@@ -1246,6 +1252,32 @@ func (s *Server) uiAgent(tv TaskView, live map[string]bool) uiAgent {
 		agent.WaitingFor = hookWaiting
 	} else if transcriptWaiting != nil {
 		agent.WaitingFor = transcriptWaiting
+	}
+	// AutoRun fields (U1, U2). Populate from TaskView; display-only reconcile
+	// via the 15s TTL cache so we never call Signal(0) on the hot SSE path.
+	if tv.AutoRunStatus != nil {
+		st := *tv.AutoRunStatus
+		if st == "running" && tv.AutoRunPID != nil {
+			pid := int(*tv.AutoRunPID)
+			alive, ok := s.caches.autoAlive.get(pid)
+			if !ok {
+				alive = processAliveProbe(pid)
+				s.caches.autoAlive.set(pid, alive)
+			}
+			if !alive {
+				st = "dead"
+			}
+		}
+		agent.AutoRunStatus = st
+	}
+	if tv.AutoRunStarted != nil {
+		agent.AutoRunStarted = *tv.AutoRunStarted
+	}
+	if tv.AutoRunFinished != nil {
+		agent.AutoRunFinished = *tv.AutoRunFinished
+	}
+	if tv.AutoRunLog != nil {
+		agent.AutoRunLog = *tv.AutoRunLog
 	}
 	return agent
 }

@@ -90,7 +90,7 @@ func cmdDone(args []string) int {
 		if session := currentCodexSession(); session.ID != "" && os.Getenv("FLOW_TASK") == task.Slug {
 			now := flowdb.NowISO()
 			if _, err := db.Exec(
-				`UPDATE tasks SET session_id=?, session_started=COALESCE(session_started, ?), updated_at=? WHERE slug=? AND session_provider=?`,
+				`UPDATE tasks SET harness='codex', session_id=?, session_started=COALESCE(session_started, ?), updated_at=? WHERE slug=? AND session_provider=?`,
 				session.ID, now, now, task.Slug, sessionProviderCodex,
 			); err != nil {
 				fmt.Fprintf(os.Stderr, "error: bind current Codex session for %q: %v\n", task.Slug, err)

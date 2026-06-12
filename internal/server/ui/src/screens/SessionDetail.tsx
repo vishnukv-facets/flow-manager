@@ -39,6 +39,8 @@ import {
   useMarkdown,
   useTask,
   useTaskBridge,
+  useAutoRunLog,
+  useAutoRuns,
   useTaskTranscript,
   useTasks,
   useUiData,
@@ -65,9 +67,9 @@ import { TerminalIcon } from '../components/TerminalIcon'
 import { EmptyState, ErrorNote, Loading, ProviderIcon, StatusBadge, StatusDot, TokenBar } from '../components/ui'
 import { compact, compactTokens, dateTime, fromMinutes, fromSeconds } from '../lib/format'
 
-type Tab = 'brief' | 'diff' | 'transcript' | 'updates' | 'tree'
+type Tab = 'brief' | 'diff' | 'transcript' | 'updates' | 'tree' | 'auto'
 
-const TABS: readonly Tab[] = ['brief', 'diff', 'transcript', 'updates', 'tree']
+const TABS: readonly Tab[] = ['brief', 'diff', 'transcript', 'updates', 'tree', 'auto']
 function isTab(v: string | null): v is Tab {
   return v != null && (TABS as readonly string[]).includes(v)
 }
@@ -112,7 +114,14 @@ export function SessionDetail({ slug }: { slug: string }) {
     task &&
     (task.parent_slug || (task.parents?.length ?? 0) > 0 || (task.children?.length ?? 0) > 0)
   )
-  const visibleTab: Tab = task && tab === 'tree' && !hasFamily ? 'brief' : tab
+  const hasAutoRuns = !!(agent?.auto_run_status)
+  // If the tree/auto tab was active and we land on a task without that surface, fall back
+  // to the brief so the body doesn't render against a vanished tab. Gate on
+  // `task` being loaded: while the next task is still fetching, hasFamily is
+  // transiently false, and resetting then would wrongly drop the tree tab when
+  // clicking through a family.
+  const visibleTab: Tab =
+    task && ((tab === 'tree' && !hasFamily) || (tab === 'auto' && !hasAutoRuns)) ? 'brief' : tab
   // Once a done task has been "revisited", let the live terminal mount even
   // though task.status is still done — the backend resumes its prior session.
   const liveMode = agent?.terminal?.mode
@@ -198,6 +207,7 @@ export function SessionDetail({ slug }: { slug: string }) {
   if (!task) return null
 
   const provider = agent?.provider || task.session_provider || 'claude'
+  const harnessName = task.harness || provider
   const status = agent?.status || task.status
   const monitored = !!agent?.monitored
   const waitingWhy = agent?.waiting_for?.why || task.waiting_on || ''
@@ -290,6 +300,17 @@ export function SessionDetail({ slug }: { slug: string }) {
               </span>
             )}
             <StatusBadge status={status} />
+            {agent?.auto_run_status && (() => {
+              const s = agent.auto_run_status!
+              const tone = s === 'running' ? 'ok' : s === 'completed' ? 'info' : 'danger'
+              const dot = s === 'running' ? 'running' : s === 'completed' ? 'done' : 'stale'
+              return (
+                <span className={`badge ${tone}`} title={s === 'dead' ? 'Autonomous run died — needs eyes' : 'Autonomous run'}>
+                  <StatusDot status={dot} />
+                  auto: {s}
+                </span>
+              )
+            })()}
           </div>
 
           {(task.forked_from_slug || (task.forks?.length ?? 0) > 0) && (
@@ -533,7 +554,7 @@ export function SessionDetail({ slug }: { slug: string }) {
                 title={termConnTitle}
               />
               <span className="mono clip">
-                {provider} · {agent?.session_id || task.session_id || 'no session'}
+                {provider}{harnessName !== provider ? ` / ${harnessName}` : ''} · {agent?.session_id || task.session_id || 'no session'}
               </span>
               <div className="spacer" />
               <span className="faint clip" style={{ maxWidth: 280 }}>
@@ -648,7 +669,7 @@ export function SessionDetail({ slug }: { slug: string }) {
           <div className="session-side card" style={{ padding: 0 }}>
             <SideInfo task={task} agent={agent} />
             <div className="tabs" style={{ padding: '0 12px' }}>
-              {(['brief', 'diff', 'transcript', 'updates', ...(hasFamily ? ['tree'] : [])] as Tab[]).map((t) => (
+              {(['brief', 'diff', 'transcript', 'updates', ...(hasFamily ? ['tree'] : []), ...(hasAutoRuns ? ['auto'] : [])] as Tab[]).map((t) => (
                 <button key={t} className={`tab${visibleTab === t ? ' active' : ''}`} onClick={() => setTab(t)}>
                   {t === 'diff' && agent?.diff?.files ? `diff (${agent.diff.files})` : t}
                 </button>
@@ -669,6 +690,7 @@ export function SessionDetail({ slug }: { slug: string }) {
                 <UpdatesTab slug={slug} updates={task.updates} onExpand={() => setUpdatesModal(true)} initialFile={updateParam} />
               )}
               {visibleTab === 'tree' && hasFamily && <TreeTab slug={slug} onExpand={() => setTreeModal(true)} />}
+              {visibleTab === 'auto' && hasAutoRuns && <AutoRunsTab slug={slug} active={visibleTab === 'auto'} agent={agent} />}
             </div>
           </div>
         )}
@@ -916,6 +938,8 @@ function AgentDiagnostics({ agent }: { agent: UiAgent }) {
 
 function SideInfo({ task, agent }: { task: ReturnType<typeof useTask>['data']; agent?: UiAgent }) {
   if (!task) return null
+  const provider = task.session_provider || agent?.provider || 'claude'
+  const harness = task.harness || provider
   return (
     <div style={{ padding: 14, borderBottom: '1px solid var(--border)' }}>
       <div className="meta-grid">
@@ -926,6 +950,14 @@ function SideInfo({ task, agent }: { task: ReturnType<typeof useTask>['data']; a
         <div className="meta-cell">
           <div className="meta-k">branch</div>
           <div className="meta-v mono clip">{agent?.branch || '—'}</div>
+        </div>
+        <div className="meta-cell">
+          <div className="meta-k">provider</div>
+          <div className="meta-v mono clip">{provider}</div>
+        </div>
+        <div className="meta-cell">
+          <div className="meta-k">harness</div>
+          <div className="meta-v mono clip">{harness}</div>
         </div>
         <div className="meta-cell">
           <div className="meta-k">last activity</div>
@@ -1142,6 +1174,54 @@ function TranscriptTab({
           </div>
         ))}
       </div>
+    </div>
+  )
+}
+
+function AutoRunsTab({ slug, active, agent }: { slug: string; active: boolean; agent?: UiAgent }) {
+  const { data: runs, isLoading } = useAutoRuns(slug, active)
+  const [selectedFile, setSelectedFile] = useState<string | undefined>(runs?.[0]?.file)
+  const { data: log, isLoading: logLoading } = useAutoRunLog(slug, selectedFile)
+
+  const files = runs ?? []
+  if (!selectedFile && files.length > 0) setSelectedFile(files[0].file)
+
+  if (isLoading) return <Loading label="auto runs" />
+  if (files.length === 0) return <div className="faint">No auto-run logs found.</div>
+
+  const started = agent?.auto_run_started
+  const finished = agent?.auto_run_finished
+
+  return (
+    <div className="col" style={{ gap: 10 }}>
+      {(started || finished) && (
+        <div className="faint mono" style={{ fontSize: 11 }}>
+          {started && <>started {dateTime(started)}</>}
+          {started && finished && ' · '}
+          {finished && <>finished {dateTime(finished)}</>}
+        </div>
+      )}
+      <div className="row gap wrap" style={{ gap: 6 }}>
+        {files.map((f) => (
+          <button
+            key={f.file}
+            className={`btn ghost sm${selectedFile === f.file ? ' active' : ''}`}
+            onClick={() => setSelectedFile(f.file)}
+            title={`${f.file} · ${(f.size / 1024).toFixed(1)} KB`}
+          >
+            {f.file.replace('.log', '')}
+          </button>
+        ))}
+      </div>
+      {logLoading && <Loading label="log" />}
+      {log && (
+        <>
+          {log.truncated && <div className="faint" style={{ fontSize: 11 }}>Showing last 256 KB of log.</div>}
+          <pre className="mono" style={{ fontSize: 11.5, whiteSpace: 'pre-wrap', overflow: 'auto', maxHeight: 480, color: 'var(--text-2)' }}>
+            {log.content}
+          </pre>
+        </>
+      )}
     </div>
   )
 }

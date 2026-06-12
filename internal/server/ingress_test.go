@@ -375,6 +375,9 @@ func TestSlackOAuthDance_Localhost_HasTLSListener(t *testing.T) {
 
 	dance, err := srv.startSlackOAuthDance("client-x", "secret-x", 0)
 	if err != nil {
+		if strings.Contains(err.Error(), "operation not permitted") || strings.Contains(err.Error(), "permission denied") {
+			t.Skipf("sandbox cannot bind loopback TLS listener: %v", err)
+		}
 		t.Fatalf("startSlackOAuthDance: %v", err)
 	}
 	defer dance.shutdown()

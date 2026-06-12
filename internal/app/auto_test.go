@@ -72,6 +72,9 @@ func TestAutoExecFinalizesCompleted(t *testing.T) {
 	_, db := autoTestSetup(t)
 	stubClaudeRunner(t, nil)
 	seedAutoTask(t, db, "at-comp", "sess-comp-1")
+	oldUUID := newUUID
+	newUUID = func() (string, error) { return "run-comp-1", nil }
+	t.Cleanup(func() { newUUID = oldUUID })
 
 	// autoRunner stub: mark task done (simulates headless run calling flow done).
 	old := autoRunner
@@ -101,11 +104,21 @@ func TestAutoExecFinalizesCompleted(t *testing.T) {
 	if !task.AutoRunFinished.Valid || task.AutoRunFinished.String == "" {
 		t.Error("auto_run_finished should be set after finalize")
 	}
+	run, err := flowdb.GetBrainRun(db, "run-comp-1")
+	if err != nil {
+		t.Fatalf("GetBrainRun: %v", err)
+	}
+	if run.Status != "completed" || !run.FinishedAt.Valid || !run.OutputJSON.Valid {
+		t.Fatalf("unexpected completed run ledger row: %+v", run)
+	}
 }
 
 func TestAutoExecFinalizesDead(t *testing.T) {
 	_, db := autoTestSetup(t)
 	seedAutoTask(t, db, "at-dead", "sess-dead-1")
+	oldUUID := newUUID
+	newUUID = func() (string, error) { return "run-dead-1", nil }
+	t.Cleanup(func() { newUUID = oldUUID })
 
 	old := autoRunner
 	autoRunner = func(req autoRunRequest) error {
@@ -131,6 +144,13 @@ func TestAutoExecFinalizesDead(t *testing.T) {
 	if !task.AutoRunFinished.Valid || task.AutoRunFinished.String == "" {
 		t.Error("auto_run_finished should be set after finalize")
 	}
+	run, err := flowdb.GetBrainRun(db, "run-dead-1")
+	if err != nil {
+		t.Fatalf("GetBrainRun: %v", err)
+	}
+	if run.Status != "dead" || !run.FinishedAt.Valid || !run.ErrorText.Valid {
+		t.Fatalf("unexpected dead run ledger row: %+v", run)
+	}
 }
 
 func TestAutoExecRunsCodexWithoutSessionID(t *testing.T) {
@@ -143,6 +163,9 @@ func TestAutoExecRunsCodexWithoutSessionID(t *testing.T) {
 	if err != nil {
 		t.Fatalf("seed codex task: %v", err)
 	}
+	oldUUID := newUUID
+	newUUID = func() (string, error) { return "run-codex-1", nil }
+	t.Cleanup(func() { newUUID = oldUUID })
 
 	oldVersion := codexExecVersion
 	codexExecVersion = func() string { return "codex-cli-exec test-version" }
@@ -189,6 +212,13 @@ func TestAutoExecRunsCodexWithoutSessionID(t *testing.T) {
 	}
 	if !task.SessionID.Valid || task.SessionID.String != codexSessionID {
 		t.Errorf("session_id: got %+v, want %s", task.SessionID, codexSessionID)
+	}
+	run, err := flowdb.GetBrainRun(db, "run-codex-1")
+	if err != nil {
+		t.Fatalf("GetBrainRun: %v", err)
+	}
+	if run.Status != "completed" || !run.SessionID.Valid || run.SessionID.String != codexSessionID {
+		t.Fatalf("unexpected codex run ledger row: %+v", run)
 	}
 }
 
@@ -538,6 +568,7 @@ func noTabStub(t *testing.T) func() int64 {
 
 // stubLauncherRecord overrides autoLauncher to record its last call and return pid 4242.
 type launcherCall struct {
+	runID          string
 	slug           string
 	workDir        string
 	logPath        string
@@ -545,13 +576,15 @@ type launcherCall struct {
 	permissionMode string
 	model          string
 	injection      string
+	meta           autoRunLaunchMetadata
 }
 
 func stubLauncherRecord(t *testing.T, retErr error) *launcherCall {
 	t.Helper()
 	rec := &launcherCall{}
 	old := autoLauncher
-	autoLauncher = func(slug, workDir, logPath, provider, permissionMode, model, injection string, env []string) (int, error) {
+	autoLauncher = func(slug, runID, workDir, logPath, provider, permissionMode, model, injection string, meta autoRunLaunchMetadata, env []string) (int, error) {
+		rec.runID = runID
 		rec.slug = slug
 		rec.workDir = workDir
 		rec.logPath = logPath
@@ -559,6 +592,7 @@ func stubLauncherRecord(t *testing.T, retErr error) *launcherCall {
 		rec.permissionMode = permissionMode
 		rec.model = model
 		rec.injection = injection
+		rec.meta = meta
 		if retErr != nil {
 			return 0, retErr
 		}
@@ -623,6 +657,67 @@ func TestCmdDoAutoLaunchesDetached(t *testing.T) {
 	if task.AutoRunFinished.Valid {
 		t.Error("auto_run_finished should be NULL")
 	}
+	if rec.runID == "" {
+		t.Fatal("launcher did not receive a run id")
+	}
+	run, err := flowdb.GetBrainRun(db, rec.runID)
+	if err != nil {
+		t.Fatalf("GetBrainRun: %v", err)
+	}
+	if run.Status != "running" || !run.PID.Valid || run.PID.Int64 != 4242 {
+		t.Fatalf("unexpected run ledger row: %+v", run)
+	}
+	if !run.StartedAt.Valid || !run.LogPath.Valid || !strings.Contains(run.LogPath.String, filepath.Join("tasks", "auto-det", "auto-runs")) {
+		t.Fatalf("launch metadata missing from run ledger: %+v", run)
+	}
+}
+
+func TestCmdDoAutoRecordsBrainSchedulerMetadata(t *testing.T) {
+	setupFlowRoot(t)
+	if rc := cmdAdd([]string{"task", "Scheduler Worker", "--slug", "sched-worker", "--agent", "codex"}); rc != 0 {
+		t.Fatalf("add scheduler worker rc=%d", rc)
+	}
+
+	const fixedRunID = "run-scheduler-1"
+	oldUUID := newUUID
+	newUUID = func() (string, error) { return fixedRunID, nil }
+	t.Cleanup(func() { newUUID = oldUUID })
+	noTabStub(t)
+	rec := stubLauncherRecord(t, nil)
+
+	rc := cmdDo([]string{
+		"sched-worker",
+		"--auto",
+		"--brain-plan", "plan-123",
+		"--brain-item", "worker-1",
+		"--brain-target-branch", "feature/flow-brain-orchestrator",
+		"--brain-initiated-by", "brain-scheduler",
+	})
+	if rc != 0 {
+		t.Fatalf("cmdDo scheduler auto launch: rc=%d", rc)
+	}
+	if rec.meta.PlanID != "plan-123" || rec.meta.ItemID != "worker-1" || rec.meta.TargetBranch != "feature/flow-brain-orchestrator" || rec.meta.InitiatedBy != "brain-scheduler" {
+		t.Fatalf("launcher metadata = %+v", rec.meta)
+	}
+
+	db := openFlowDB(t)
+	run, err := flowdb.GetBrainRun(db, fixedRunID)
+	if err != nil {
+		t.Fatalf("GetBrainRun: %v", err)
+	}
+	if !run.PlanID.Valid || run.PlanID.String != "plan-123" {
+		t.Fatalf("run plan id = %+v, want plan-123", run.PlanID)
+	}
+	if !run.InputSummary.Valid || !strings.Contains(run.InputSummary.String, "plan item worker-1") || !strings.Contains(run.InputSummary.String, "target branch feature/flow-brain-orchestrator") {
+		t.Fatalf("input summary = %+v", run.InputSummary)
+	}
+	var evidence map[string]any
+	if err := json.Unmarshal([]byte(run.EvidenceJSON.String), &evidence); err != nil {
+		t.Fatalf("unmarshal evidence: %v", err)
+	}
+	if evidence["plan_item_id"] != "worker-1" || evidence["target_branch"] != "feature/flow-brain-orchestrator" || evidence["initiated_by"] != "brain-scheduler" {
+		t.Fatalf("evidence = %+v", evidence)
+	}
 }
 
 func TestCmdDoAutoRejectsHere(t *testing.T) {
@@ -686,6 +781,16 @@ func TestCmdDoAutoCodexLaunchesDetached(t *testing.T) {
 	if !task.AutoRunStatus.Valid || task.AutoRunStatus.String != "running" {
 		t.Errorf("auto_run_status = %q, want running", task.AutoRunStatus.String)
 	}
+	if rec.runID == "" {
+		t.Fatal("launcher did not receive a run id")
+	}
+	run, err := flowdb.GetBrainRun(db, rec.runID)
+	if err != nil {
+		t.Fatalf("GetBrainRun: %v", err)
+	}
+	if run.Provider != sessionProviderCodex || run.Status != "running" || !run.PID.Valid {
+		t.Fatalf("unexpected codex run ledger row: %+v", run)
+	}
 }
 
 func TestCmdDoAutoWithInjection(t *testing.T) {
@@ -737,7 +842,7 @@ func TestCmdDoAutoLaunchFailureRollsBack(t *testing.T) {
 	setupFlowRoot(t)
 	seedTask(t, "launch-fail")
 	noTabStub(t)
-	stubLauncherRecord(t, fmt.Errorf("supervisor spawn error"))
+	rec := stubLauncherRecord(t, fmt.Errorf("supervisor spawn error"))
 
 	oldUUID := newUUID
 	newUUID = func() (string, error) { return "fail-session-uuid", nil }
@@ -760,6 +865,16 @@ func TestCmdDoAutoLaunchFailureRollsBack(t *testing.T) {
 	if task.SessionID.Valid && task.SessionID.String != "" {
 		t.Errorf("session_id = %q after rollback, want NULL", task.SessionID.String)
 	}
+	if rec.runID == "" {
+		t.Fatal("launcher did not receive a run id")
+	}
+	run, err := flowdb.GetBrainRun(db, rec.runID)
+	if err != nil {
+		t.Fatalf("GetBrainRun: %v", err)
+	}
+	if run.Status != "error" || !run.FinishedAt.Valid || !run.ErrorText.Valid {
+		t.Fatalf("unexpected launch-failure run ledger row: %+v", run)
+	}
 }
 
 func TestCmdDoAutoCodexLaunchFailureRollsBack(t *testing.T) {
@@ -768,7 +883,7 @@ func TestCmdDoAutoCodexLaunchFailureRollsBack(t *testing.T) {
 		t.Fatalf("add codex task rc=%d", rc)
 	}
 	noTabStub(t)
-	stubLauncherRecord(t, fmt.Errorf("supervisor spawn error"))
+	rec := stubLauncherRecord(t, fmt.Errorf("supervisor spawn error"))
 
 	rc := cmdDo([]string{"codex-launch-fail", "--auto"})
 	if rc != 1 {
@@ -788,6 +903,16 @@ func TestCmdDoAutoCodexLaunchFailureRollsBack(t *testing.T) {
 	}
 	if task.AutoRunStatus.Valid {
 		t.Errorf("auto_run_status = %q after rollback, want NULL", task.AutoRunStatus.String)
+	}
+	if rec.runID == "" {
+		t.Fatal("launcher did not receive a run id")
+	}
+	run, err := flowdb.GetBrainRun(db, rec.runID)
+	if err != nil {
+		t.Fatalf("GetBrainRun: %v", err)
+	}
+	if run.Status != "error" || !run.FinishedAt.Valid || !run.ErrorText.Valid {
+		t.Fatalf("unexpected codex launch-failure run ledger row: %+v", run)
 	}
 }
 

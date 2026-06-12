@@ -2868,6 +2868,39 @@ create tasks, or change policy.
   but learned feedback never enables an action. Treat feedback as evidence for
   triage quality, not as permission to take new classes of action.
 
+## 10e. Owners
+
+Owners are durable, repo-scoped controllers for ongoing outcomes. An owner is
+not one long agent session: it is an `owners/<slug>/charter.md`, an
+`owners/<slug>/updates/` journal, a row in `owners`, and short ticks that wake,
+review state, dispatch work, self-pace, and exit.
+
+Core commands:
+
+- `flow add owner "<name>" --work-dir <path> [--project <slug>] [--every 24h] [--agent claude|codex]`
+- `flow owner list` or `flow list owners`
+- `flow owner show <slug>` or `flow show owner <slug>`
+- `flow owner start|pause|retire <slug>`
+- `flow owner tick <slug>` for a guided interactive tick; `--auto` for a headless tick now
+- `flow owner next <slug> --in <duration>` or `--at <RFC3339>`
+- `flow owner tick-due` is the scheduler entry point; do not run it manually unless you are checking the scheduler.
+
+Owner rules:
+
+- Owners orchestrate; they do not perform substantive work inline. A tick is
+  sessionless and gets no task close-out sweep. Real work must be dispatched as
+  tasks or playbook runs that can self-close.
+- One-time work should be created with `flow add task "<what>" --agent <owner-agent> --tag owner:<slug>` and then run with `flow do --auto <task>` when safe.
+- Human decisions should be parked as question tasks tagged both
+  `question` and `owner:<slug>`. Do not run `question` tasks with `--auto`.
+- Every tick should read the charter, read recent owner journal notes, run
+  `flow owner show <slug>` to avoid duplicating in-flight work, dispatch only
+  what is needed, write a concise journal note under `owners/<slug>/updates/`,
+  set its next wake with `flow owner next`, and exit.
+- The first tick should usually be interactive so the operator can tune the
+  charter. Later ticks can run headlessly through `flow owner tick --auto` or
+  the host scheduler calling `flow owner tick-due`.
+
 ## 11. When in doubt
 
 Ask. The worst outcome is writing a bad brief or silently

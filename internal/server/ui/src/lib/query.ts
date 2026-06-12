@@ -1,5 +1,5 @@
 import { QueryClient, keepPreviousData, useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { apiAction, apiGet, apiGetText, apiPost } from './api'
+import { ApiError, apiAction, apiGet, apiGetText, apiPost } from './api'
 import { rpc } from './rpc'
 import { events } from './events'
 import { UI_DATA_IDLE_REFETCH_MS, focusedLiveInvalidationKeys } from './liveInvalidation'
@@ -8,7 +8,13 @@ import type {
   ActionRequest,
   AskFlowResponse,
   AttentionItem,
+  BrainGraphActionRequest,
+  BrainGraphActionResponse,
   AttentionTraceResponse,
+  BrainGraphNodeDetail,
+  BrainGraphView,
+  BrainRunView,
+  BrainRunsResponse,
   GitHubAuthStatus,
   GitHubInstallations,
   GitHubOrgs,
@@ -19,6 +25,8 @@ import type {
   InboxFeed,
   KBFileView,
   MemorySource,
+  OwnerView,
+  OwnerDetailView,
   OverviewView,
   PlaybookView,
   ProjectView,
@@ -207,6 +215,78 @@ export function useSteeringRuns() {
   return useQuery({ queryKey: ['steering-runs'], queryFn: () => apiGet<SteeringRunsResponse>('/api/steering/runs') })
 }
 
+export interface BrainGraphFilters {
+  project?: string
+  owner?: string
+  status?: string
+  includeDone?: boolean
+  expand?: string[]
+  q?: string
+}
+export function useBrainGraph(filters: BrainGraphFilters = {}) {
+  const stableFilters = {
+    project: filters.project || '',
+    owner: filters.owner || '',
+    status: filters.status || '',
+    include_done: !!filters.includeDone,
+    expand: [...(filters.expand ?? [])].filter(Boolean).sort(),
+    q: filters.q || '',
+  }
+  return useQuery({
+    queryKey: ['brain-graph', stableFilters],
+    queryFn: () =>
+      apiGet<BrainGraphView>(
+        `/api/brain/graph${qs({
+          project: stableFilters.project,
+          owner: stableFilters.owner,
+          status: stableFilters.status,
+          include_done: stableFilters.include_done,
+          expand: stableFilters.expand.join(','),
+          q: stableFilters.q,
+        })}`,
+      ),
+    placeholderData: keepPreviousData,
+  })
+}
+
+export function useBrainGraphNodeDetail(nodeId?: string | null) {
+  const stableNodeId = nodeId || ''
+  return useQuery({
+    queryKey: ['brain-graph-node', stableNodeId],
+    queryFn: () => apiGet<BrainGraphNodeDetail>(`/api/brain/graph/node/${encodeURIComponent(stableNodeId)}`),
+    enabled: Boolean(stableNodeId),
+  })
+}
+
+async function postBrainGraphAction(req: BrainGraphActionRequest): Promise<BrainGraphActionResponse> {
+  const r = await rpc.request({
+    method: 'POST',
+    path: '/api/brain/graph/actions',
+    body: req,
+    timeoutMs: 180000,
+  })
+  const data = (r.json ?? {}) as BrainGraphActionResponse
+  if (r.status >= 400 || data.ok === false) {
+    throw new ApiError(r.status, data.message || `graph action failed (${r.status})`)
+  }
+  return data
+}
+
+export function useBrainGraphAction() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: (req: BrainGraphActionRequest) => postBrainGraphAction(req),
+    onSuccess: (data) => {
+      if (data.message) pushToast('ok', data.message)
+      qc.invalidateQueries({ queryKey: ['brain-graph'] })
+      qc.invalidateQueries({ queryKey: ['brain-graph-node'] })
+    },
+    onError: (err: Error) => {
+      pushToast('error', err.message || 'graph action failed')
+    },
+  })
+}
+
 export interface TaskFilters {
   status?: string
   project?: string
@@ -249,9 +329,73 @@ export function useTaskTranscript(slug: string | undefined, enabled = true) {
   })
 }
 
-export interface ProjectListOpts {
+export function useAutoRuns(slug: string | undefined, enabled = true) {
+  return useQuery({
+    queryKey: ['auto-runs', slug],
+    enabled: !!slug && enabled,
+    queryFn: () => apiGet<import('./types').AutoRunFile[]>(`/api/tasks/${encodeURIComponent(slug!)}/auto-runs`),
+  })
+}
+
+export function useAutoRunLog(slug: string | undefined, file: string | undefined) {
+  return useQuery({
+    queryKey: ['auto-run-log', slug, file],
+    enabled: !!slug && !!file,
+    queryFn: () => apiGet<import('./types').AutoRunLogResponse>(`/api/tasks/${encodeURIComponent(slug!)}/auto-runs/log?file=${encodeURIComponent(file!)}`),
+  })
+}
+
+export function useTaskRuns(slug: string | undefined, enabled = true, limit = 20) {
+  return useQuery({
+    queryKey: ['task-runs', slug, limit],
+    enabled: !!slug && enabled,
+    queryFn: () =>
+      apiGet<BrainRunsResponse>(
+        `/api/tasks/${encodeURIComponent(slug!)}/runs${limit > 0 ? `?limit=${encodeURIComponent(String(limit))}` : ''}`,
+      ),
+  })
+}
+
+export function useTaskRun(slug: string | undefined, runId: string | undefined, enabled = true) {
+  return useQuery({
+    queryKey: ['task-run', slug, runId],
+    enabled: !!slug && !!runId && enabled,
+    queryFn: () =>
+      apiGet<BrainRunView>(
+        `/api/tasks/${encodeURIComponent(slug!)}/runs/${encodeURIComponent(runId!)}`,
+      ),
+  })
+}
+
+export interface OwnerFilters {
+  status?: string
   include_archived?: boolean
 }
+export function useOwners(filters: OwnerFilters = {}) {
+  return useQuery({
+    queryKey: ['owners', filters],
+    queryFn: () =>
+      apiGet<OwnerView[]>(
+        `/api/owners${qs(filters as Record<string, string | boolean | number | undefined>)}`,
+      ),
+  })
+}
+export function useOwner(slug: string | undefined, opts: { enabled?: boolean; poll?: boolean } = {}) {
+  const enabled = (opts.enabled ?? true) && !!slug
+  return useQuery({
+    queryKey: ['owner', slug],
+    enabled,
+    queryFn: () => apiGet<OwnerDetailView>(`/api/owners/${encodeURIComponent(slug!)}`),
+    // While a tick is running, poll so the journal + owned-task status refresh.
+    refetchInterval: opts.poll ? 4000 : false,
+  })
+}
+
+export interface ProjectListOpts {
+  include_archived?: boolean
+  include_deleted?: boolean
+}
+
 export function useProjects(opts: ProjectListOpts = {}) {
   return useQuery({
     queryKey: ['projects', opts],

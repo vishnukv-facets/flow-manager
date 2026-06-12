@@ -680,6 +680,8 @@ function TaskRow({
   // The actionable head of a dependency chain: open, unblocked, and gating
   // others. That's the "start here" the brief calls for.
   const isStartHead = !!start && start.startable && start.blocks.length > 0
+  const provider = task.session_provider || 'claude'
+  const taskHarness = task.harness || provider
   const rowCls = [
     selected ? 'row-selected' : '',
     tree ? 'tree-row' : '',
@@ -789,7 +791,16 @@ function TaskRow({
           <span className="faint">—</span>
         )}
       </td>
-      <td><ProviderIcon provider={task.session_provider} size={14} /></td>
+      <td>
+        <span
+          className="row gap"
+          style={{ alignItems: 'center' }}
+          title={taskHarness === provider ? `provider ${provider}` : `provider ${provider}; harness ${taskHarness}`}
+        >
+          <ProviderIcon provider={provider} size={14} />
+          {taskHarness !== provider && <span className="badge mono">{taskHarness}</span>}
+        </span>
+      </td>
       <td>
         <div className="cell-tags">
           {(task.tags ?? []).slice(0, 3).map((tag) => <span key={tag} className="tag">{tag}</span>)}

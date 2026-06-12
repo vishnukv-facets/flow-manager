@@ -30,6 +30,12 @@ func decodeQuote(t *testing.T, body []byte) QuoteView {
 
 const sampleStoicJSON = `{"data":{"author":"Rumi","quote":"Don’t grieve. Anything you lose comes round in another form."}}`
 
+func quoteHTTPClient(handler func(*http.Request) *http.Response) *http.Client {
+	return &http.Client{Transport: roundTripperFunc(func(req *http.Request) (*http.Response, error) {
+		return handler(req), nil
+	})}
+}
+
 // pinQuoteSources restricts the greeting-quote sources for a test (and restores
 // them after), so source selection is deterministic and tests never touch a
 // real network for a source they didn't stub.
@@ -41,15 +47,13 @@ func pinQuoteSources(t *testing.T, sources ...func(context.Context) (QuoteView, 
 }
 
 func TestFetchStoicQuoteParsesAuthor(t *testing.T) {
-	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(sampleStoicJSON))
-	}))
-	defer upstream.Close()
-
 	origEndpoint, origClient := stoicQuoteEndpoint, stoicQuoteClient
-	stoicQuoteEndpoint = upstream.URL
-	stoicQuoteClient = upstream.Client()
+	stoicQuoteEndpoint = "https://quote.test/stoic"
+	stoicQuoteClient = quoteHTTPClient(func(r *http.Request) *http.Response {
+		resp := newHTTPResponse(http.StatusOK, sampleStoicJSON)
+		resp.Header.Set("Content-Type", "application/json")
+		return resp
+	})
 	defer func() { stoicQuoteEndpoint, stoicQuoteClient = origEndpoint, origClient }()
 
 	q, err := fetchStoicQuote(context.Background())
@@ -68,15 +72,13 @@ func TestFetchStoicQuoteParsesAuthor(t *testing.T) {
 }
 
 func TestHandleQuoteServesStoicWhenSelected(t *testing.T) {
-	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(sampleStoicJSON))
-	}))
-	defer upstream.Close()
-
 	origEndpoint, origClient := stoicQuoteEndpoint, stoicQuoteClient
-	stoicQuoteEndpoint = upstream.URL
-	stoicQuoteClient = upstream.Client()
+	stoicQuoteEndpoint = "https://quote.test/stoic"
+	stoicQuoteClient = quoteHTTPClient(func(r *http.Request) *http.Response {
+		resp := newHTTPResponse(http.StatusOK, sampleStoicJSON)
+		resp.Header.Set("Content-Type", "application/json")
+		return resp
+	})
 	defer func() { stoicQuoteEndpoint, stoicQuoteClient = origEndpoint, origClient }()
 	pinQuoteSources(t, fetchStoicQuote)
 
@@ -113,16 +115,14 @@ func TestFetchGreetingQuoteFallsBackWhenSourceFails(t *testing.T) {
 
 func TestHandleQuoteCachesPerBucket(t *testing.T) {
 	var hits int32
-	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		atomic.AddInt32(&hits, 1)
-		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(sampleQuoteJSON))
-	}))
-	defer upstream.Close()
-
 	origEndpoint, origClient := animeQuoteEndpoint, animeQuoteClient
-	animeQuoteEndpoint = upstream.URL
-	animeQuoteClient = upstream.Client()
+	animeQuoteEndpoint = "https://quote.test/anime"
+	animeQuoteClient = quoteHTTPClient(func(r *http.Request) *http.Response {
+		atomic.AddInt32(&hits, 1)
+		resp := newHTTPResponse(http.StatusOK, sampleQuoteJSON)
+		resp.Header.Set("Content-Type", "application/json")
+		return resp
+	})
 	defer func() { animeQuoteEndpoint, animeQuoteClient = origEndpoint, origClient }()
 	pinQuoteSources(t, fetchAnimeQuote) // this test asserts anime content
 
@@ -154,14 +154,11 @@ func TestHandleQuoteCachesPerBucket(t *testing.T) {
 }
 
 func TestHandleQuoteServesEmptyWhenUpstreamFails(t *testing.T) {
-	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusTooManyRequests)
-	}))
-	defer upstream.Close()
-
 	origEndpoint, origClient := animeQuoteEndpoint, animeQuoteClient
-	animeQuoteEndpoint = upstream.URL
-	animeQuoteClient = upstream.Client()
+	animeQuoteEndpoint = "https://quote.test/anime"
+	animeQuoteClient = quoteHTTPClient(func(r *http.Request) *http.Response {
+		return newHTTPResponse(http.StatusTooManyRequests, "")
+	})
 	defer func() { animeQuoteEndpoint, animeQuoteClient = origEndpoint, origClient }()
 	pinQuoteSources(t, fetchAnimeQuote) // failure path tested against the anime source
 
@@ -179,15 +176,12 @@ func TestHandleQuoteServesEmptyWhenUpstreamFails(t *testing.T) {
 
 func TestHandleQuoteDisabledSkipsUpstream(t *testing.T) {
 	var hits int32
-	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		atomic.AddInt32(&hits, 1)
-		_, _ = w.Write([]byte(sampleQuoteJSON))
-	}))
-	defer upstream.Close()
-
 	origEndpoint, origClient := animeQuoteEndpoint, animeQuoteClient
-	animeQuoteEndpoint = upstream.URL
-	animeQuoteClient = upstream.Client()
+	animeQuoteEndpoint = "https://quote.test/anime"
+	animeQuoteClient = quoteHTTPClient(func(r *http.Request) *http.Response {
+		atomic.AddInt32(&hits, 1)
+		return newHTTPResponse(http.StatusOK, sampleQuoteJSON)
+	})
 	defer func() { animeQuoteEndpoint, animeQuoteClient = origEndpoint, origClient }()
 
 	s := &Server{cfg: Config{DisableQuote: true}}

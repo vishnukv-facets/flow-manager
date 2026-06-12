@@ -63,10 +63,11 @@ CREATE TABLE IF NOT EXISTS tasks (
     due_date              TEXT,
     assignee              TEXT,
     permission_mode       TEXT NOT NULL DEFAULT 'auto' CHECK (permission_mode IN ('default','auto','bypass')),
-    model                 TEXT,
-    status_changed_at     TEXT,
-    session_provider      TEXT NOT NULL DEFAULT 'claude' CHECK (session_provider IN ('claude','codex')),
-    session_id            TEXT,
+	    model                 TEXT,
+	    status_changed_at     TEXT,
+	    session_provider      TEXT NOT NULL DEFAULT 'claude' CHECK (session_provider IN ('claude','codex')),
+	    harness               TEXT,
+	    session_id            TEXT,
     session_started       TEXT,
     session_last_resumed  TEXT,
     session_path          TEXT,
@@ -84,6 +85,72 @@ CREATE TABLE IF NOT EXISTS tasks (
     CHECK (status IN ('backlog','done') OR session_id IS NOT NULL OR (session_provider = 'codex' AND status = 'in-progress'))
 );
 
+CREATE TABLE IF NOT EXISTS brain_plans (
+    id             TEXT PRIMARY KEY,
+    title          TEXT NOT NULL,
+    query          TEXT NOT NULL DEFAULT '',
+    summary        TEXT NOT NULL DEFAULT '',
+    source         TEXT NOT NULL DEFAULT '',
+    status         TEXT NOT NULL DEFAULT 'draft' CHECK (status IN ('draft','approved','executing','blocked','completed','cancelled','rejected','deferred','failed')),
+    project_slug   TEXT REFERENCES projects(slug),
+    work_dir       TEXT,
+    branch_policy  TEXT,
+    error          TEXT,
+    approved_at    TEXT,
+    executed_at    TEXT,
+    completed_at   TEXT,
+    cancelled_at   TEXT,
+    rejected_at    TEXT,
+    blocked_at     TEXT,
+    created_at     TEXT NOT NULL,
+    updated_at     TEXT NOT NULL,
+    plan_json      TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS brain_runs (
+    run_id          TEXT PRIMARY KEY,
+    family_slug     TEXT NOT NULL,
+    task_slug       TEXT NOT NULL,
+    plan_id         TEXT,
+    role            TEXT NOT NULL CHECK (role IN ('worker','validator','steward','orchestrator')),
+    provider        TEXT NOT NULL CHECK (provider IN ('claude','codex')),
+    requested_model TEXT,
+    requested_tier  TEXT,
+    resolved_model  TEXT,
+    permission_mode TEXT NOT NULL DEFAULT 'auto' CHECK (permission_mode IN ('default','auto','bypass')),
+    status          TEXT NOT NULL CHECK (status IN ('queued','running','completed','dead','error','cancelled','blocked')),
+    pid             INTEGER,
+    session_id      TEXT,
+    log_path        TEXT,
+    input_summary   TEXT,
+    output_json     TEXT,
+    evidence_json   TEXT,
+    error_text      TEXT,
+    started_at      TEXT,
+    finished_at     TEXT,
+    created_at      TEXT NOT NULL,
+    updated_at      TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS brain_policy (
+    action     TEXT PRIMARY KEY,
+    mode       TEXT NOT NULL CHECK (mode IN ('auto','approval_required')),
+    updated_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS brain_action_audit (
+    id            TEXT PRIMARY KEY,
+    action        TEXT NOT NULL,
+    target_type   TEXT NOT NULL,
+    target_id     TEXT NOT NULL,
+    actor         TEXT NOT NULL,
+    policy        TEXT NOT NULL,
+    evidence_json TEXT NOT NULL DEFAULT '{}',
+    result        TEXT NOT NULL,
+    error_text    TEXT,
+    created_at    TEXT NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS workdirs (
     path          TEXT PRIMARY KEY,
     name          TEXT,
@@ -93,14 +160,32 @@ CREATE TABLE IF NOT EXISTS workdirs (
     created_at    TEXT NOT NULL
 );
 
-CREATE TABLE IF NOT EXISTS task_tags (
-    task_slug   TEXT NOT NULL REFERENCES tasks(slug) ON DELETE CASCADE,
-    tag         TEXT NOT NULL,
-    created_at  TEXT NOT NULL,
-    PRIMARY KEY (task_slug, tag)
-);
+	CREATE TABLE IF NOT EXISTS task_tags (
+	    task_slug   TEXT NOT NULL REFERENCES tasks(slug) ON DELETE CASCADE,
+	    tag         TEXT NOT NULL,
+	    created_at  TEXT NOT NULL,
+	    PRIMARY KEY (task_slug, tag)
+	);
 
-CREATE TABLE IF NOT EXISTS github_event_log (
+	CREATE TABLE IF NOT EXISTS owners (
+	    slug              TEXT PRIMARY KEY,
+	    name              TEXT NOT NULL,
+	    work_dir          TEXT NOT NULL,
+	    project_slug      TEXT REFERENCES projects(slug),
+	    status            TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active','paused','retired')),
+	    every             TEXT NOT NULL,
+	    next_wake_at      TEXT,
+	    last_tick_at      TEXT,
+	    last_tick_status  TEXT,
+	    tick_pid          INTEGER,
+	    tick_started      TEXT,
+	    harness           TEXT,
+	    created_at        TEXT NOT NULL,
+	    updated_at        TEXT NOT NULL,
+	    archived_at       TEXT
+	);
+
+	CREATE TABLE IF NOT EXISTS github_event_log (
     event_key    TEXT PRIMARY KEY,
     event_kind   TEXT NOT NULL,
     task_slug    TEXT REFERENCES tasks(slug) ON DELETE SET NULL,
@@ -349,6 +434,10 @@ CREATE INDEX IF NOT EXISTS idx_task_dependencies_parent ON task_dependencies(par
 CREATE INDEX IF NOT EXISTS idx_task_dependencies_child ON task_dependencies(child_slug);
 CREATE INDEX IF NOT EXISTS idx_task_links_to ON task_links(to_slug);
 CREATE INDEX IF NOT EXISTS idx_task_links_from ON task_links(from_slug);
+CREATE INDEX IF NOT EXISTS idx_brain_runs_family_started ON brain_runs(family_slug, started_at DESC, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_brain_runs_task_started ON brain_runs(task_slug, started_at DESC, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_brain_runs_status_updated ON brain_runs(status, updated_at DESC);
+CREATE INDEX IF NOT EXISTS idx_brain_action_audit_target ON brain_action_audit(target_type, target_id, created_at);
 CREATE INDEX IF NOT EXISTS idx_steering_trace_feed ON steering_trace(feed_item_id);
 CREATE INDEX IF NOT EXISTS idx_steering_trace_created ON steering_trace(created_at);
 CREATE INDEX IF NOT EXISTS idx_steering_trace_created_id ON steering_trace(created_at DESC, id DESC);
@@ -356,6 +445,9 @@ CREATE INDEX IF NOT EXISTS idx_steering_trace_disposition_created_id ON steering
 CREATE INDEX IF NOT EXISTS idx_steering_trace_source_created_id ON steering_trace(source, created_at DESC, id DESC);
 CREATE INDEX IF NOT EXISTS idx_steering_trace_disposition_source_created_id ON steering_trace(disposition, source, created_at DESC, id DESC);
 CREATE INDEX IF NOT EXISTS idx_steering_trace_funnel ON steering_trace(created_at, disposition, stage_reached);
+CREATE INDEX IF NOT EXISTS idx_brain_plans_status_updated ON brain_plans(status, updated_at DESC);
+CREATE INDEX IF NOT EXISTS idx_brain_plans_created ON brain_plans(created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_brain_plans_project ON brain_plans(project_slug);
 CREATE INDEX IF NOT EXISTS idx_search_docs_scope ON search_docs(scope);
 CREATE INDEX IF NOT EXISTS idx_search_docs_entity ON search_docs(entity_type, entity_slug);
 CREATE INDEX IF NOT EXISTS idx_attention_feed_status ON attention_feed(status);
@@ -427,6 +519,7 @@ type Task struct {
 	Model              sql.NullString // explicit per-task model; empty = resolve at launch
 	StatusChangedAt    sql.NullString
 	SessionProvider    string
+	Harness            string // runtime harness pin; empty DB values read as SessionProvider/claude
 	SessionID          sql.NullString
 	SessionStarted     sql.NullString
 	SessionLastResumed sql.NullString
@@ -951,6 +1044,35 @@ func NormalizeSessionProvider(provider string) (string, error) {
 	}
 }
 
+// NormalizeHarnessName canonicalizes the runtime harness stored on a task.
+// It currently follows the same supported agent families as session_provider,
+// but lives separately so imported upstream harness features have a stable
+// runtime pin without replacing Flow Manager's public provider contract.
+func NormalizeHarnessName(harness string) (string, error) {
+	switch strings.TrimSpace(strings.ToLower(harness)) {
+	case "", "claude", "claude-code", "claudecode":
+		return "claude", nil
+	case "codex", "codex-cli":
+		return "codex", nil
+	default:
+		return "", fmt.Errorf("harness must be claude|codex, got %q", harness)
+	}
+}
+
+func harnessForScan(sessionProvider string, harness sql.NullString) string {
+	if harness.Valid && strings.TrimSpace(harness.String) != "" {
+		if normalized, err := NormalizeHarnessName(harness.String); err == nil {
+			return normalized
+		}
+		return strings.TrimSpace(strings.ToLower(harness.String))
+	}
+	normalized, err := NormalizeSessionProvider(sessionProvider)
+	if err != nil {
+		return "claude"
+	}
+	return normalized
+}
+
 // OpenDB opens (or creates) the SQLite database at path, ensures the
 // schema is present, and runs idempotent migrations.
 //
@@ -1254,6 +1376,18 @@ func runMigrations(db *sql.DB) error {
 		// SQLite cannot add the CHECK constraint during ALTER TABLE; fresh
 		// databases get it from schemaDDL and application code validates
 		// writes for migrated databases.
+	}
+
+	// tasks.harness: nullable runtime pin for the pluggable harness layer.
+	// Existing rows can remain NULL; ScanTask coalesces them to session_provider.
+	has, err = columnExists(db, "tasks", "harness")
+	if err != nil {
+		return err
+	}
+	if !has {
+		if _, err := db.Exec(`ALTER TABLE tasks ADD COLUMN harness TEXT`); err != nil {
+			return fmt.Errorf("add tasks.harness: %w", err)
+		}
 	}
 
 	has, err = columnExists(db, "tasks", "worktree_path")
@@ -1859,10 +1993,11 @@ func migrateTasksSessionInvariant(db *sql.DB) error {
 			due_date              TEXT,
 			assignee              TEXT,
 			permission_mode       TEXT NOT NULL DEFAULT 'auto' CHECK (permission_mode IN ('default','auto','bypass')),
-			model                 TEXT,
-			status_changed_at     TEXT,
-			session_provider      TEXT NOT NULL DEFAULT 'claude' CHECK (session_provider IN ('claude','codex')),
-			session_id            TEXT,
+				model                 TEXT,
+				status_changed_at     TEXT,
+				session_provider      TEXT NOT NULL DEFAULT 'claude' CHECK (session_provider IN ('claude','codex')),
+				harness               TEXT,
+				session_id            TEXT,
 			session_started       TEXT,
 			session_last_resumed  TEXT,
 			session_path          TEXT,
@@ -1878,18 +2013,18 @@ func migrateTasksSessionInvariant(db *sql.DB) error {
 	}
 
 	if _, err := tx.Exec(`
-		INSERT INTO tasks_new (
-			slug, name, project_slug, status, kind, playbook_slug, parent_slug, forked_from_slug, fork_reason, priority,
-			work_dir, waiting_on, due_date, assignee, permission_mode, model, status_changed_at,
-			session_provider, session_id, session_started, session_last_resumed,
-			session_path, worktree_path, inbox_seen_at, created_at, updated_at, archived_at, deleted_at
-		)
-		SELECT
-			slug, name, project_slug, status, kind, playbook_slug, parent_slug, forked_from_slug, fork_reason, priority,
-			work_dir, waiting_on, due_date, assignee, permission_mode, model, status_changed_at,
-			COALESCE(NULLIF(session_provider, ''), 'claude'), session_id, session_started, session_last_resumed,
-			session_path, worktree_path, inbox_seen_at, created_at, updated_at, archived_at, deleted_at
-		FROM tasks`); err != nil {
+			INSERT INTO tasks_new (
+				slug, name, project_slug, status, kind, playbook_slug, parent_slug, forked_from_slug, fork_reason, priority,
+				work_dir, waiting_on, due_date, assignee, permission_mode, model, status_changed_at,
+				session_provider, harness, session_id, session_started, session_last_resumed,
+				session_path, worktree_path, inbox_seen_at, created_at, updated_at, archived_at, deleted_at
+			)
+			SELECT
+				slug, name, project_slug, status, kind, playbook_slug, parent_slug, forked_from_slug, fork_reason, priority,
+				work_dir, waiting_on, due_date, assignee, permission_mode, model, status_changed_at,
+				COALESCE(NULLIF(session_provider, ''), 'claude'), harness, session_id, session_started, session_last_resumed,
+				session_path, worktree_path, inbox_seen_at, created_at, updated_at, archived_at, deleted_at
+			FROM tasks`); err != nil {
 		return fmt.Errorf("copy rows: %w", err)
 	}
 
@@ -2131,20 +2266,22 @@ func ListProjects(db *sql.DB, filter ProjectFilter) ([]*Project, error) {
 
 // ---------- task queries ----------
 
-const TaskCols = "slug, name, project_slug, status, kind, playbook_slug, parent_slug, forked_from_slug, fork_reason, priority, work_dir, waiting_on, due_date, assignee, permission_mode, model, status_changed_at, session_provider, session_id, session_started, session_last_resumed, session_path, worktree_path, inbox_seen_at, created_at, updated_at, archived_at, deleted_at, auto_run_status, auto_run_pid, auto_run_started, auto_run_finished, auto_run_log"
+const TaskCols = "slug, name, project_slug, status, kind, playbook_slug, parent_slug, forked_from_slug, fork_reason, priority, work_dir, waiting_on, due_date, assignee, permission_mode, model, status_changed_at, session_provider, harness, session_id, session_started, session_last_resumed, session_path, worktree_path, inbox_seen_at, created_at, updated_at, archived_at, deleted_at, auto_run_status, auto_run_pid, auto_run_started, auto_run_finished, auto_run_log"
 
 func ScanTask(row interface{ Scan(dest ...any) error }) (*Task, error) {
 	var t Task
+	var harness sql.NullString
 	err := row.Scan(
 		&t.Slug, &t.Name, &t.ProjectSlug, &t.Status, &t.Kind, &t.PlaybookSlug, &t.ParentSlug, &t.ForkedFromSlug, &t.ForkReason,
 		&t.Priority, &t.WorkDir,
-		&t.WaitingOn, &t.DueDate, &t.Assignee, &t.PermissionMode, &t.Model, &t.StatusChangedAt, &t.SessionProvider, &t.SessionID,
+		&t.WaitingOn, &t.DueDate, &t.Assignee, &t.PermissionMode, &t.Model, &t.StatusChangedAt, &t.SessionProvider, &harness, &t.SessionID,
 		&t.SessionStarted, &t.SessionLastResumed, &t.SessionPath, &t.WorktreePath, &t.InboxSeenAt, &t.CreatedAt, &t.UpdatedAt, &t.ArchivedAt, &t.DeletedAt,
 		&t.AutoRunStatus, &t.AutoRunPID, &t.AutoRunStarted, &t.AutoRunFinished, &t.AutoRunLog,
 	)
 	if err != nil {
 		return nil, err
 	}
+	t.Harness = harnessForScan(t.SessionProvider, harness)
 	return &t, nil
 }
 

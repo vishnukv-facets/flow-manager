@@ -6,6 +6,7 @@ import (
 	"flow/internal/agenthooks"
 	"flow/internal/agents"
 	"flow/internal/flowdb"
+	"flow/internal/harness"
 	"flow/internal/spawner"
 	"flow/internal/workdirreg"
 	"flow/internal/worktree"
@@ -70,6 +71,10 @@ func cmdDo(args []string) int {
 	auto := fs.Bool("auto", false, "run headlessly in the background (no tab, no human; Claude or Codex). The session self-completes via `flow done`")
 	withInstr := fs.String("with", "", "one-off instruction appended to the autonomous prompt (requires --auto)")
 	withFile := fs.String("with-file", "", "file whose contents are appended to the autonomous prompt (requires --auto)")
+	brainPlanFlag := fs.String("brain-plan", "", "brain plan id for scheduler attribution (requires --auto)")
+	brainItemFlag := fs.String("brain-item", "", "brain plan item id for scheduler attribution (requires --auto)")
+	brainTargetBranchFlag := fs.String("brain-target-branch", "", "brain scheduler target branch (requires --auto)")
+	brainInitiatedByFlag := fs.String("brain-initiated-by", "", "brain scheduler initiator (requires --auto)")
 	// Two-pass parse so the slug positional may appear before OR after
 	// the flags: first absorb any leading flags, then take the next
 	// non-flag as the slug, then absorb any trailing flags.
@@ -97,8 +102,18 @@ func cmdDo(args []string) int {
 		fmt.Fprintln(os.Stderr, "error: --auto cannot be used with --here (--auto launches its own detached session; --here binds the current one)")
 		return 2
 	}
-	if (*withInstr != "" || *withFile != "") && !*auto {
-		fmt.Fprintln(os.Stderr, "error: --with/--with-file currently require --auto")
+	if (*withInstr != "" || *withFile != "") && !*auto && !spawner.IsBackground() {
+		fmt.Fprintln(os.Stderr, "error: --with/--with-file currently require --auto or FLOW_TERM=bg")
+		return 2
+	}
+	launchMeta := autoRunLaunchMetadata{
+		PlanID:       *brainPlanFlag,
+		ItemID:       *brainItemFlag,
+		TargetBranch: *brainTargetBranchFlag,
+		InitiatedBy:  *brainInitiatedByFlag,
+	}
+	if launchMeta.hasAny() && !*auto {
+		fmt.Fprintln(os.Stderr, "error: --brain-* scheduler attribution flags require --auto")
 		return 2
 	}
 	if *withInstr != "" && *withFile != "" {
@@ -147,6 +162,13 @@ func cmdDo(args []string) int {
 	}
 	if requestedProvider != "" {
 		provider = requestedProvider
+	}
+	if spawner.IsBackground() {
+		if *auto {
+			fmt.Fprintln(os.Stderr, "error: FLOW_TERM=bg cannot be combined with --auto")
+			return 2
+		}
+		return cmdDoBackground(db, task, provider, *fresh, *force, *dangerSkip, injectionText)
 	}
 	if provider == sessionProviderCodex && !hasSessionID(task.SessionID) && task.SessionStarted.Valid && !*fresh {
 		if captured, err := agents.CaptureCodexSessionForTask(db, task.Slug, task.WorkDir, task.SessionStarted.String); err != nil {
@@ -290,13 +312,18 @@ func cmdDo(args []string) int {
 
 	now := flowdb.NowISO()
 	if needsBootstrap {
+		harnessName, err := harnessNameForProvider(provider)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "error: resolve harness: %v\n", err)
+			return 1
+		}
 		if provider == sessionProviderClaude {
 			if _, err := tx.Exec(
 				`UPDATE tasks SET status='in-progress',
-				 status_changed_at = CASE WHEN status != 'in-progress' THEN ? ELSE status_changed_at END,
-				 session_provider=?, session_id=?, session_started=?, updated_at=?
-				 WHERE slug=? AND status IN ('backlog','in-progress')`,
-				now, provider, sessionID, now, now, task.Slug,
+					 status_changed_at = CASE WHEN status != 'in-progress' THEN ? ELSE status_changed_at END,
+					 session_provider=?, harness=?, session_id=?, session_started=?, updated_at=?
+					 WHERE slug=? AND status IN ('backlog','in-progress')`,
+				now, provider, harnessName, sessionID, now, now, task.Slug,
 			); err != nil {
 				fmt.Fprintf(os.Stderr, "error: flip status: %v\n", err)
 				return 1
@@ -304,10 +331,10 @@ func cmdDo(args []string) int {
 		} else {
 			if _, err := tx.Exec(
 				`UPDATE tasks SET status='in-progress',
-				 status_changed_at = CASE WHEN status != 'in-progress' THEN ? ELSE status_changed_at END,
-				 session_provider=?, session_id=NULL, session_started=?, updated_at=?
-				 WHERE slug=? AND status IN ('backlog','in-progress')`,
-				now, provider, now, now, task.Slug,
+					 status_changed_at = CASE WHEN status != 'in-progress' THEN ? ELSE status_changed_at END,
+					 session_provider=?, harness=?, session_id=NULL, session_started=?, updated_at=?
+					 WHERE slug=? AND status IN ('backlog','in-progress')`,
+				now, provider, harnessName, now, now, task.Slug,
 			); err != nil {
 				fmt.Fprintf(os.Stderr, "error: flip status: %v\n", err)
 				return 1
@@ -466,8 +493,16 @@ func cmdDo(args []string) int {
 	if *dangerSkip {
 		permissionMode = "bypass"
 	}
-	if *auto && provider == sessionProviderClaude {
-		permissionMode = "bypass"
+	// Provider adapter: autonomous runs use provider-specific safe defaults.
+	// Claude: bypass (headless, no approval prompts — necessary for unattended execution).
+	// Codex: auto (headless, workspace-write sandbox — safer than bypass).
+	if *auto {
+		switch provider {
+		case sessionProviderClaude:
+			permissionMode = "bypass"
+		case sessionProviderCodex:
+			permissionMode = "auto"
+		}
 	}
 	if changed, err := agenthooks.InstallLocalWithOptions(cwd, agenthooks.InstallOptions{
 		CommandPath: flowCommandPathForSpawn(),
@@ -491,13 +526,49 @@ func cmdDo(args []string) int {
 			fmt.Fprintf(os.Stderr, "error: %v\n", err)
 			return 1
 		}
-		pid, logPath, err := launchAutoRun(task, root, cwd, provider, permissionMode, sessionModel, injectionText)
+		runID, err := newUUID()
 		if err != nil {
+			fmt.Fprintf(os.Stderr, "error: generate run id: %v\n", err)
+			return 1
+		}
+		familySlug := task.Slug
+		if rootSlug, ferr := flowdb.TaskFamilyRoot(db, task.Slug); ferr == nil {
+			familySlug = rootSlug
+		} else {
+			fmt.Fprintf(os.Stderr, "warning: resolve task family for %q: %v\n", task.Slug, ferr)
+		}
+		requestedModel := ""
+		if task.Model.Valid && task.Model.String != "" {
+			requestedModel = task.Model.String
+		}
+		run := newAutoBrainRun(task, familySlug, runID, provider, permissionMode, requestedModel, sessionModel, injectionText, sessionID, playbookSlug, launchMeta)
+		if err := flowdb.UpsertBrainRun(db, run); err != nil {
+			fmt.Fprintf(os.Stderr, "warning: record brain run start: %v\n", err)
+		}
+		pid, logPath, err := launchAutoRun(task, runID, root, cwd, provider, permissionMode, sessionModel, injectionText, launchMeta)
+		if err != nil {
+			now := flowdb.NowISO()
+			run.Status = "error"
+			run.FinishedAt = sql.NullString{String: now, Valid: true}
+			run.OutputJSON, run.EvidenceJSON, run.ErrorText = autoBrainRunResult(run, task, "error", err)
+			run.UpdatedAt = now
+			if upErr := flowdb.UpsertBrainRun(db, run); upErr != nil {
+				fmt.Fprintf(os.Stderr, "warning: finalize brain run %q after launch failure: %v\n", run.RunID, upErr)
+			}
 			if needsBootstrap {
 				rollbackAutoLaunchSession(db, task.Slug, provider, sessionID)
 			}
 			fmt.Fprintf(os.Stderr, "error: %v\n", err)
 			return 1
+		}
+		now := flowdb.NowISO()
+		run.Status = "running"
+		run.PID = sql.NullInt64{Int64: int64(pid), Valid: true}
+		run.LogPath = sql.NullString{String: logPath, Valid: true}
+		run.StartedAt = sql.NullString{String: now, Valid: true}
+		run.UpdatedAt = now
+		if upErr := flowdb.UpsertBrainRun(db, run); upErr != nil {
+			fmt.Fprintf(os.Stderr, "warning: update brain run %q launch metadata: %v\n", run.RunID, upErr)
 		}
 		if err := recordAutoRunLaunched(db, task.Slug, pid, logPath); err != nil {
 			fmt.Fprintf(os.Stderr, "warning: record auto run: %v\n", err)
@@ -655,6 +726,170 @@ func rollbackAutoLaunchSession(db *sql.DB, slug, provider, sessionID string) {
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "warning: rollback auto launch session: %v\n", err)
 	}
+}
+
+func cmdDoBackground(db *sql.DB, task *flowdb.Task, provider string, fresh, force, dangerSkip bool, injectionText string) int {
+	if task.Status == "done" {
+		fmt.Fprintf(os.Stderr,
+			"error: task %q is done; edit its status back to backlog or in-progress before running it in the background\n",
+			task.Slug)
+		return 1
+	}
+	h, err := harnessByName(provider)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "error: %v\n", err)
+		return 1
+	}
+	bg, err := backgroundLauncherFor(h)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "error: %v\n", err)
+		return 1
+	}
+	if task.WorkDir == "" {
+		fmt.Fprintf(os.Stderr, "error: task %q has no work_dir\n", task.Slug)
+		return 1
+	}
+
+	var project *flowdb.Project
+	if task.ProjectSlug.Valid {
+		p, err := flowdb.GetProject(db, task.ProjectSlug.String)
+		if err != nil && !errors.Is(err, sql.ErrNoRows) {
+			fmt.Fprintf(os.Stderr, "error: get project: %v\n", err)
+			return 1
+		}
+		project = p
+	}
+
+	cwd := task.WorkDir
+	wt, wtErr := worktree.Ensure(task.WorkDir, provider, task.Slug)
+	if wtErr != nil {
+		fmt.Fprintf(os.Stderr, "error: worktree setup failed: %v\n", wtErr)
+		return 1
+	}
+	if wt.IsRepo {
+		cwd = wt.WorktreePath
+		if _, err := db.Exec(
+			`UPDATE tasks SET worktree_path = ?, updated_at = ? WHERE slug = ?`,
+			wt.WorktreePath, flowdb.NowISO(), task.Slug,
+		); err != nil {
+			fmt.Fprintf(os.Stderr, "error: persist worktree_path: %v\n", err)
+			return 1
+		}
+		task.WorktreePath = sql.NullString{String: wt.WorktreePath, Valid: true}
+		if wt.Created {
+			fmt.Printf("Created worktree %s on branch %s (from %s)\n", wt.WorktreePath, wt.Branch, wt.BaseBranch)
+		}
+	}
+
+	if changed, err := agenthooks.InstallLocalWithOptions(cwd, agenthooks.InstallOptions{
+		CommandPath: flowCommandPathForSpawn(),
+		HookURL:     os.Getenv("FLOW_HOOK_URL"),
+	}); err != nil {
+		fmt.Fprintf(os.Stderr, "warning: install local agent hooks: %v\n", err)
+	} else if changed {
+		fmt.Fprintf(os.Stderr, "installed local agent hooks in %s\n", cwd)
+	}
+
+	playbookSlug := ""
+	isFirstRun := false
+	if task.PlaybookSlug.Valid {
+		playbookSlug = task.PlaybookSlug.String
+		var runCount int
+		if err := db.QueryRow(
+			`SELECT COUNT(*) FROM tasks WHERE playbook_slug = ? AND kind = 'playbook_run' AND archived_at IS NULL AND deleted_at IS NULL`,
+			playbookSlug,
+		).Scan(&runCount); err != nil {
+			fmt.Fprintf(os.Stderr, "warning: count playbook runs: %v\n", err)
+		}
+		isFirstRun = runCount <= 1
+	}
+	prompt := buildBootstrapPromptForKindV2(task.Slug, task.Kind, playbookSlug, isFirstRun)
+	if task.Kind != "playbook_run" {
+		if note := flowdb.DependencyBootstrapNote(db, task.Slug); note != "" {
+			prompt += "\n\n" + note
+		}
+	}
+
+	permissionMode := task.PermissionMode
+	if permissionMode == "" {
+		permissionMode = flowdb.DefaultPermissionMode
+	}
+	if dangerSkip {
+		permissionMode = "bypass"
+	}
+	needsBootstrap := fresh || !hasSessionID(task.SessionID)
+	sessionModel := resolveLaunchModel(provider, task, needsBootstrap)
+	opts := harness.LaunchOpts{
+		PermissionMode: permissionMode,
+		Model:          sessionModel,
+		Inject:         injectionText,
+	}
+
+	var agent harness.BackgroundAgent
+	action := "Spawned"
+	if !needsBootstrap {
+		if existing := backgroundAgentForSession(bg, task.SessionID.String); existing != nil && existing.PID > 0 && !force {
+			fmt.Printf("Already running in background: %s (%s pid %d, %s/%s)\n",
+				task.Slug, existing.ShortID, existing.PID, existing.Status, existing.State)
+			return 0
+		}
+		agent, err = bg.ResumeBackground(cwd, task.SessionID.String, opts)
+		action = "Resumed"
+	} else {
+		if fresh && task.SessionID.Valid {
+			fmt.Printf("--fresh: discarding old session %s\n", task.SessionID.String)
+		}
+		agent, err = bg.SpawnBackground(cwd, buildTabTitle(project, task), prompt, opts)
+	}
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "error: %v\n", err)
+		return 1
+	}
+	if agent.SessionID == "" {
+		fmt.Fprintln(os.Stderr, "error: background harness did not return a session id")
+		return 1
+	}
+
+	now := flowdb.NowISO()
+	if needsBootstrap {
+		_, err = db.Exec(
+			`UPDATE tasks SET status='in-progress',
+			 status_changed_at = CASE WHEN status != 'in-progress' THEN ? ELSE status_changed_at END,
+			 session_provider=?, harness=?, session_id=?, session_started=?, session_last_resumed=NULL, updated_at=?
+			 WHERE slug=? AND status IN ('backlog','in-progress')`,
+			now, provider, string(h.Name()), agent.SessionID, now, now, task.Slug,
+		)
+	} else {
+		_, err = db.Exec(
+			`UPDATE tasks SET status='in-progress',
+			 status_changed_at = CASE WHEN status != 'in-progress' THEN ? ELSE status_changed_at END,
+			 session_provider=?, harness=?, session_id=?, session_last_resumed=?, updated_at=?
+			 WHERE slug=? AND status IN ('backlog','in-progress')`,
+			now, provider, string(h.Name()), agent.SessionID, now, now, task.Slug,
+		)
+	}
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "error: record background session: %v\n", err)
+		return 1
+	}
+	if err := workdirreg.Touch(db, task.WorkDir); err != nil {
+		fmt.Fprintf(os.Stderr, "warning: bump workdir last_used_at: %v\n", err)
+	}
+	fmt.Printf("%s background session for %s (%s, pid %d)\n", action, task.Slug, agent.SessionID, agent.PID)
+	return 0
+}
+
+func backgroundAgentForSession(bg harness.BackgroundLauncher, sessionID string) *harness.BackgroundAgent {
+	agents, err := bg.BackgroundAgents()
+	if err != nil {
+		return nil
+	}
+	for i := range agents {
+		if strings.EqualFold(agents[i].SessionID, sessionID) {
+			return &agents[i]
+		}
+	}
+	return nil
 }
 
 // buildBootstrapPromptForKind dispatches to the right prompt variant
@@ -925,13 +1160,14 @@ func cmdDoHere(query string, force bool, requestedProvider string) int {
 	res, err := db.Exec(
 		`UPDATE tasks SET
 			session_provider = ?,
+			harness         = ?,
 			session_id      = ?,
 			session_started = COALESCE(session_started, ?),
 			status          = 'in-progress',
 			status_changed_at = CASE WHEN status != 'in-progress' THEN ? ELSE status_changed_at END,
 			updated_at      = ?
 		WHERE slug = ?`,
-		session.Provider, session.ID, now, now, now, task.Slug,
+		session.Provider, session.Provider, session.ID, now, now, now, task.Slug,
 	)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "error: bind session: %v\n", err)

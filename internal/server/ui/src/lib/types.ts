@@ -22,6 +22,60 @@ export interface WorkdirKnown {
   git_remote?: string
 }
 
+export interface OwnerView {
+  slug: string
+  name: string
+  work_dir: string
+  workdir_known: WorkdirKnown | null
+  project_slug?: string | null
+  status: string
+  every: string
+  next_wake_at?: string | null
+  next_due: boolean
+  last_tick_at?: string | null
+  last_tick_status?: string | null
+  tick_pid?: number
+  tick_started?: string | null
+  harness: string
+  created_at: string
+  updated_at: string
+  archived_at?: string | null
+  charter_path?: string
+}
+
+export interface OwnerJournalNote {
+  filename: string
+  path: string
+  mtime: string
+  content: string
+}
+
+export interface OwnerTaskRow {
+  slug: string
+  name: string
+  status: string
+  priority: string
+  auto_run_status?: string | null
+  worktree_path?: string | null
+  has_session: boolean
+  is_question: boolean
+}
+
+export interface OwnerTickRecord {
+  filename: string
+  path: string
+  started_at: string
+  status: string
+  content: string
+}
+
+export interface OwnerDetailView extends OwnerView {
+  journal: OwnerJournalNote[]
+  tasks: OwnerTaskRow[]
+  ticks: OwnerTickRecord[]
+  tick_log_tail?: string
+}
+
 export interface TaskView {
   slug: string
   name: string
@@ -50,6 +104,7 @@ export interface TaskView {
   tags: string[]
   session_id: string | null
   session_provider: string | null
+  harness?: string | null
   session_started: string | null
   session_last_resumed: string | null
   live: boolean
@@ -72,6 +127,194 @@ export interface TaskView {
   updates: FileRef[]
   aux_files: FileRef[]
   transcript_available: boolean
+}
+
+export interface BrainRunView {
+  run_id: string
+  family_slug: string
+  task_slug: string
+  task_name?: string
+  task_status?: string
+  plan_id?: string | null
+  role: string
+  provider: string
+  requested_model?: string | null
+  requested_tier?: string | null
+  resolved_model?: string | null
+  permission_mode: string
+  status: string
+  pid?: number | null
+  session_id?: string | null
+  log_path?: string | null
+  input_summary?: string | null
+  output_json?: unknown
+  evidence_json?: unknown
+  error_text?: string | null
+  started_at?: string | null
+  finished_at?: string | null
+  created_at: string
+  updated_at: string
+  legacy?: boolean
+}
+
+export interface BrainRunsResponse {
+  task_slug: string
+  family_slug: string
+  runs: BrainRunView[]
+}
+
+export type BrainGraphNodeType =
+  | 'task'
+  | 'worker_run'
+  | 'validator_run'
+  | 'steward_run'
+  | 'approval'
+  | 'transcript_ref'
+  | 'github_ref'
+  | 'event'
+  | 'transcript'
+  | 'log'
+  | 'pr'
+  | 'closeout'
+  | 'owner'
+  | (string & {})
+
+export interface BrainGraphView {
+  generated_at: string
+  freshness: string
+  controller: BrainGraphController
+  owners: BrainGraphOwnerView[]
+  nodes: BrainGraphNode[]
+  edges: BrainGraphEdge[]
+  counts: BrainGraphCounts
+  selected_actions: BrainGraphActionSpec[]
+  warnings: BrainGraphWarning[]
+}
+
+export interface BrainGraphController {
+  mode: string
+  display_name: string
+  status: string
+}
+
+export interface BrainGraphOwnerView {
+  id: string
+  slug: string
+  name: string
+  status: string
+  task_count: number
+  running_count: number
+}
+
+export interface BrainGraphNode extends Record<string, unknown> {
+  id: string
+  type: BrainGraphNodeType
+  owner_slug?: string
+  task_slug?: string
+  parent_task_slug?: string
+  label: string
+  status: string
+  priority?: string
+  provider?: string
+  harness?: string
+  permission_mode?: string
+  model?: string
+  summary?: string
+  expanded: boolean
+  ref?: BrainGraphRef
+  badges?: string[]
+  actions?: string[]
+  metadata?: Record<string, string>
+}
+
+export interface BrainGraphRef {
+  kind: string
+  id: string
+  url?: string
+}
+
+export interface BrainGraphEdge {
+  id: string
+  type: string
+  source: string
+  target: string
+  label?: string
+  status?: string
+}
+
+export interface BrainGraphCounts {
+  total_tasks: number
+  running: number
+  done: number
+  owners: number
+  warnings: number
+}
+
+export interface BrainGraphActionSpec {
+  key: string
+  label: string
+  risky: boolean
+  enabled: boolean
+  disabled_reason?: string
+}
+
+export interface BrainGraphWarning {
+  code: string
+  message: string
+  node_id?: string
+}
+
+export interface BrainGraphNodeDetail {
+  id: string
+  type: BrainGraphNodeType
+  task?: BrainGraphTaskDetail
+  evidence?: BrainGraphEvidenceDetail
+}
+
+export interface BrainGraphTaskDetail {
+  slug: string
+  name: string
+  status: string
+  priority: string
+  project_slug?: string | null
+  parent_slug?: string | null
+  work_dir: string
+  worktree_path?: string | null
+  session_provider: string
+  harness: string
+  permission_mode: string
+  model?: string | null
+  session_id?: string | null
+  session_path?: string | null
+  transcript?: BrainGraphEvidenceDetail
+  brief_path: string
+  updates: FileRef[]
+}
+
+export interface BrainGraphEvidenceDetail {
+  kind: string
+  task_slug?: string
+  ref_id?: string
+  path?: string | null
+  url?: string | null
+  available: boolean
+  message?: string
+}
+
+export interface BrainGraphActionRequest {
+  action: string
+  node_id: string
+  prompt?: string
+  actor?: string
+}
+
+export interface BrainGraphActionResponse {
+  ok: boolean
+  message: string
+  action?: string
+  node_id?: string
+  output?: string
+  action_response?: ActionResponse
 }
 
 export interface TaskCounts {
@@ -377,6 +620,20 @@ export interface UiAgent {
   aux_files?: FileRef[]
   terminal: { mode?: string; message?: string }
   monitored: boolean
+  auto_run_status?: string
+  auto_run_started?: string
+  auto_run_finished?: string
+  auto_run_log?: string
+}
+
+export interface AutoRunFile {
+  file: string
+  size: number
+  modified: string
+}
+export interface AutoRunLogResponse {
+  content: string
+  truncated?: boolean
 }
 
 export interface ToolCapability {

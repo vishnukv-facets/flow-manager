@@ -767,9 +767,10 @@ func (s *Server) createFlowFromExisting(req actionRequest, task *flowdb.Task, pr
 			work_dir = ?,
 			waiting_on = NULL,
 			permission_mode = ?,
-			status_changed_at = ?,
-			session_provider = ?,
-			session_id = NULL,
+				status_changed_at = ?,
+				session_provider = ?,
+				harness = ?,
+				session_id = NULL,
 			session_started = NULL,
 			session_last_resumed = NULL,
 			updated_at = ?,
@@ -782,6 +783,7 @@ func (s *Server) createFlowFromExisting(req actionRequest, task *flowdb.Task, pr
 		workDir,
 		permissionMode,
 		now,
+		provider,
 		provider,
 		now,
 		task.Slug,
@@ -1383,9 +1385,9 @@ func (s *Server) applyBacklogProviderChoice(target, rawProvider string) error {
 	}
 	now := flowdb.NowISO()
 	_, err = s.cfg.DB.Exec(
-		`UPDATE tasks SET session_provider = ?, updated_at = ?
-		 WHERE slug = ? AND status = 'backlog' AND session_id IS NULL AND session_started IS NULL`,
-		provider, now, target,
+		`UPDATE tasks SET session_provider = ?, harness = ?, updated_at = ?
+			 WHERE slug = ? AND status = 'backlog' AND session_id IS NULL AND session_started IS NULL`,
+		provider, provider, now, target,
 	)
 	return err
 }
@@ -1448,15 +1450,16 @@ func (s *Server) createPlaybookRunTask(pb *flowdb.Playbook, provider, permission
 	now := flowdb.NowISO()
 	_, err = s.cfg.DB.Exec(
 		`INSERT INTO tasks (
-			slug, name, project_slug, status, kind, playbook_slug, priority,
-			work_dir, permission_mode, session_provider, status_changed_at, created_at, updated_at
-		) VALUES (?, ?, ?, 'backlog', 'playbook_run', ?, 'medium', ?, ?, ?, ?, ?, ?)`,
+				slug, name, project_slug, status, kind, playbook_slug, priority,
+				work_dir, permission_mode, session_provider, harness, status_changed_at, created_at, updated_at
+			) VALUES (?, ?, ?, 'backlog', 'playbook_run', ?, 'medium', ?, ?, ?, ?, ?, ?, ?)`,
 		runSlug,
 		fmt.Sprintf("%s run %s", pb.Slug, runSlug),
 		pb.ProjectSlug,
 		pb.Slug,
 		pb.WorkDir,
 		permissionMode,
+		provider,
 		provider,
 		now, now, now,
 	)

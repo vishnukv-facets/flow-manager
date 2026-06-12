@@ -2,6 +2,7 @@ package server
 
 import (
 	"database/sql"
+	"encoding/json"
 	"flow/internal/briefing"
 	"net/http"
 	"sync"
@@ -159,6 +160,69 @@ type WorkdirKnown struct {
 	GitRemote *string `json:"git_remote,omitempty"`
 }
 
+type OwnerView struct {
+	Slug           string        `json:"slug"`
+	Name           string        `json:"name"`
+	WorkDir        string        `json:"work_dir"`
+	WorkdirKnown   *WorkdirKnown `json:"workdir_known"`
+	ProjectSlug    *string       `json:"project_slug,omitempty"`
+	Status         string        `json:"status"`
+	Every          string        `json:"every"`
+	NextWakeAt     *string       `json:"next_wake_at,omitempty"`
+	NextDue        bool          `json:"next_due"`
+	LastTickAt     *string       `json:"last_tick_at,omitempty"`
+	LastTickStatus *string       `json:"last_tick_status,omitempty"`
+	TickPID        *int64        `json:"tick_pid,omitempty"`
+	TickStarted    *string       `json:"tick_started,omitempty"`
+	Harness        string        `json:"harness"`
+	CreatedAt      string        `json:"created_at"`
+	UpdatedAt      string        `json:"updated_at"`
+	ArchivedAt     *string       `json:"archived_at,omitempty"`
+	CharterPath    string        `json:"charter_path,omitempty"`
+}
+
+// OwnerJournalNote is one dated note the owner wrote under owners/<slug>/updates/.
+type OwnerJournalNote struct {
+	Filename string `json:"filename"`
+	Path     string `json:"path"`
+	MTime    string `json:"mtime"`
+	Content  string `json:"content"`
+}
+
+// OwnerTaskRow is a compact, live view of one task the owner controls
+// (tagged owner:<slug>) — enough to show what a tick dispatched and where it is.
+type OwnerTaskRow struct {
+	Slug          string  `json:"slug"`
+	Name          string  `json:"name"`
+	Status        string  `json:"status"`
+	Priority      string  `json:"priority"`
+	AutoRunStatus *string `json:"auto_run_status,omitempty"`
+	WorktreePath  *string `json:"worktree_path,omitempty"`
+	HasSession    bool    `json:"has_session"`
+	IsQuestion    bool    `json:"is_question"`
+}
+
+// OwnerTickRecord is one past tick the owner ran — its streamed activity log,
+// kept on disk under owners/<slug>/ticks/, so each tick stays revisitable.
+type OwnerTickRecord struct {
+	Filename  string `json:"filename"`
+	Path      string `json:"path"`
+	StartedAt string `json:"started_at"`
+	Status    string `json:"status"`
+	Content   string `json:"content"`
+}
+
+// OwnerDetailView is the single-owner payload: the base view plus the
+// observability surface (journal notes, owned-task status, tick history, and
+// the latest tick log for the live-stream view while a tick is running).
+type OwnerDetailView struct {
+	OwnerView
+	Journal     []OwnerJournalNote `json:"journal"`
+	Tasks       []OwnerTaskRow     `json:"tasks"`
+	Ticks       []OwnerTickRecord  `json:"ticks"`
+	TickLogTail string             `json:"tick_log_tail,omitempty"`
+}
+
 type TaskView struct {
 	Slug                string        `json:"slug"`
 	Name                string        `json:"name"`
@@ -187,6 +251,7 @@ type TaskView struct {
 	Tags                []string      `json:"tags"`
 	SessionID           *string       `json:"session_id"`
 	SessionProvider     *string       `json:"session_provider"`
+	Harness             *string       `json:"harness,omitempty"`
 	SessionStarted      *string       `json:"session_started"`
 	SessionLastResumed  *string       `json:"session_last_resumed"`
 	SessionPath         *string       `json:"session_path,omitempty"`
@@ -211,6 +276,43 @@ type TaskView struct {
 	Updates             []FileRef     `json:"updates"`
 	AuxFiles            []FileRef     `json:"aux_files"`
 	TranscriptAvailable bool          `json:"transcript_available"`
+}
+
+// BrainRunView is one persisted or compatibility run ledger row as surfaced to
+// the UI. The list endpoint returns the summary fields; the detail endpoint
+// also fills the JSON evidence payloads.
+type BrainRunView struct {
+	RunID          string          `json:"run_id"`
+	FamilySlug     string          `json:"family_slug"`
+	TaskSlug       string          `json:"task_slug"`
+	TaskName       string          `json:"task_name,omitempty"`
+	TaskStatus     string          `json:"task_status,omitempty"`
+	PlanID         *string         `json:"plan_id,omitempty"`
+	Role           string          `json:"role"`
+	Provider       string          `json:"provider"`
+	RequestedModel *string         `json:"requested_model,omitempty"`
+	RequestedTier  *string         `json:"requested_tier,omitempty"`
+	ResolvedModel  *string         `json:"resolved_model,omitempty"`
+	PermissionMode string          `json:"permission_mode"`
+	Status         string          `json:"status"`
+	PID            *int64          `json:"pid,omitempty"`
+	SessionID      *string         `json:"session_id,omitempty"`
+	LogPath        *string         `json:"log_path,omitempty"`
+	InputSummary   *string         `json:"input_summary,omitempty"`
+	OutputJSON     json.RawMessage `json:"output_json,omitempty"`
+	EvidenceJSON   json.RawMessage `json:"evidence_json,omitempty"`
+	ErrorText      *string         `json:"error_text,omitempty"`
+	StartedAt      *string         `json:"started_at,omitempty"`
+	FinishedAt     *string         `json:"finished_at,omitempty"`
+	CreatedAt      string          `json:"created_at"`
+	UpdatedAt      string          `json:"updated_at"`
+	Legacy         bool            `json:"legacy,omitempty"`
+}
+
+type BrainRunsResponse struct {
+	TaskSlug   string         `json:"task_slug"`
+	FamilySlug string         `json:"family_slug"`
+	Runs       []BrainRunView `json:"runs"`
 }
 
 // InboxEntry is one parsed message from a task's inbox.md.

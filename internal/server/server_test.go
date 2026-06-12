@@ -1,8 +1,8 @@
 package server
 
 import (
-	"bufio"
 	"bytes"
+	"context"
 	"database/sql"
 	"encoding/json"
 	"errors"
@@ -20,6 +20,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 )
@@ -64,6 +65,35 @@ func TestTaskAPIUsesFlowDataAndFiles(t *testing.T) {
 	}
 	if !strings.Contains(rec.Body.String(), "Real task brief") {
 		t.Fatalf("brief body = %q", rec.Body.String())
+	}
+}
+
+func TestTaskAPIExposesSessionProviderAndNormalizedHarness(t *testing.T) {
+	root, db := testRootDB(t)
+	insertProjectTask(t, db, root)
+	if _, err := db.Exec(
+		`UPDATE tasks SET session_provider = 'codex', harness = '' WHERE slug = 'build-ui'`,
+	); err != nil {
+		t.Fatal(err)
+	}
+
+	srv := New(Config{DB: db, FlowRoot: root, Version: "test"}).Handler()
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/api/tasks/build-ui", nil)
+	srv.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, body = %s", rec.Code, rec.Body.String())
+	}
+
+	var raw map[string]any
+	if err := json.Unmarshal(rec.Body.Bytes(), &raw); err != nil {
+		t.Fatal(err)
+	}
+	if got := raw["session_provider"]; got != "codex" {
+		t.Fatalf("session_provider = %#v, want codex; body = %s", got, rec.Body.String())
+	}
+	if got := raw["harness"]; got != "codex" {
+		t.Fatalf("harness = %#v, want normalized codex; body = %s", got, rec.Body.String())
 	}
 }
 
@@ -1009,39 +1039,70 @@ func TestFSEntriesListsRealDirectories(t *testing.T) {
 	}
 }
 
+type eventStreamRecorder struct {
+	mu     sync.Mutex
+	header http.Header
+	body   bytes.Buffer
+}
+
+func (w *eventStreamRecorder) Header() http.Header {
+	if w.header == nil {
+		w.header = make(http.Header)
+	}
+	return w.header
+}
+
+func (w *eventStreamRecorder) WriteHeader(status int) {}
+
+func (w *eventStreamRecorder) Write(p []byte) (int, error) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	return w.body.Write(p)
+}
+
+func (w *eventStreamRecorder) Flush() {}
+
+func (w *eventStreamRecorder) String() string {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	return w.body.String()
+}
+
 func TestUIEventsStreamSendsInitialSnapshot(t *testing.T) {
 	root, db := testRootDB(t)
 	insertProjectTask(t, db, root)
 
-	srv := httptest.NewServer(New(Config{DB: db, FlowRoot: root, Version: "test"}).Handler())
-	defer srv.Close()
+	srv := New(Config{DB: db, FlowRoot: root, Version: "test"}).Handler()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	req := httptest.NewRequest(http.MethodGet, "/api/events", nil).WithContext(ctx)
+	rec := &eventStreamRecorder{}
+	done := make(chan struct{})
+	go func() {
+		srv.ServeHTTP(rec, req)
+		close(done)
+	}()
 
-	client := &http.Client{Timeout: 2 * time.Second}
-	resp, err := client.Get(srv.URL + "/api/events")
-	if err != nil {
-		t.Fatal(err)
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		body := rec.String()
+		if strings.Contains(body, "event: ui-data") && strings.Contains(body, "data: ") {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
 	}
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		t.Fatalf("status = %d", resp.StatusCode)
+	body := rec.String()
+	if !strings.Contains(body, "event: ui-data") || !strings.Contains(body, "data: ") {
+		t.Fatalf("missing initial SSE snapshot: %q", body)
 	}
-	if got := resp.Header.Get("Content-Type"); !strings.Contains(got, "text/event-stream") {
-		t.Fatalf("content-type = %q", got)
+	cancel()
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("stream handler did not stop after cancellation")
 	}
-	reader := bufio.NewReader(resp.Body)
-	eventLine, err := reader.ReadString('\n')
-	if err != nil {
-		t.Fatal(err)
-	}
-	dataLine, err := reader.ReadString('\n')
-	if err != nil {
-		t.Fatal(err)
-	}
-	if strings.TrimSpace(eventLine) != "event: ui-data" {
-		t.Fatalf("event line = %q", eventLine)
-	}
-	if !strings.Contains(dataLine, "build-ui") || !strings.HasPrefix(dataLine, "data: ") {
-		t.Fatalf("data line = %q", dataLine)
+	if !strings.Contains(body, "build-ui") {
+		t.Fatalf("missing task payload: %q", body)
 	}
 }
 

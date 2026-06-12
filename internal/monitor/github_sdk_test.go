@@ -7,13 +7,12 @@ import (
 	"crypto/x509"
 	"encoding/pem"
 	"net/http"
-	"net/http/httptest"
 	"strings"
 	"testing"
 )
 
 func TestListGitHubAppInstallations_ReturnsPersonalAndOrg(t *testing.T) {
-	stub := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	useMockHTTPTransport(t, func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/app/installations" {
 			http.NotFound(w, r)
 			return
@@ -24,9 +23,8 @@ func TestListGitHubAppInstallations_ReturnsPersonalAndOrg(t *testing.T) {
 			{"id": 11, "account": {"login": "vishnukv-facets", "type": "User"}},
 			{"id": 22, "account": {"login": "Facets-cloud", "type": "Organization"}}
 		]`))
-	}))
-	defer stub.Close()
-	t.Setenv("FLOW_GH_API_BASE_URL", stub.URL)
+	})
+	t.Setenv("FLOW_GH_API_BASE_URL", "https://github.test")
 	t.Setenv("FLOW_GH_APP_ID", "12345")
 	t.Setenv("FLOW_GH_APP_PEM", testRSAKeyPEM(t))
 
@@ -105,7 +103,7 @@ func TestNewGitHubInstallationClient_NoAppReturnsNotOK(t *testing.T) {
 
 func TestNewGitHubInstallationClient_MintsTokenAndAuthenticates(t *testing.T) {
 	var sawAuth string
-	stub := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	useMockHTTPTransport(t, func(w http.ResponseWriter, r *http.Request) {
 		if strings.HasSuffix(r.URL.Path, "/access_tokens") {
 			w.WriteHeader(http.StatusCreated)
 			_, _ = w.Write([]byte(`{"token":"ghs_minted","expires_at":"2099-01-01T00:00:00Z","permissions":{}}`))
@@ -113,13 +111,12 @@ func TestNewGitHubInstallationClient_MintsTokenAndAuthenticates(t *testing.T) {
 		}
 		sawAuth = r.Header.Get("Authorization")
 		_, _ = w.Write([]byte(`[]`))
-	}))
-	defer stub.Close()
+	})
 
 	t.Setenv("FLOW_GH_APP_ID", "123")
 	t.Setenv("FLOW_GH_APP_PEM", testRSAKeyPEM(t))
 	t.Setenv("FLOW_GH_INSTALLATION_IDS", "456")
-	t.Setenv("FLOW_GH_API_BASE_URL", stub.URL)
+	t.Setenv("FLOW_GH_API_BASE_URL", "https://github.test")
 
 	client, ok, err := newGitHubInstallationClient()
 	if err != nil || !ok {

@@ -16,6 +16,8 @@ const BADGE_TONE: Record<string, string> = {
   stale: 'danger',
   released: '',
 }
+const AUTO_TONE: Record<string, string> = { running: 'ok', completed: 'info', dead: 'danger' }
+const AUTO_DOT: Record<string, string> = { running: 'running', completed: 'done', dead: 'stale' }
 const STATUS_LABEL: Record<string, string> = {
   dead: 'crashed',
   stale: 'stalled',
@@ -90,6 +92,15 @@ export function AgentCard({
           <StatusDot status={badgeStatus} />
           {isDone ? 'done' : STATUS_LABEL[agent.status] ?? agent.status}
         </span>
+        {agent.auto_run_status && (
+          <span
+            className={`badge ${AUTO_TONE[agent.auto_run_status] ?? ''}`}
+            title={agent.auto_run_status === 'dead' ? 'Autonomous run died — needs eyes' : 'Autonomous run'}
+          >
+            <StatusDot status={AUTO_DOT[agent.auto_run_status] ?? 'idle'} />
+            auto: {agent.auto_run_status}
+          </span>
+        )}
         {canRestart && (
           <button
             type="button"

@@ -1333,9 +1333,10 @@ func (s *Server) prepareTerminalLaunch(slug string) (terminalLaunch, error) {
 				kind = 'regular',
 				playbook_slug = NULL,
 				work_dir = ?,
-				waiting_on = NULL,
-				session_provider = 'claude',
-				session_id = NULL,
+					waiting_on = NULL,
+					session_provider = 'claude',
+					harness = 'claude',
+					session_id = NULL,
 				session_started = NULL,
 				session_last_resumed = NULL,
 				status_changed_at = ?,
@@ -1386,9 +1387,10 @@ func (s *Server) prepareTerminalLaunch(slug string) (terminalLaunch, error) {
 			if _, err := tx.Exec(
 				`UPDATE tasks SET
 					status = 'in-progress',
-					status_changed_at = ?,
-					session_provider = 'codex',
-					session_id = NULL,
+						status_changed_at = ?,
+						session_provider = 'codex',
+						harness = 'codex',
+						session_id = NULL,
 					session_started = ?,
 					updated_at = ?
 				 WHERE slug = ?`,
@@ -1401,9 +1403,10 @@ func (s *Server) prepareTerminalLaunch(slug string) (terminalLaunch, error) {
 			if _, err := tx.Exec(
 				`UPDATE tasks SET
 					status = 'in-progress',
-					status_changed_at = ?,
-					session_provider = 'claude',
-					session_id = ?,
+						status_changed_at = ?,
+						session_provider = 'claude',
+						harness = 'claude',
+						session_id = ?,
 					session_started = ?,
 					updated_at = ?
 				 WHERE slug = ?`,

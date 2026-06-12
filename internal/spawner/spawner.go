@@ -32,6 +32,7 @@ import (
 	"flow/internal/terminal"
 	"flow/internal/warp"
 	"flow/internal/zellij"
+	"fmt"
 	"os"
 )
 
@@ -45,6 +46,7 @@ const (
 	BackendKitty    Backend = "kitty"
 	BackendWarp     Backend = "warp"
 	BackendGhostty  Backend = "ghostty"
+	BackendBG       Backend = "bg"
 )
 
 // Override, if non-empty, forces a backend regardless of env vars.
@@ -66,7 +68,7 @@ func Detect() Backend {
 	}
 	if v := os.Getenv("FLOW_TERM"); v != "" {
 		switch Backend(v) {
-		case BackendITerm, BackendTerminal, BackendZellij, BackendKitty, BackendWarp, BackendGhostty:
+		case BackendITerm, BackendTerminal, BackendZellij, BackendKitty, BackendWarp, BackendGhostty, BackendBG:
 			return Backend(v)
 		}
 	}
@@ -87,6 +89,10 @@ func Detect() Backend {
 	}
 }
 
+func IsBackground() bool {
+	return Detect() == BackendBG
+}
+
 // SpawnTab opens a tab in the auto-detected backend. The contract
 // matches iterm.SpawnTab, terminal.SpawnTab, zellij.SpawnTab,
 // kitty.SpawnTab, and warp.SpawnTab.
@@ -102,6 +108,8 @@ func SpawnTab(title, cwd, command string, envVars map[string]string) error {
 		return terminal.SpawnTab(title, cwd, command, envVars)
 	case BackendGhostty:
 		return ghostty.SpawnTab(title, cwd, command, envVars)
+	case BackendBG:
+		return fmt.Errorf("FLOW_TERM=bg is handled by the app harness, not terminal spawning")
 	default:
 		return iterm.SpawnTab(title, cwd, command, envVars)
 	}

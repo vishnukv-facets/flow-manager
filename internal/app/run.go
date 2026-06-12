@@ -97,9 +97,14 @@ func cmdRunPlaybook(args []string) int {
 	if sessionProvider == "" {
 		sessionProvider = sessionProviderClaude
 	}
+	harnessName, err := harnessNameForProvider(sessionProvider)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "error: %v\n", err)
+		return 2
+	}
 	_, err = db.Exec(
-		`INSERT INTO tasks (slug, name, project_slug, status, kind, playbook_slug, priority, work_dir, permission_mode, session_provider, status_changed_at, created_at, updated_at)
-		 VALUES (?, ?, ?, 'backlog', 'playbook_run', ?, 'medium', ?, ?, ?, ?, ?, ?)`,
+		`INSERT INTO tasks (slug, name, project_slug, status, kind, playbook_slug, priority, work_dir, permission_mode, session_provider, harness, status_changed_at, created_at, updated_at)
+		 VALUES (?, ?, ?, 'backlog', 'playbook_run', ?, 'medium', ?, ?, ?, ?, ?, ?, ?)`,
 		runSlug,
 		fmt.Sprintf("%s run %s", pb.Slug, runSlug),
 		pb.ProjectSlug,
@@ -107,6 +112,7 @@ func cmdRunPlaybook(args []string) int {
 		pb.WorkDir,
 		flowdb.DefaultPermissionMode,
 		sessionProvider,
+		harnessName,
 		now, now, now,
 	)
 	if err != nil {

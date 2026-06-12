@@ -94,7 +94,14 @@ func RepoRoot(workDir string) string {
 	return root
 }
 
-// BaseBranch picks the branch flow worktrees branch off of. Order:
+// BaseBranch picks the branch flow worktrees branch off of.
+//
+// If the current branch is a feature branch with unmerged work — a real branch
+// that differs from the default AND is ahead of it — worktrees branch off IT,
+// so per-task work builds on your in-progress branch and on prior tasks'
+// commits instead of a stale default. This is what lets an autonomous cascade
+// build a feature incrementally on its own branch. Otherwise (you're on the
+// default branch, or a detached HEAD) we use the default, resolved as:
 //  1. origin/HEAD symbolic-ref (e.g. origin/main, origin/master)
 //  2. local "main"
 //  3. local "master"
@@ -102,6 +109,19 @@ func RepoRoot(workDir string) string {
 //
 // Returns "" if none can be resolved.
 func BaseBranch(repoRoot string) string {
+	def := defaultBranch(repoRoot)
+	if head := currentBranch(repoRoot); head != "" && head != def && branchAhead(repoRoot, def, head) {
+		return head
+	}
+	if def != "" {
+		return def
+	}
+	return currentBranch(repoRoot)
+}
+
+// defaultBranch resolves the repo's default branch name (origin/HEAD, then
+// local main/master). Returns "" if none can be resolved.
+func defaultBranch(repoRoot string) string {
 	if out, err := gitOutput(repoRoot, "symbolic-ref", "--short", "refs/remotes/origin/HEAD"); err == nil {
 		out = strings.TrimSpace(out)
 		if strings.HasPrefix(out, "origin/") {
@@ -113,13 +133,34 @@ func BaseBranch(repoRoot string) string {
 			return name
 		}
 	}
-	if head, err := gitOutput(repoRoot, "rev-parse", "--abbrev-ref", "HEAD"); err == nil {
-		head = strings.TrimSpace(head)
-		if head != "" && head != "HEAD" {
-			return head
-		}
-	}
 	return ""
+}
+
+// currentBranch returns the checked-out branch name, or "" when detached.
+func currentBranch(repoRoot string) string {
+	head, err := gitOutput(repoRoot, "rev-parse", "--abbrev-ref", "HEAD")
+	if err != nil {
+		return ""
+	}
+	head = strings.TrimSpace(head)
+	if head == "" || head == "HEAD" {
+		return ""
+	}
+	return head
+}
+
+// branchAhead reports whether head has commits that base does not. A missing
+// base (no resolvable default) counts as ahead so the current branch is used.
+func branchAhead(repoRoot, base, head string) bool {
+	if base == "" {
+		return true
+	}
+	out, err := gitOutput(repoRoot, "rev-list", "--count", base+".."+head)
+	if err != nil {
+		return false
+	}
+	n := strings.TrimSpace(out)
+	return n != "" && n != "0"
 }
 
 // BranchName returns the flow-namespaced branch for a task slug.
