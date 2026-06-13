@@ -139,6 +139,72 @@ func (s *Server) chatLastReply(c *flowdb.Chat) string {
 	return ""
 }
 
+// chatStatAgents builds minimal uiAgent records for chats so their token/cost
+// burn folds into the Mission Control "flow-managed sessions" panel alongside
+// tasks. Chats are flow-launched sessions (Ask Flow / Slack DMs) that the panel
+// claims to cover, but they live in the chats table — not as TaskViews — so they
+// were silently excluded and the totals undercounted. Archived-but-not-deleted
+// chats are included (they still burned tokens). Only the fields buildUIStats'
+// tally reads are populated (Slug for dedup, Provider for the split, and the
+// per-session token/cost); chats with no resolvable usage yet are skipped so the
+// session count isn't inflated by empty sessions.
+func (s *Server) chatStatAgents() []uiAgent {
+	if s.cfg.DB == nil {
+		return nil
+	}
+	chats, err := flowdb.ListChats(s.cfg.DB, flowdb.ChatFilter{IncludeArchived: true})
+	if err != nil {
+		return nil
+	}
+	absRoot, aerr := filepath.Abs(strings.TrimSpace(s.cfg.FlowRoot))
+	if aerr != nil {
+		return nil
+	}
+	var out []uiAgent
+	for _, c := range chats {
+		if c == nil || !c.SessionID.Valid || strings.TrimSpace(c.SessionID.String) == "" {
+			continue
+		}
+		provider, perr := flowdb.NormalizeSessionProvider(c.Provider)
+		if perr != nil {
+			continue
+		}
+		task := &flowdb.Task{
+			Slug:            c.Slug,
+			WorkDir:         absRoot,
+			SessionProvider: provider,
+			SessionID:       sql.NullString{String: strings.TrimSpace(c.SessionID.String), Valid: true},
+		}
+		tokens, cost := s.chatSessionUsage(task)
+		if tokens == 0 && cost == 0 {
+			continue // nothing burned yet / transcript unresolved — don't inflate the count
+		}
+		out = append(out, uiAgent{Slug: c.Slug, Provider: provider, TokensSession: tokens, CostSession: cost})
+	}
+	return out
+}
+
+// chatSessionUsage resolves a chat's session transcript and returns its
+// cumulative session tokens (cache-excluded, the CLI's Σ) and full billed cost
+// (cache included) — the same two figures sessionInsightsForTask derives for
+// tasks. The transcript parse is memoized by transcriptCache, so this stays cheap
+// on the buildUIData hot path. Any resolution/read error yields (0, 0).
+func (s *Server) chatSessionUsage(task *flowdb.Task) (int, float64) {
+	path, err := resolveSessionJSONLPath(task)
+	if err != nil || path == "" {
+		return 0, 0
+	}
+	entry, err := s.transcripts.get(path)
+	if err != nil {
+		return 0, 0
+	}
+	cost := 0.0
+	for _, c := range entry.usage.CostByDay {
+		cost += c
+	}
+	return entry.usage.TokensSession, cost
+}
+
 // handleChats serves GET /api/chats — the Chats sidebar list. The
 // include_archived query param (true/1/yes/on) surfaces archived chats too;
 // deleted chats are always hidden. The body is always a JSON array (never

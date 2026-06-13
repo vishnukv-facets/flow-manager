@@ -621,7 +621,7 @@ func (s *Server) buildUIData() (uiData, error) {
 		Projects:         projects,
 		ActivityHeatmap:  heatmap,
 		TokenSeries:      tokenSeries,
-		Stats:            buildUIStats(agents, doneCandidates, heatmap, time.Now()),
+		Stats:            buildUIStats(agents, doneCandidates, s.chatStatAgents(), heatmap, time.Now()),
 		Capabilities:     s.uiCapabilities(),
 		Trash:            s.uiTrash(),
 		SampleTranscript: transcript,
@@ -2026,8 +2026,10 @@ func buildActivityHeatmap(tasks []TaskView, now time.Time) []uiActivityDay {
 
 // buildUIStats derives the Mission Control analytics strip: activity-day streaks
 // from the heatmap, plus per-provider context-token and session totals across
-// every tracked session (live + done, deduped by slug).
-func buildUIStats(live, done []uiAgent, heatmap []uiActivityDay, now time.Time) uiStats {
+// every tracked session (live + done + chats, deduped by slug). Chats are
+// flow-launched sessions too, so their token/cost burn folds into the same
+// per-provider panel rather than being silently excluded.
+func buildUIStats(live, done, chats []uiAgent, heatmap []uiActivityDay, now time.Time) uiStats {
 	var st uiStats
 	today := now.In(time.Local).Format("2006-01-02")
 	// Restrict to days up to and including today. The heatmap grid runs to the
@@ -2100,6 +2102,7 @@ func buildUIStats(live, done []uiAgent, heatmap []uiActivityDay, now time.Time) 
 	}
 	tally(live)
 	tally(done)
+	tally(chats)
 	return st
 }
 

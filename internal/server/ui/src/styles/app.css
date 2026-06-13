@@ -1630,10 +1630,19 @@ select.input {
   height: 43px;
   min-height: 43px;
 }
+/* Expanded: full-bleed against the sidebar — square the edges and drop the
+   floating shadow so it reads as a docked panel, not a card. */
+.floating-terminal.maximized {
+  border-radius: 0;
+  box-shadow: none;
+}
 .floating-terminal-head {
   height: 43px;
   display: grid;
-  grid-template-columns: minmax(0, 1fr) auto auto auto;
+  /* title | meta | actions — the action buttons live in one flex cell, so the
+     header stays a stable 3-column row no matter how many buttons there are
+     (chats vs tasks differ, and expand/restore is conditional). */
+  grid-template-columns: minmax(0, 1fr) auto auto;
   align-items: center;
   gap: 8px;
   padding: 0 8px 0 12px;
@@ -1652,6 +1661,12 @@ select.input {
   display: inline-flex;
   align-items: center;
   min-width: 0;
+}
+.floating-terminal-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  flex: none;
 }
 .floating-terminal-title {
   gap: 8px;

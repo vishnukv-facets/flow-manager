@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState, type ReactNode } from 'react'
 import { Link, useLocation } from 'wouter'
-import { ArrowRight, Activity, BarChart3, CalendarClock, Coins, Repeat, AlertTriangle, Snowflake, TerminalSquare, TrendingUp, Flame, Inbox as InboxIcon } from 'lucide-react'
-import { useInbox, useOverview, useQuote, useTasks, useUiData } from '../lib/query'
+import { ArrowRight, Activity, BarChart3, CalendarClock, Coins, Repeat, AlertTriangle, Snowflake, TerminalSquare, TrendingUp, Flame, Inbox as InboxIcon, MessagesSquare } from 'lucide-react'
+import { useChats, useInbox, useOverview, useQuote, useTasks, useUiData } from '../lib/query'
 import { useDocumentTitle } from '../lib/useDocumentTitle'
 import { AgentCard } from '../components/AgentCard'
 import { EmptyState, ErrorNote, Loading, ProviderIcon, SourceIcon, Sparkline, Stat } from '../components/ui'
@@ -657,6 +657,10 @@ export function Overview() {
   const { data: ui, isLoading, error } = useUiData()
   const { data: overview } = useOverview()
   const { data: inbox } = useInbox()
+  const { data: chats } = useChats()
+  // Recent chats for the rail card below the inbox — newest activity first
+  // (the API already orders by last_activity_at desc); show the top few.
+  const recentChats = useMemo(() => (chats ?? []).slice(0, 5), [chats])
   // One task fetch (incl. done) feeds both the agenda lens and the analytics
   // trends: open tasks drive the due buckets, done tasks drive throughput and
   // time-to-done. A done task with a past due date must NOT show as "overdue",
@@ -927,6 +931,35 @@ export function Overview() {
                   <div className="col" style={{ alignItems: 'flex-end', gap: 3 }}>
                     <span className="faint mono" style={{ fontSize: 12 }}>{ago(entry.timestamp)}</span>
                     {unread > 1 && <span className="tag">{unread} new</span>}
+                  </div>
+                </div>
+              ))}
+            </div>
+          </section>
+
+          <section className="card rail-card">
+            <div className="bento-head">
+              <span className="eyebrow"><MessagesSquare size={13} /> Recent chats</span>
+              <div className="spacer" />
+              <Link href="/chats" className="btn ghost sm">Open <ArrowRight size={13} /></Link>
+            </div>
+            <div className="rail-body">
+              {recentChats.length === 0 && <div className="faint" style={{ padding: 8 }}>No chats yet.</div>}
+              {recentChats.map((c) => (
+                <div key={c.slug} className="feed-row" aria-label={`Open chats — ${c.title}`} {...clickable(() => navigate('/chats'))}>
+                  <span className={`dot ${c.live ? 'running' : 'idle'}`} />
+                  <ProviderIcon provider={c.provider} size={13} />
+                  <div className="lrow-main">
+                    <div className="feed-title clip">{c.title || 'New chat'}</div>
+                    <div className="feed-sub clip">
+                      {c.last_reply || (c.origin === 'slack' ? 'Slack chat' : 'Chat')}
+                    </div>
+                  </div>
+                  <div className="col" style={{ alignItems: 'flex-end', gap: 3 }}>
+                    <span className="faint mono" style={{ fontSize: 12 }}>{ago(c.last_activity_at)}</span>
+                    {c.origin === 'slack' && (
+                      <span className="tag" title="Started from Slack"><SourceIcon source="slack" size={10} /></span>
+                    )}
                   </div>
                 </div>
               ))}

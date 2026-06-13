@@ -389,6 +389,16 @@ func (s *Server) handleTaskRoute(w http.ResponseWriter, r *http.Request) {
 	slug := parts[0]
 	task, err := flowdb.GetTask(s.cfg.DB, slug)
 	if err != nil {
+		// Chats are task-less but share the /attachments upload path (the same
+		// floating terminal hosts both). Resolve the slug as a chat so image
+		// attach works in chat windows; synthesize a minimal task carrying just
+		// the slug + provider, which is all the attachment path needs.
+		if errors.Is(err, sql.ErrNoRows) && len(parts) == 2 && parts[1] == "attachments" {
+			if chat, cerr := flowdb.GetChat(s.cfg.DB, slug); cerr == nil {
+				s.handleTaskAttachments(w, r, &flowdb.Task{Slug: chat.Slug, SessionProvider: chat.Provider})
+				return
+			}
+		}
 		writeNotFoundOrError(w, err)
 		return
 	}

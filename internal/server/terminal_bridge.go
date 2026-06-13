@@ -1765,6 +1765,34 @@ func (s *Server) prepareSendReplyFloatingLaunch(item flowdb.FeedItem, text, inst
 	}, nil
 }
 
+// captureCodexChatSession is the chat-table analogue of
+// CaptureCodexSessionForTaskSince. Codex assigns a brand-new session id on every
+// launch/resume, captured only after the process starts. For task slugs that id
+// is written to the tasks table; chats are task-less, so that writeback never
+// matches and a chat's session_id would stay empty/stale — leaving its
+// transcript (and the Chats last-reply preview) unresolvable. When the slug is a
+// live chat, this finds the freshly-spawned codex session file and persists its
+// id onto the chat row. Returns the captured id, or "" if the slug isn't a chat
+// or no matching session file exists yet.
+func (s *terminalSession) captureCodexChatSession(started time.Time) string {
+	db := s.hub.server.cfg.DB
+	if db == nil {
+		return ""
+	}
+	if _, err := flowdb.GetChat(db, s.slug); err != nil {
+		return "" // not a chat (or deleted) — nothing to capture here
+	}
+	candidate, err := agents.FindCodexSessionForTask(s.slug, s.workDir, started)
+	if err != nil || candidate.ID == "" {
+		return ""
+	}
+	if err := flowdb.SetChatSession(db, s.slug, candidate.ID, flowdb.NowISO()); err != nil {
+		return ""
+	}
+	s.hub.server.publishUIChange("chats")
+	return candidate.ID
+}
+
 func (s *terminalSession) captureCodexSession(started time.Time) {
 	if started.IsZero() {
 		started = time.Now().Add(-2 * time.Second)
@@ -1780,7 +1808,17 @@ func (s *terminalSession) captureCodexSession(started time.Time) {
 			return
 		case <-ticker.C:
 			captured, err := agents.CaptureCodexSessionForTaskSince(s.hub.server.cfg.DB, s.slug, s.workDir, started)
-			if err != nil || captured == "" {
+			if err != nil {
+				continue
+			}
+			if captured == "" {
+				// Chats are task-less, so the task-table writeback above matched
+				// no row. Persist the captured id onto the chat row instead, so
+				// the chat transcript (and its last-reply preview) resolves.
+				// Non-chats simply keep waiting for the task row.
+				captured = s.captureCodexChatSession(started)
+			}
+			if captured == "" {
 				continue
 			}
 			s.mu.Lock()

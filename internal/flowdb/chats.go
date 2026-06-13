@@ -107,6 +107,24 @@ func UpsertChat(db *sql.DB, c Chat) error {
 	return nil
 }
 
+// SetChatSession persists a captured session id onto an existing chat row
+// (and bumps last_activity_at). Codex assigns a brand-new session id on every
+// launch/resume — only known after the process starts — so the chat's id is
+// filled in (and overwritten on each resume) by the capture goroutine rather
+// than at creation, the way Claude's pre-generated id is. Deleted chats are
+// never touched. A no-op when the slug isn't a live chat row.
+func SetChatSession(db *sql.DB, slug, sessionID, now string) error {
+	_, err := db.Exec(
+		`UPDATE chats SET session_id = ?, last_activity_at = ?
+		 WHERE slug = ? AND deleted_at IS NULL`,
+		sessionID, now, slug,
+	)
+	if err != nil {
+		return fmt.Errorf("flowdb: set chat session %q: %w", slug, err)
+	}
+	return nil
+}
+
 // ListChats returns non-deleted chats ordered by last_activity_at DESC.
 // Archived chats are hidden unless ChatFilter.IncludeArchived is true.
 // Deleted chats (deleted_at IS NOT NULL) are always excluded.

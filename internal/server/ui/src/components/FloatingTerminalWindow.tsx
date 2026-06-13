@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, type CSSProperties, type PointerEvent } from 'react'
-import { Maximize2, Minus, X } from 'lucide-react'
+import { Expand, Maximize2, Minus, Shrink, X } from 'lucide-react'
 import { useLocation } from 'wouter'
 import { TaskTerminal } from './Terminal'
 import { ProviderIcon } from './ui'
@@ -29,6 +29,31 @@ function clampPosition(x: number, y: number): { x: number; y: number } {
 const MIN_W = 360
 const MIN_H = 240
 
+// maximizedRect returns the main CONTENT area — right of the sidebar (.rail) and
+// BELOW the top-nav line (.topbar) — measured live so it tracks the actual
+// layout. The page content lives in `.main > .content`, whose box is exactly
+// that region, so we measure it directly. The floating window is
+// fixed-positioned, so these viewport coords map straight to left/top.
+function maximizedRect(): { left: number; top: number; width: number; height: number } {
+  if (typeof window === 'undefined') return { left: 0, top: 0, width: 0, height: 0 }
+  const content = document.querySelector('.main > .content')
+  if (content) {
+    const r = content.getBoundingClientRect()
+    return {
+      left: Math.round(r.left),
+      top: Math.round(r.top),
+      width: Math.max(MIN_W, Math.round(r.width)),
+      height: Math.max(MIN_H, Math.round(r.height)),
+    }
+  }
+  // Fallback: right of the sidebar, below the topbar.
+  const rail = document.querySelector('.rail')
+  const left = rail ? Math.round(rail.getBoundingClientRect().right) : 0
+  const topbar = document.querySelector('.topbar')
+  const top = topbar ? Math.round(topbar.getBoundingClientRect().bottom) : 0
+  return { left, top, width: Math.max(MIN_W, window.innerWidth - left), height: Math.max(MIN_H, window.innerHeight - top) }
+}
+
 function defaultSize(): { w: number; h: number } {
   if (typeof window === 'undefined') return { w: 720, h: 460 }
   return { w: Math.min(720, window.innerWidth - 24), h: Math.min(460, window.innerHeight - 96) }
@@ -54,17 +79,32 @@ export function FloatingTerminalWindow({ win, pos, z, hidden, onMove, onFocus, o
   // terminal's ResizeObserver refits xterm automatically as this changes.
   const [size, setSize] = useState(defaultSize)
   const resizeRef = useRef<{ x: number; y: number; w: number; h: number } | null>(null)
+  // Expand-to-fill toggle: when on, the window covers the viewport minus the
+  // sidebar (recomputed live). maxRect is recomputed on toggle and on resize.
+  const [maximized, setMaximized] = useState(false)
+  const [maxRect, setMaxRect] = useState(maximizedRect)
 
   useEffect(() => {
-    const onResize = () => onMove(clampPosition(pos.x, pos.y))
+    const onResize = () => {
+      if (maximized) setMaxRect(maximizedRect())
+      else onMove(clampPosition(pos.x, pos.y))
+    }
     window.addEventListener('resize', onResize)
     return () => window.removeEventListener('resize', onResize)
-  }, [pos.x, pos.y, onMove])
+  }, [pos.x, pos.y, onMove, maximized])
+
+  const toggleMaximize = () => {
+    setMaximized((m) => {
+      if (!m) setMaxRect(maximizedRect())
+      return !m
+    })
+  }
 
   const onDragStart = (e: PointerEvent<HTMLDivElement>) => {
     // Never start a drag from an interactive control — otherwise the header's
-    // pointer capture swallows the button's click (minimize/close break).
-    if (e.button !== 0 || (e.target as HTMLElement).closest('button')) return
+    // pointer capture swallows the button's click (minimize/close break). A
+    // maximized window is pinned, so it doesn't drag.
+    if (maximized || e.button !== 0 || (e.target as HTMLElement).closest('button')) return
     const base = dragPos ?? pos
     dragRef.current = { dx: e.clientX - base.x, dy: e.clientY - base.y }
     setDragPos(base)
@@ -106,11 +146,13 @@ export function FloatingTerminalWindow({ win, pos, z, hidden, onMove, onFocus, o
   }
 
   const at = dragPos ?? pos
-  const style = { left: at.x, top: at.y, zIndex: z, width: size.w, height: size.h } as CSSProperties
+  const style = (maximized
+    ? { left: maxRect.left, top: maxRect.top, zIndex: z, width: maxRect.width, height: maxRect.height }
+    : { left: at.x, top: at.y, zIndex: z, width: size.w, height: size.h }) as CSSProperties
 
   return (
     <div
-      className={`floating-terminal${hidden ? ' hidden' : ''}`}
+      className={`floating-terminal${hidden ? ' hidden' : ''}${maximized ? ' maximized' : ''}`}
       style={style}
       onPointerDownCapture={onFocus}
     >
@@ -132,6 +174,7 @@ export function FloatingTerminalWindow({ win, pos, z, hidden, onMove, onFocus, o
           </span>
           <span className="mono">{status}</span>
         </div>
+        <div className="floating-terminal-actions">
         {win.kind === 'task' && (
           <button
             type="button"
@@ -143,6 +186,15 @@ export function FloatingTerminalWindow({ win, pos, z, hidden, onMove, onFocus, o
             <Maximize2 size={14} />
           </button>
         )}
+        <button
+          type="button"
+          className="btn icon sm"
+          title={maximized ? 'Restore' : 'Expand to fill'}
+          aria-label={maximized ? 'Restore window' : 'Expand window to fill'}
+          onClick={toggleMaximize}
+        >
+          {maximized ? <Shrink size={14} /> : <Expand size={14} />}
+        </button>
         <button type="button" className="btn icon sm" title="Minimize to tray" onClick={onMinimize}>
           <Minus size={15} />
         </button>
@@ -154,6 +206,7 @@ export function FloatingTerminalWindow({ win, pos, z, hidden, onMove, onFocus, o
         >
           <X size={15} />
         </button>
+        </div>
       </div>
       {!hidden && (
         <div className="floating-terminal-body">
@@ -165,14 +218,16 @@ export function FloatingTerminalWindow({ win, pos, z, hidden, onMove, onFocus, o
           />
         </div>
       )}
-      <div
-        className="floating-terminal-resize"
-        title="Drag to resize"
-        onPointerDown={onResizeStart}
-        onPointerMove={onResizeMove}
-        onPointerUp={onResizeEnd}
-        onPointerCancel={onResizeEnd}
-      />
+      {!maximized && (
+        <div
+          className="floating-terminal-resize"
+          title="Drag to resize"
+          onPointerDown={onResizeStart}
+          onPointerMove={onResizeMove}
+          onPointerUp={onResizeEnd}
+          onPointerCancel={onResizeEnd}
+        />
+      )}
     </div>
   )
 }

@@ -28,13 +28,16 @@ import (
 //     has been QUIET for >= idle (the jsonl mtime is the universal activity
 //     signal: a working agent appends continuously; an idle one waiting at the
 //     prompt goes stale). So we never inject mid-turn.
-//   - NEVER re-mine or loop. A per-session cursor (last transcript byte offset
-//     we requested a capture through) + a cooldown gate mean an unchanged or
-//     recently-swept session is skipped — and the checkpoint turn's own output
-//     can't immediately re-trigger another checkpoint.
+//   - NEVER re-mine or loop. The cursor tracks the byte offset of the last
+//     GENUINE user/inbox turn we checkpointed; combined with a cooldown gate, a
+//     session is skipped until the user actually says something new. Crucially,
+//     the checkpoint prompt the distiller injects carries kbCheckpointMarker and
+//     its reply is an assistant turn, so neither advances the genuine-user offset
+//     — the checkpoint physically cannot re-trigger itself (the loop bug this
+//     guards against: optimistically advancing past raw byte growth left the
+//     checkpoint's own prompt+reply counting as "new activity" forever).
 type kbDistiller struct {
-	srv      *Server
-	minDelta int64
+	srv *Server
 
 	mu     sync.Mutex
 	cancel context.CancelFunc
@@ -45,13 +48,17 @@ const (
 	defaultKBDistillInterval = 5 * time.Minute
 	defaultKBDistillIdle     = 8 * time.Minute
 	defaultKBDistillCooldown = 30 * time.Minute
-	// minKBDistillDelta is the minimum new transcript bytes since the last
-	// capture worth waking a session for — skips trivial deltas.
-	minKBDistillDelta = 600
+	// kbCheckpointMarker is the stable prefix of the prompt the distiller injects.
+	// It appears verbatim as a user turn in the session transcript, so the
+	// activity gate recognizes the distiller's OWN turns and excludes them —
+	// otherwise the checkpoint's prompt+reply would count as new activity and
+	// re-trigger the checkpoint every cooldown cycle (an infinite self-feeding
+	// loop). kbCheckpointPrompt is built from this constant so the two can't drift.
+	kbCheckpointMarker = "[flow KB checkpoint —"
 )
 
 func newKBDistiller(srv *Server) *kbDistiller {
-	return &kbDistiller{srv: srv, minDelta: minKBDistillDelta}
+	return &kbDistiller{srv: srv}
 }
 
 // The cadence knobs are read LIVE (each tick / gate check) rather than cached at
@@ -208,35 +215,61 @@ func (d *kbDistiller) sweepOne(c kbCandidate, now time.Time) {
 	}
 	cur, _, _ := flowdb.GetKBCaptureCursor(d.srv.cfg.DB, c.sessionID)
 	capturedAt := parseRFC3339OrZero(cur.CapturedAt)
-	maxOffset := maxTranscriptByteOffset(entry.entries)
-	if !kbShouldWake(now, entry.mtime, capturedAt, cur.Cursor, maxOffset, d.minDelta, kbDistillIdle(), kbDistillCooldown()) {
+	genuineOffset := latestGenuineUserOffset(entry.entries)
+	if !kbShouldWake(now, entry.mtime, capturedAt, cur.Cursor, genuineOffset, kbDistillIdle(), kbDistillCooldown()) {
 		return
 	}
 	if err := d.srv.wakeTaskForInboxNotify(c.slug, kbCheckpointPrompt(d.srv.cfg.FlowRoot)); err != nil {
 		fmt.Fprintf(os.Stderr, "kb distiller: wake %s (%s): %v\n", c.slug, c.kind, err)
 		return
 	}
-	// Optimistic cursor advance: we requested a capture through maxOffset. The
-	// cooldown prevents the checkpoint turn's own output from re-triggering, and
-	// the next eligible sweep advances past it. We don't read the agent's reply.
+	// Advance the cursor to the genuine user turn we just checkpointed. The
+	// checkpoint prompt+reply we're about to generate carry no genuine user turn
+	// (the prompt holds kbCheckpointMarker; the reply is an assistant turn), so
+	// they cannot move genuineOffset past this point — the checkpoint cannot
+	// re-trigger itself. The next checkpoint fires only when the user speaks again.
 	if err := flowdb.UpsertKBCaptureCursor(d.srv.cfg.DB, flowdb.KBCaptureCursor{
 		SessionID:  c.sessionID,
 		Slug:       c.slug,
 		Kind:       c.kind,
-		Cursor:     maxOffset,
+		Cursor:     genuineOffset,
 		CapturedAt: now.Format(time.RFC3339),
 	}); err != nil {
 		fmt.Fprintf(os.Stderr, "kb distiller: cursor %s: %v\n", c.slug, err)
 	}
 }
 
+// latestGenuineUserOffset returns the byte offset of the most recent GENUINE
+// user/inbox turn — the last "user" entry that is NOT one of the distiller's own
+// injected checkpoint prompts. This is the activity signal the gate keys on: a
+// checkpoint re-fires only when the user (or an inbox event delivered as a user
+// turn) has actually said something new since the last checkpoint. The agent's
+// silent checkpoint reply is an "assistant" turn, and the injected prompt carries
+// kbCheckpointMarker, so neither advances this offset — which is precisely what
+// stops the checkpoint from feeding itself in a loop.
+func latestGenuineUserOffset(entries []TranscriptEntry) int64 {
+	var off int64
+	for _, e := range entries {
+		if e.Type != "user" || strings.Contains(e.Text, kbCheckpointMarker) {
+			continue
+		}
+		if e.ByteOffset > off {
+			off = e.ByteOffset
+		}
+	}
+	return off
+}
+
 // kbShouldWake is the pure gate: wake only when the session is idle (transcript
-// quiet >= idle), past its cooldown, and has accumulated >= minDelta new
-// transcript bytes since the last requested capture. A zero capturedAt means
-// never swept (cooldown passes). A non-positive maxOffset means no transcript
-// yet (nothing to capture).
-func kbShouldWake(now, mtime, capturedAt time.Time, cursor, maxOffset, minDelta int64, idle, cooldown time.Duration) bool {
-	if maxOffset <= 0 {
+// quiet >= idle), past its cooldown, and a genuine new user/inbox turn has
+// arrived since the last checkpoint (genuineOffset advanced past the cursor).
+// Keying on the genuine-user offset — not raw byte growth — is what prevents the
+// checkpoint's OWN prompt+reply from re-triggering it: those bytes never move
+// genuineOffset, so an unchanged conversation stays below the bar forever. A zero
+// capturedAt means never swept (cooldown passes). A non-positive genuineOffset
+// means the user hasn't spoken yet (nothing to capture).
+func kbShouldWake(now, mtime, capturedAt time.Time, cursor, genuineOffset int64, idle, cooldown time.Duration) bool {
+	if genuineOffset <= 0 {
 		return false
 	}
 	if now.Sub(mtime) < idle {
@@ -245,7 +278,7 @@ func kbShouldWake(now, mtime, capturedAt time.Time, cursor, maxOffset, minDelta 
 	if !capturedAt.IsZero() && now.Sub(capturedAt) < cooldown {
 		return false // swept recently
 	}
-	return maxOffset-cursor >= minDelta
+	return genuineOffset > cursor
 }
 
 // kbCheckpointPrompt is injected into the idle live session. It reuses the flow
@@ -258,7 +291,7 @@ func kbCheckpointPrompt(root string) string {
 	if root == "" {
 		root = "~/.flow"
 	}
-	return "[flow KB checkpoint — automated, run this silently, then go back to waiting]\n" +
+	return kbCheckpointMarker + " automated, run this silently, then go back to waiting]\n" +
 		"Run a knowledge-base checkpoint per the flow skill's KB capture rules (§4.10). " +
 		"If you haven't already loaded the flow skill this session, invoke it first. " +
 		"Review our conversation since your last checkpoint and capture any DURABLE, surprising, " +
@@ -267,16 +300,6 @@ func kbCheckpointPrompt(root string) string {
 		"against existing entries, and update/upgrade in place any entry this conversation has made " +
 		"stale. This is the same capture flow performs at task close-out. " +
 		"Do NOT reply to me or announce this — write any KB files silently and then resume waiting."
-}
-
-func maxTranscriptByteOffset(entries []TranscriptEntry) int64 {
-	var max int64
-	for _, e := range entries {
-		if e.ByteOffset > max {
-			max = e.ByteOffset
-		}
-	}
-	return max
 }
 
 func parseRFC3339OrZero(s string) time.Time {
