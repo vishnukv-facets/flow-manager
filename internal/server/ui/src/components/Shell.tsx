@@ -17,6 +17,7 @@ import {
   Inbox,
   LayoutDashboard,
   ListTodo,
+  MessagesSquare,
   Moon,
   Network,
   Plug,
@@ -181,6 +182,7 @@ export function Shell({ children }: { children: ReactNode }) {
           badge: unread || undefined,
           tone: 'var(--accent-hi)',
         },
+        { to: '/chats', label: 'Chats', icon: <MessagesSquare size={16} />, match: (p) => p === '/chats' },
         {
           to: '/attention',
           label: 'Attention',

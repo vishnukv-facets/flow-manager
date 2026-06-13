@@ -362,10 +362,15 @@ toggle them by hand — the manifest just front-loads that work.)
 display_information:
   name: flow
   description: Turns your Slack reactions and replies into Claude/Codex work.
+  background_color: "#1b1b1f"
 features:
   bot_user:
     display_name: flow
     always_online: true
+  app_home:
+    home_tab_enabled: false
+    messages_tab_enabled: true
+    messages_tab_read_only_enabled: false
 oauth_config:
   scopes:
     bot:
@@ -378,6 +383,8 @@ oauth_config:
       - files:read          # read text/PDF file-share bodies for attention context
       - app_mentions:read   # receive @flow mentions
       - im:read             # DM metadata (optional, see notes)
+      - im:history          # bot's own DMs; user-scope im:history below covers the operator's DMs
+      - im:write            # resolve/open operator↔bot IM via conversations.open
       - mpim:read           # group-DM metadata (optional, see notes)
       - chat:write          # post replies back to Slack (only if you enable writes)
       - reactions:write     # add reactions back (only if you enable writes)
@@ -398,6 +405,7 @@ settings:
       - reaction_added
       - message.channels
       - message.groups
+      - message.im           # bot receives DMs sent directly to it
       - app_mention
     user_events:
       - message.im

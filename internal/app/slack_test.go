@@ -1,0 +1,141 @@
+package app
+
+import (
+	"fmt"
+	"testing"
+)
+
+func TestCmdSlackNoSubcommand(t *testing.T) {
+	rc := cmdSlack([]string{})
+	if rc != 2 {
+		t.Errorf("rc = %d, want 2", rc)
+	}
+}
+
+func TestCmdSlackUnknownSubcommand(t *testing.T) {
+	rc := cmdSlack([]string{"blast"})
+	if rc != 2 {
+		t.Errorf("rc = %d, want 2", rc)
+	}
+}
+
+// stubPostSlackSend swaps postSlackSendFn for the test and restores it.
+func stubPostSlackSend(t *testing.T, fn func(channel, text string) (int, string, error)) {
+	t.Helper()
+	orig := postSlackSendFn
+	t.Cleanup(func() { postSlackSendFn = orig })
+	postSlackSendFn = fn
+}
+
+// stubSlackSend swaps slackSendFn (in-process fallback) for the test.
+func stubSlackSend(t *testing.T, fn func(channel, text string) error) {
+	t.Helper()
+	orig := slackSendFn
+	t.Cleanup(func() { slackSendFn = orig })
+	slackSendFn = fn
+}
+
+// Server POST succeeds -> rc 0, no fallback to in-process slackSendFn.
+func TestCmdSlackSendViaServerSuccess(t *testing.T) {
+	var gotChannel, gotText string
+	stubPostSlackSend(t, func(channel, text string) (int, string, error) {
+		gotChannel, gotText = channel, text
+		return 200, `{"ok":true}`, nil
+	})
+	stubSlackSend(t, func(channel, text string) error {
+		t.Fatal("slackSendFn must not be called when server POST succeeds")
+		return nil
+	})
+
+	rc := cmdSlack([]string{"send", "--channel", "D1", "--text", "hi"})
+	if rc != 0 {
+		t.Errorf("rc = %d, want 0", rc)
+	}
+	if gotChannel != "D1" || gotText != "hi" {
+		t.Errorf("posted channel=%q text=%q, want D1/hi", gotChannel, gotText)
+	}
+}
+
+// Server reached but Slack rejected (e.g. account_inactive) -> rc 1, no fallback.
+func TestCmdSlackSendViaServerSlackError(t *testing.T) {
+	stubPostSlackSend(t, func(channel, text string) (int, string, error) {
+		return 502, `{"error":"account_inactive"}`, nil
+	})
+	stubSlackSend(t, func(channel, text string) error {
+		t.Fatal("slackSendFn must not be called when server returns a Slack error")
+		return nil
+	})
+
+	rc := cmdSlack([]string{"send", "--channel", "D1", "--text", "hi"})
+	if rc != 1 {
+		t.Errorf("rc = %d, want 1", rc)
+	}
+}
+
+// Server unreachable -> fall back to in-process slackSendFn.
+func TestCmdSlackSendFallsBackWhenServerUnreachable(t *testing.T) {
+	stubPostSlackSend(t, func(channel, text string) (int, string, error) {
+		return 0, "", fmt.Errorf("connection refused")
+	})
+	var fellBack bool
+	var gotChannel, gotText string
+	stubSlackSend(t, func(channel, text string) error {
+		fellBack = true
+		gotChannel, gotText = channel, text
+		return nil
+	})
+
+	rc := cmdSlack([]string{"send", "--channel", "D1", "--text", "hi"})
+	if rc != 0 {
+		t.Errorf("rc = %d, want 0", rc)
+	}
+	if !fellBack {
+		t.Error("expected fallback to slackSendFn when server unreachable")
+	}
+	if gotChannel != "D1" || gotText != "hi" {
+		t.Errorf("fallback channel=%q text=%q, want D1/hi", gotChannel, gotText)
+	}
+}
+
+// Server unreachable AND in-process fallback fails -> rc 1.
+func TestCmdSlackSendFallbackError(t *testing.T) {
+	stubPostSlackSend(t, func(channel, text string) (int, string, error) {
+		return 0, "", fmt.Errorf("connection refused")
+	})
+	stubSlackSend(t, func(channel, text string) error {
+		return fmt.Errorf("network failure")
+	})
+
+	rc := cmdSlack([]string{"send", "--channel", "D1", "--text", "hello"})
+	if rc != 1 {
+		t.Errorf("rc = %d, want 1", rc)
+	}
+}
+
+func TestCmdSlackSendMissingChannel(t *testing.T) {
+	rc := cmdSlack([]string{"send", "--text", "hello"})
+	if rc != 2 {
+		t.Errorf("rc = %d, want 2", rc)
+	}
+}
+
+func TestCmdSlackSendMissingText(t *testing.T) {
+	rc := cmdSlack([]string{"send", "--channel", "D1"})
+	if rc != 2 {
+		t.Errorf("rc = %d, want 2", rc)
+	}
+}
+
+func TestServerSlackError(t *testing.T) {
+	cases := []struct{ in, want string }{
+		{`{"error":"account_inactive"}`, "account_inactive"},
+		{`{"error":"slack writes disabled (set FLOW_SLACK_WRITES_ENABLED=1)"}`, "slack writes disabled (set FLOW_SLACK_WRITES_ENABLED=1)"},
+		{"plain text error", "plain text error"},
+		{"", "slack send failed (server)"},
+	}
+	for _, c := range cases {
+		if got := serverSlackError(c.in); got != c.want {
+			t.Errorf("serverSlackError(%q) = %q, want %q", c.in, got, c.want)
+		}
+	}
+}

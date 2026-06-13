@@ -99,6 +99,11 @@ func New(cfg Config) *Server {
 		cascade.Progress = s.publishSteeringStage
 		dispatcher.Steerer = cascade
 		dispatcher.SteererOwnsRouting = steeringAutonomyRoutingEnabled
+		// Slack AFK command channel: authorized operator DMs to the bot route into
+		// a durable chat agent session (the overview-chat model) instead of the
+		// task/steering pipeline. *Server satisfies monitor.ChatCommandSink. Gated
+		// OFF by default inside the dispatcher (CommandChannelEnabled).
+		dispatcher.ChatSink = s
 		s.cascade = cascade
 		// Reuse a primed Haiku session across the cheap classifier stages (the
 		// heavy framing + task index sent once at session creation, only the
@@ -149,6 +154,7 @@ func (s *Server) registerAPIRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/projects/", s.handleProjectRoute)
 	mux.HandleFunc("/api/playbooks", s.handlePlaybooks)
 	mux.HandleFunc("/api/playbooks/", s.handlePlaybookRoute)
+	mux.HandleFunc("/api/chats", s.handleChats)
 	mux.HandleFunc("/api/brain/graph", s.handleBrainGraph)
 	mux.HandleFunc("/api/brain/graph/actions", s.handleBrainGraphAction)
 	mux.HandleFunc("/api/brain/graph/node/", s.handleBrainGraphNodeDetail)
@@ -174,6 +180,7 @@ func (s *Server) registerAPIRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/attention/trace", s.handleAttentionTrace)
 	mux.HandleFunc("/api/attention/decision", s.handleAttentionDecision)
 	mux.HandleFunc("/api/steering/runs", s.handleSteeringRuns)
+	mux.HandleFunc("/api/slack/send", s.handleSlackSend)
 	mux.HandleFunc("/api/slack/channels", s.handleSlackChannels)
 	mux.HandleFunc("/api/slack/setup/status", s.handleSlackSetupStatus)
 	mux.HandleFunc("/api/slack/setup/create-app", s.handleSlackSetupCreateApp)

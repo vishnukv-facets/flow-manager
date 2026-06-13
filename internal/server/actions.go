@@ -308,6 +308,8 @@ func (s *Server) runAction(req actionRequest) (actionResponse, int) {
 		return s.overviewChat(req)
 	case "close-floating-terminal":
 		return s.closeFloatingTerminal(req)
+	case "chat-archive", "chat-unarchive", "chat-delete", "chat-reopen":
+		return s.chatAction(req)
 	case "update-settings":
 		return s.updateSettings(req)
 	case "rotate-webhook-secret":
@@ -2185,6 +2187,27 @@ func (s *Server) overviewChat(req actionRequest) (actionResponse, int) {
 		return actionResponse{OK: false, Message: err.Error()}, http.StatusInternalServerError
 	}
 	terminal := s.terminals.registerFloatingLaunch(launch, "Ask Flow")
+	// Record a durable chat row for the Chats sidebar. The session has already
+	// started, so a DB hiccup must not fail the launch — log and continue,
+	// mirroring the best-effort style of persistFloatingLocked.
+	if s.cfg.DB != nil {
+		now := flowdb.NowISO()
+		var sid sql.NullString
+		if launch.SessionID != "" {
+			sid = sql.NullString{String: launch.SessionID, Valid: true}
+		}
+		if err := flowdb.InsertChat(s.cfg.DB, flowdb.Chat{
+			Slug:           launch.Slug,
+			Title:          deriveChatTitle(prompt),
+			Provider:       launch.Provider,
+			Origin:         "ui",
+			SessionID:      sid,
+			CreatedAt:      now,
+			LastActivityAt: now,
+		}); err != nil {
+			fmt.Fprintf(os.Stderr, "flow: record chat %q: %v\n", launch.Slug, err)
+		}
+	}
 	return actionResponse{OK: true, Message: "opened floating overview agent", FloatingTerminal: &terminal}, http.StatusOK
 }
 

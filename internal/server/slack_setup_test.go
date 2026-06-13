@@ -24,7 +24,7 @@ func clearSlackSetupEnv(t *testing.T) {
 		"FLOW_SLACK_TOKEN", "SLACK_BOT_TOKEN", "SLACK_TOKEN",
 		"FLOW_SLACK_USER_TOKEN", "SLACK_USER_TOKEN",
 		"FLOW_SLACK_SELF_USER_IDS", "FLOW_SLACK_OAUTH_PORT",
-		"FLOW_SLACK_API_BASE_URL",
+		"FLOW_SLACK_API_BASE_URL", "FLOW_SLACK_MANIFEST_REV",
 		// Ingress vars must not affect the localhost-only Slack callback URL.
 		"FLOW_INGRESS_PROVIDER", "FLOW_PUBLIC_BASE_URL",
 		"FLOW_ZROK_SHARE_NAME", "FLOW_ZROK_AUTO_START",
@@ -382,6 +382,44 @@ func TestSlackOAuthDanceRoundTrip(t *testing.T) {
 	}
 }
 
+func TestSlackAppManifest_DMableBot(t *testing.T) {
+	clearSlackSetupEnv(t)
+	m := slackAppManifest("flow", []string{"https://localhost:8790/api/slack/oauth/callback"})
+
+	features, _ := m["features"].(map[string]any)
+	appHome, ok := features["app_home"].(map[string]any)
+	if !ok {
+		t.Fatalf("manifest features missing app_home block: %+v", features)
+	}
+	if appHome["messages_tab_enabled"] != true {
+		t.Errorf("messages_tab_enabled = %v, want true", appHome["messages_tab_enabled"])
+	}
+	if appHome["messages_tab_read_only_enabled"] != false {
+		t.Errorf("messages_tab_read_only_enabled = %v, want false", appHome["messages_tab_read_only_enabled"])
+	}
+
+	settings, _ := m["settings"].(map[string]any)
+	subs, _ := settings["event_subscriptions"].(map[string]any)
+	botEvents, _ := subs["bot_events"].([]string)
+	if !containsString(botEvents, "message.im") {
+		t.Errorf("bot_events missing message.im: %v", botEvents)
+	}
+
+	oauth, _ := m["oauth_config"].(map[string]any)
+	scopes, _ := oauth["scopes"].(map[string]any)
+	botScopes, _ := scopes["bot"].([]string)
+	for _, want := range []string{"im:history", "im:write"} {
+		if !containsString(botScopes, want) {
+			t.Errorf("bot scopes missing %q: %v", want, botScopes)
+		}
+	}
+
+	info, _ := m["display_information"].(map[string]any)
+	if got := info["background_color"]; got != "#1b1b1f" {
+		t.Errorf("background_color = %v, want #1b1b1f", got)
+	}
+}
+
 func TestSlackSetupStatusShape(t *testing.T) {
 	root, db := testRootDB(t)
 	srv := New(Config{DB: db, FlowRoot: root, CommandPath: "/bin/false"})
@@ -404,5 +442,30 @@ func TestSlackSetupStatusShape(t *testing.T) {
 	}
 	if st.RedirectURL != "https://localhost:8790/api/slack/oauth/callback" {
 		t.Fatalf("redirect URL = %s", st.RedirectURL)
+	}
+}
+
+func TestSlackSetupStatus_NeedsReinstall(t *testing.T) {
+	// Case 1: installed token with stale (empty) manifest rev → NeedsReinstall true.
+	clearSlackSetupEnv(t)
+	t.Setenv("FLOW_SLACK_APP_ID", "A123")
+	t.Setenv("FLOW_SLACK_CLIENT_ID", "C123")
+	t.Setenv("FLOW_SLACK_USER_TOKEN", "xoxp-x") // installed
+	t.Setenv("FLOW_SLACK_MANIFEST_REV", "")      // installed before DM-able revision
+	s := &Server{}
+	st := s.computeSlackSetupStatus()
+	if !st.NeedsReinstall {
+		t.Errorf("NeedsReinstall = false, want true (installed token, stale manifest rev)")
+	}
+
+	// Case 2: installed token with current manifest rev → NeedsReinstall false.
+	clearSlackSetupEnv(t)
+	t.Setenv("FLOW_SLACK_APP_ID", "A123")
+	t.Setenv("FLOW_SLACK_CLIENT_ID", "C123")
+	t.Setenv("FLOW_SLACK_USER_TOKEN", "xoxp-x")
+	t.Setenv("FLOW_SLACK_MANIFEST_REV", slackManifestRev) // up-to-date
+	st2 := s.computeSlackSetupStatus()
+	if st2.NeedsReinstall {
+		t.Errorf("NeedsReinstall = true, want false (installed token, current manifest rev)")
 	}
 }

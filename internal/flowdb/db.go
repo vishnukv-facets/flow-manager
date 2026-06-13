@@ -462,6 +462,20 @@ CREATE INDEX IF NOT EXISTS idx_attention_handoffs_feed ON attention_handoffs(fee
 CREATE INDEX IF NOT EXISTS idx_attention_handoffs_receiver ON attention_handoffs(receiver);
 CREATE INDEX IF NOT EXISTS idx_attention_handoffs_status ON attention_handoffs(status);
 CREATE INDEX IF NOT EXISTS idx_steering_trace_disposition ON steering_trace(disposition);
+
+CREATE TABLE IF NOT EXISTS chats (
+    slug             TEXT PRIMARY KEY,
+    title            TEXT NOT NULL,
+    provider         TEXT NOT NULL,
+    origin           TEXT NOT NULL,
+    session_id       TEXT,
+    created_at       TEXT NOT NULL,
+    last_activity_at TEXT NOT NULL,
+    archived_at      TEXT,
+    deleted_at       TEXT
+);
+
+CREATE INDEX IF NOT EXISTS idx_chats_last_activity ON chats(last_activity_at DESC);
 	`
 
 // indexesPostMigrate are indexes that depend on columns added by

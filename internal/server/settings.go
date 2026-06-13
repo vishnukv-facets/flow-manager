@@ -8,6 +8,8 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+
+	"flow/internal/monitor"
 )
 
 type settingType string
@@ -74,13 +76,17 @@ var settingsRegistry = []settingSpec{
 	{Key: "FLOW_SLACK_TRIGGER_EMOJI", Label: "Trigger emoji", Group: "Slack", Category: categoryMessaging, Connector: connectorSlack, Type: settingString, Default: "claude", Help: "Reaction shortname(s) that spawn a session. Comma-separated for multi-provider, e.g. claude,codex."},
 	{Key: "FLOW_SLACK_OPEN_TARGET", Label: "Open target", Group: "Slack", Category: categoryMessaging, Connector: connectorSlack, Type: settingEnum, Options: []string{"ui", "iterm"}, Default: "ui", Help: "Where new Slack-reply tasks open."},
 	{Key: "FLOW_SLACK_AUTOOPEN", Label: "Auto-open on trigger", Group: "Slack", Category: categoryMessaging, Connector: connectorSlack, Type: settingBool, Default: "true", Help: "Open a session automatically when a Slack thread is triggered."},
-	{Key: "FLOW_SLACK_WRITES_ENABLED", Label: "Allow posting to Slack", Group: "Slack", Category: categoryMessaging, Connector: connectorSlack, Type: settingBool, Default: "false", Help: "Off by default. Gate for posting messages back to Slack."},
+	{Key: "FLOW_SLACK_WRITES_ENABLED", Label: "Allow posting to Slack", Group: "Slack", Category: categoryMessaging, Connector: connectorSlack, Type: settingBool, Default: "false", Help: "Off by default. Gate for posting messages back to Slack — required for the bot to reply to your DMs."},
+	{Key: "FLOW_SLACK_SEND_AS", Label: "Post replies as", Group: "Slack", Category: categoryMessaging, Connector: connectorSlack, Type: settingEnum, Options: []string{"bot", "user"}, Default: "bot", Help: "Identity for messages flow posts into channels/threads: the flow bot (recommended — clearly flow), or you (your user token, needs the User token set above). Your DM with the flow bot always replies as the bot regardless of this."},
+	{Key: "FLOW_SLACK_COMMAND_ENABLED", Label: "DM command channel", Group: "Slack", Category: categoryMessaging, Connector: connectorSlack, Type: settingBool, Default: "false", Help: "Off by default. Lets you DM the flow bot to run work on this machine while you're away (remote control). Only your own Slack user IDs are accepted; everyone else gets a polite decline. Needs 'Allow posting to Slack' for replies, and your IDs set above."},
+	{Key: "FLOW_SLACK_COMMAND_PROVIDER", Label: "DM chat agent", Group: "Slack", Category: categoryMessaging, Connector: connectorSlack, Type: settingEnum, Options: []string{"claude", "codex"}, Default: "claude", Help: "Which agent powers a chat started from a Slack DM."},
 	// Wizard-managed Slack app identity (Connect Slack flow). Hidden from the
 	// Settings form: the setup wizard writes these after apps.manifest.create
 	// and the OAuth callback reads them; hand-editing only breaks the pairing.
 	{Key: "FLOW_SLACK_APP_ID", Label: "Slack app ID", Group: "Slack", Category: categoryMessaging, Connector: connectorSlack, Type: settingString, Hidden: true},
 	{Key: "FLOW_SLACK_CLIENT_ID", Label: "Slack client ID", Group: "Slack", Category: categoryMessaging, Connector: connectorSlack, Type: settingString, Hidden: true},
 	{Key: "FLOW_SLACK_CLIENT_SECRET", Label: "Slack client secret", Group: "Slack", Category: categoryMessaging, Connector: connectorSlack, Type: settingSecret, Hidden: true},
+	{Key: "FLOW_SLACK_MANIFEST_REV", Label: "Slack manifest revision", Group: "Slack", Category: categoryMessaging, Connector: connectorSlack, Type: settingString, Hidden: true},
 	// GitHub — git connector
 	{Key: "FLOW_GH_TRANSPORT", Label: "Event transport", Group: "GitHub", Category: categoryGit, Connector: connectorGitHub, Type: settingEnum, Options: []string{"auto", "webhook", "polling", "hybrid", "off"}, Default: "auto", Help: "How GitHub events reach Flow. webhook = signed webhook deliveries, live, no API polling (needs a webhook secret + public ingress); polling = legacy gh-api search polling; hybrid = webhook plus the legacy search-poller (to also catch mentions/involvement in repos without a webhook installed); off = no ingress; auto = derive from the legacy 'GitHub polling' toggle below."},
 	{Key: "FLOW_GH_ENABLED", Label: "GitHub polling (legacy)", Group: "GitHub", Category: categoryGit, Connector: connectorGitHub, Type: settingBool, Default: "false", Help: "Legacy on/off for gh-api polling. Used only when transport is 'auto' or 'polling'/'hybrid'. Prefer setting the transport above."},
@@ -368,9 +374,16 @@ func (s *Server) applySettingsRestart(changed []string) {
 			ingressTouched = true
 		}
 	}
-	if slackTouched && s.slackListener != nil {
-		s.slackListener.Stop()
-		_ = s.slackListener.Start()
+	if slackTouched {
+		// Invalidate the operator↔bot IM channel cache. It depends on
+		// SlackBotToken()+SelfUserIDs(), both of which live in FLOW_SLACK_* /
+		// SLACK_* env vars. If the token or self-user IDs changed, the cached
+		// channel IDs are stale and must be re-resolved on the next use.
+		monitor.ResetCommandChannelCache()
+		if s.slackListener != nil {
+			s.slackListener.Stop()
+			_ = s.slackListener.Start()
+		}
 	}
 	if ghTouched && s.githubListener != nil {
 		s.githubListener.Stop()

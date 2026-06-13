@@ -192,6 +192,15 @@ func (b *SlackBackfill) runOnce(ctx context.Context) {
 // ts), so reconcile self-heals across restarts and never double-appends —
 // every candidate is deduped by ts against what's already recorded.
 func (b *SlackBackfill) reconcile(ctx context.Context, slug, channel, threadTS string) (int, error) {
+	// The operator↔bot command IM is the command surface, never a steered
+	// conversation: neither the operator's commands nor flow's own bot replies
+	// there belong in the attention feed or a task inbox. The live path excludes
+	// it via the command short-circuit; exclude it from backfill too so it can't
+	// resurface self-echoes — including bot messages with NO `user` field, which
+	// would otherwise slip past the user-id self-check straight to the LLM.
+	if botIsMemberOfIM(channel) {
+		return 0, nil
+	}
 	steererOwned := b.steererOwnsRouting()
 	// Per-channel cursor: a task can mix its origin thread with DM channels, so
 	// the resume point must be the newest ts in THIS channel, not a global max
@@ -259,6 +268,11 @@ func (b *SlackBackfill) reconcile(ctx context.Context, slug, channel, threadTS s
 			ThreadTS:    threadTS,
 			UserID:      strings.TrimSpace(m.User),
 			Text:        strings.TrimSpace(m.DisplayText()),
+		}
+		// Never re-ingest flow's own bot messages (acks, agent replies) when
+		// reconciling history — same self-echo guard as the live Dispatch path.
+		if IsSelfAuthoredSlack(ev) {
+			continue
 		}
 		if steererOwned {
 			if err := b.Observer.Observe(ctx, ev); err != nil {

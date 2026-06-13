@@ -1,0 +1,156 @@
+package monitor
+
+import (
+	"errors"
+	"testing"
+)
+
+func TestSendAsBotWritesDisabled(t *testing.T) {
+	// FLOW_SLACK_WRITES_ENABLED unset (default false) — should error without
+	// ever calling sendAsBotFn.
+	called := false
+	orig := sendAsBotFn
+	defer func() { sendAsBotFn = orig }()
+	sendAsBotFn = func(channel, text string) error {
+		called = true
+		return nil
+	}
+
+	err := SendAsBot("D123", "hello")
+	if err == nil {
+		t.Fatal("expected error when writes disabled, got nil")
+	}
+	if called {
+		t.Fatal("sendAsBotFn must not be called when writes disabled")
+	}
+}
+
+func TestSendAsBotEmptyChannelError(t *testing.T) {
+	t.Setenv("FLOW_SLACK_WRITES_ENABLED", "1")
+
+	orig := sendAsBotFn
+	defer func() { sendAsBotFn = orig }()
+	sendAsBotFn = func(channel, text string) error { return nil }
+
+	if err := SendAsBot("", "hello"); err == nil {
+		t.Fatal("expected error for empty channel")
+	}
+	if err := SendAsBot("   ", "hello"); err == nil {
+		t.Fatal("expected error for whitespace-only channel")
+	}
+}
+
+func TestSendAsBotEmptyTextError(t *testing.T) {
+	t.Setenv("FLOW_SLACK_WRITES_ENABLED", "1")
+
+	orig := sendAsBotFn
+	defer func() { sendAsBotFn = orig }()
+	sendAsBotFn = func(channel, text string) error { return nil }
+
+	if err := SendAsBot("D123", ""); err == nil {
+		t.Fatal("expected error for empty text")
+	}
+	if err := SendAsBot("D123", "   "); err == nil {
+		t.Fatal("expected error for whitespace-only text")
+	}
+}
+
+func TestSendAsBotForwardsToFn(t *testing.T) {
+	t.Setenv("FLOW_SLACK_WRITES_ENABLED", "1")
+
+	var gotChannel, gotText string
+	orig := sendAsBotFn
+	defer func() { sendAsBotFn = orig }()
+	sendAsBotFn = func(channel, text string) error {
+		gotChannel = channel
+		gotText = text
+		return nil
+	}
+
+	if err := SendAsBot("D123", "hello world"); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if gotChannel != "D123" {
+		t.Errorf("channel = %q, want D123", gotChannel)
+	}
+	if gotText != "hello world" {
+		t.Errorf("text = %q, want hello world", gotText)
+	}
+}
+
+func TestSlackSendIdentity(t *testing.T) {
+	cases := []struct{ env, want string }{
+		{"", "bot"},
+		{"bot", "bot"},
+		{"user", "user"},
+		{"USER", "user"},
+		{"nonsense", "bot"},
+	}
+	for _, c := range cases {
+		t.Run(c.env, func(t *testing.T) {
+			t.Setenv("FLOW_SLACK_SEND_AS", c.env)
+			if got := SlackSendIdentity(); got != c.want {
+				t.Errorf("SlackSendIdentity() with %q = %q, want %q", c.env, got, c.want)
+			}
+		})
+	}
+}
+
+// TestResolveSendIdentity covers the bot/user identity selection, including the
+// invariant that the operator↔bot command IM is ALWAYS posted as the bot (never
+// as the operator — that would loop and break self-echo detection).
+func TestResolveSendIdentity(t *testing.T) {
+	t.Setenv("SLACK_BOT_TOKEN", "xoxb-bot")
+	t.Setenv("SLACK_USER_TOKEN", "xoxp-user")
+	// Bot is a member of the command IM "Dcmd" only.
+	orig := conversationIsBotIMFn
+	conversationIsBotIMFn = func(ch string) bool { return ch == "Dcmd" }
+	t.Cleanup(func() { conversationIsBotIMFn = orig; resetCommandChannelCache() })
+
+	t.Run("default identity is bot", func(t *testing.T) {
+		t.Setenv("FLOW_SLACK_SEND_AS", "")
+		resetCommandChannelCache()
+		if tok, asUser := resolveSendIdentity("C123"); tok != "xoxb-bot" || asUser {
+			t.Errorf("default = (%q,%v), want (xoxb-bot,false)", tok, asUser)
+		}
+	})
+	t.Run("user identity posts as user in a channel", func(t *testing.T) {
+		t.Setenv("FLOW_SLACK_SEND_AS", "user")
+		resetCommandChannelCache()
+		if tok, asUser := resolveSendIdentity("C123"); tok != "xoxp-user" || !asUser {
+			t.Errorf("user/channel = (%q,%v), want (xoxp-user,true)", tok, asUser)
+		}
+	})
+	t.Run("command IM is always the bot even when user is set", func(t *testing.T) {
+		t.Setenv("FLOW_SLACK_SEND_AS", "user")
+		resetCommandChannelCache()
+		if tok, asUser := resolveSendIdentity("Dcmd"); tok != "xoxb-bot" || asUser {
+			t.Errorf("user/command-IM = (%q,%v), want (xoxb-bot,false) — never impersonate operator in the command DM", tok, asUser)
+		}
+	})
+	t.Run("user identity falls back to bot with no user token", func(t *testing.T) {
+		t.Setenv("FLOW_SLACK_SEND_AS", "user")
+		t.Setenv("FLOW_SLACK_USER_TOKEN", "")
+		t.Setenv("SLACK_USER_TOKEN", "")
+		t.Setenv("FLOW_SLACK_TOKEN", "")
+		t.Setenv("SLACK_TOKEN", "")
+		resetCommandChannelCache()
+		if tok, asUser := resolveSendIdentity("C123"); tok != "xoxb-bot" || asUser {
+			t.Errorf("user/no-user-token = (%q,%v), want (xoxb-bot,false) fallback", tok, asUser)
+		}
+	})
+}
+
+func TestSendAsBotPropagatesFnError(t *testing.T) {
+	t.Setenv("FLOW_SLACK_WRITES_ENABLED", "1")
+
+	boom := errors.New("network error")
+	orig := sendAsBotFn
+	defer func() { sendAsBotFn = orig }()
+	sendAsBotFn = func(channel, text string) error { return boom }
+
+	err := SendAsBot("D123", "hello")
+	if !errors.Is(err, boom) {
+		t.Errorf("err = %v, want %v", err, boom)
+	}
+}

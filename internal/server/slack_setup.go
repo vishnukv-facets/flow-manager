@@ -54,6 +54,13 @@ import (
 // creation time, and the authorize round trip later has to match it exactly.
 const slackSetupDefaultOAuthPort = 8790
 
+// slackManifestRev is bumped whenever the manifest changes scopes, events, or
+// app_home settings in a way that requires the operator to reinstall (OAuth +
+// re-approve). Persisted as FLOW_SLACK_MANIFEST_REV after create-app and
+// successful OAuth; status compares the stored value to this constant and sets
+// NeedsReinstall when they differ.
+const slackManifestRev = "2"
+
 // slackOAuthCallbackPath is the path component of the registered redirect URL.
 const slackOAuthCallbackPath = "/api/slack/oauth/callback"
 
@@ -126,6 +133,8 @@ var (
 		"files:read",       // safe text/PDF extraction for channel file shares
 		"app_mentions:read",
 		"im:read",
+		"im:history", // bot's own DMs; user-scope im:history below covers the operator's DMs
+		"im:write",   // resolve/open operator↔bot IM via conversations.open
 		"mpim:read",
 		"chat:write",      // only used when FLOW_SLACK_WRITES_ENABLED=1
 		"reactions:write", // same gate
@@ -152,6 +161,7 @@ var (
 		"reaction_added",
 		"message.channels",
 		"message.groups",
+		"message.im", // bot receives DMs sent directly to it
 		"app_mention",
 	}
 	// Delivered only when subscribed under "events on behalf of users" —
@@ -179,13 +189,19 @@ func slackAppManifest(appName string, redirectURLs []string) map[string]any {
 	}
 	return map[string]any{
 		"display_information": map[string]any{
-			"name":        name,
-			"description": "Turns your Slack reactions and replies into Claude/Codex work.",
+			"name":             name,
+			"description":      "Turns your Slack reactions and replies into Claude/Codex work.",
+			"background_color": "#1b1b1f",
 		},
 		"features": map[string]any{
 			"bot_user": map[string]any{
 				"display_name":  name,
 				"always_online": true,
+			},
+			"app_home": map[string]any{
+				"home_tab_enabled":               false,
+				"messages_tab_enabled":           true,
+				"messages_tab_read_only_enabled": false,
 			},
 		},
 		"oauth_config": map[string]any{
@@ -665,6 +681,7 @@ func (s *Server) handleSlackOAuthCallback(w http.ResponseWriter, r *http.Request
 		"FLOW_SLACK_TOKEN":         tokens.BotToken,
 		"FLOW_SLACK_USER_TOKEN":    tokens.UserToken,
 		"FLOW_SLACK_SELF_USER_IDS": mergeSelfUserIDs(os.Getenv("FLOW_SLACK_SELF_USER_IDS"), tokens.UserID),
+		"FLOW_SLACK_MANIFEST_REV":  slackManifestRev,
 	}
 	if err := s.persistSlackSettings(values); err != nil {
 		fail(http.StatusInternalServerError, "saving tokens failed: "+err.Error(), err.Error())
@@ -718,13 +735,16 @@ type slackSetupStatus struct {
 	ListenerRunning    bool `json:"listener_running"`
 	ListenerConnected  bool `json:"listener_connected"`
 	ListenerSuppressed bool `json:"listener_suppressed"`
+
+	// NeedsReinstall is true when the operator has installed (token present) but
+	// the persisted FLOW_SLACK_MANIFEST_REV lags the current slackManifestRev —
+	// meaning new scopes/events from a manifest update require a fresh OAuth install.
+	NeedsReinstall bool `json:"needs_reinstall"`
 }
 
-func (s *Server) handleSlackSetupStatus(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet {
-		w.WriteHeader(http.StatusMethodNotAllowed)
-		return
-	}
+// computeSlackSetupStatus builds the current Slack setup status without
+// writing to an http.ResponseWriter — extracted for testability.
+func (s *Server) computeSlackSetupStatus() slackSetupStatus {
 	appID := strings.TrimSpace(os.Getenv("FLOW_SLACK_APP_ID"))
 	st := slackSetupStatus{
 		AppCreated:   appID != "" && strings.TrimSpace(os.Getenv("FLOW_SLACK_CLIENT_ID")) != "",
@@ -758,7 +778,17 @@ func (s *Server) handleSlackSetupStatus(w http.ResponseWriter, r *http.Request) 
 		st.ListenerConnected = s.slackListener.Connected()
 		st.ListenerSuppressed = s.slackListener.Suppressed()
 	}
-	writeJSON(w, st)
+	installed := st.UserTokenSet || st.BotTokenSet
+	st.NeedsReinstall = installed && strings.TrimSpace(os.Getenv("FLOW_SLACK_MANIFEST_REV")) != slackManifestRev
+	return st
+}
+
+func (s *Server) handleSlackSetupStatus(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		w.WriteHeader(http.StatusMethodNotAllowed)
+		return
+	}
+	writeJSON(w, s.computeSlackSetupStatus())
 }
 
 func (s *Server) handleSlackSetupCreateApp(w http.ResponseWriter, r *http.Request) {
@@ -812,12 +842,18 @@ func (s *Server) handleSlackSetupCreateApp(w http.ResponseWriter, r *http.Reques
 		"FLOW_SLACK_APP_ID":        result.AppID,
 		"FLOW_SLACK_CLIENT_ID":     result.ClientID,
 		"FLOW_SLACK_CLIENT_SECRET": result.ClientSecret,
+		"FLOW_SLACK_MANIFEST_REV":  slackManifestRev,
 	}); err != nil {
 		writeJSONStatus(w, map[string]any{"ok": false, "error": "save app credentials: " + err.Error()}, http.StatusInternalServerError)
 		return
 	}
 	s.publishUIChange("slack-setup")
-	writeJSON(w, map[string]any{"ok": true, "app_id": result.AppID})
+	writeJSON(w, map[string]any{
+		"ok":              true,
+		"app_id":          result.AppID,
+		"icon_upload_url": "https://api.slack.com/apps/" + url.PathEscape(result.AppID) + "/general",
+		"icon_asset_url":  "/flow-app-icon-512.png",
+	})
 }
 
 func (s *Server) handleSlackSetupAppToken(w http.ResponseWriter, r *http.Request) {

@@ -130,17 +130,65 @@ function StepShell({
   )
 }
 
+type CreateAppResponse = {
+  ok: boolean
+  app_id?: string
+  existing?: boolean
+  icon_upload_url?: string
+  icon_asset_url?: string
+}
+
+function AppIconPanel({ appId, iconUploadUrl }: { appId: string; iconUploadUrl: string }) {
+  return (
+    <div className="slack-icon-panel">
+      <img
+        src="/flow-app-icon-512.png"
+        alt="flow app icon"
+        width={72}
+        height={72}
+        className="slack-icon-preview"
+      />
+      <div className="slack-icon-panel-body">
+        <p className="config-help">
+          Slack can't set the app icon automatically. Open your app's Display Information
+          and upload this icon.
+        </p>
+        <div className="slack-step-controls">
+          <a href="/flow-app-icon-512.png" download className="btn">
+            Download icon
+          </a>
+          <a
+            className="btn primary"
+            href={iconUploadUrl || `https://api.slack.com/apps/${encodeURIComponent(appId)}/general`}
+            target="_blank"
+            rel="noreferrer"
+          >
+            Open Slack app settings <ExternalLink size={12} />
+          </a>
+        </div>
+      </div>
+    </div>
+  )
+}
+
 function StepCreateApp({ st, active, onDone }: { st: SlackSetupStatus; active: boolean; onDone: () => void }) {
   const [token, setToken] = useState('')
   const [busy, setBusy] = useState(false)
+  const [iconGuide, setIconGuide] = useState<{ appId: string; iconUploadUrl: string } | null>(null)
 
   const create = async () => {
     if (!token.trim()) return
     setBusy(true)
     try {
-      await apiPost('/api/slack/setup/create-app', { config_token: token.trim() })
+      const res = await apiPost<CreateAppResponse>('/api/slack/setup/create-app', { config_token: token.trim() })
       setToken('')
       pushToast('ok', 'Slack app created')
+      if (res.app_id && !res.existing) {
+        setIconGuide({
+          appId: res.app_id,
+          iconUploadUrl: res.icon_upload_url ?? `https://api.slack.com/apps/${encodeURIComponent(res.app_id)}/general`,
+        })
+      }
       onDone()
     } catch (err) {
       pushToast('error', err instanceof Error ? err.message : 'create app failed')
@@ -150,43 +198,48 @@ function StepCreateApp({ st, active, onDone }: { st: SlackSetupStatus; active: b
   }
 
   return (
-    <StepShell
-      index={1}
-      title="Create the Slack app"
-      state={st.app_created ? 'done' : active ? 'active' : 'pending'}
-      summary={
-        st.manage_url && (
-          <a className="slack-step-link" href={st.manage_url} target="_blank" rel="noreferrer">
-            {st.app_id} <ExternalLink size={11} />
-          </a>
-        )
-      }
-    >
-      <p className="config-help">
-        Mint an <strong>app configuration token</strong> at{' '}
-        <a href="https://api.slack.com/apps" target="_blank" rel="noreferrer">
-          api.slack.com/apps <ExternalLink size={11} />
-        </a>{' '}
-        — scroll to “Your App Configuration Tokens”, Generate, copy the access token
-        (<code>xoxe.xoxp-…</code>, lives 12 h). flow uses it once to create a fully
-        configured app: scopes, events, and Socket Mode in one shot.
-      </p>
-      <div className="slack-step-controls">
-        <input
-          className="input mono"
-          type="password"
-          autoComplete="off"
-          placeholder="xoxe.xoxp-…"
-          value={token}
-          onChange={(e) => setToken(e.target.value)}
-          onKeyDown={(e) => e.key === 'Enter' && create()}
-        />
-        <button type="button" className="btn primary" disabled={busy || !token.trim()} onClick={create}>
-          {busy ? <Loader2 size={14} className="spin" /> : null}
-          Create app
-        </button>
-      </div>
-    </StepShell>
+    <>
+      <StepShell
+        index={1}
+        title="Create the Slack app"
+        state={st.app_created ? 'done' : active ? 'active' : 'pending'}
+        summary={
+          st.manage_url && (
+            <a className="slack-step-link" href={st.manage_url} target="_blank" rel="noreferrer">
+              {st.app_id} <ExternalLink size={11} />
+            </a>
+          )
+        }
+      >
+        <p className="config-help">
+          Mint an <strong>app configuration token</strong> at{' '}
+          <a href="https://api.slack.com/apps" target="_blank" rel="noreferrer">
+            api.slack.com/apps <ExternalLink size={11} />
+          </a>{' '}
+          — scroll to "Your App Configuration Tokens", Generate, copy the access token
+          (<code>xoxe.xoxp-…</code>, lives 12 h). flow uses it once to create a fully
+          configured app: scopes, events, and Socket Mode in one shot.
+        </p>
+        <div className="slack-step-controls">
+          <input
+            className="input mono"
+            type="password"
+            autoComplete="off"
+            placeholder="xoxe.xoxp-…"
+            value={token}
+            onChange={(e) => setToken(e.target.value)}
+            onKeyDown={(e) => e.key === 'Enter' && create()}
+          />
+          <button type="button" className="btn primary" disabled={busy || !token.trim()} onClick={create}>
+            {busy ? <Loader2 size={14} className="spin" /> : null}
+            Create app
+          </button>
+        </div>
+      </StepShell>
+      {iconGuide && (
+        <AppIconPanel appId={iconGuide.appId} iconUploadUrl={iconGuide.iconUploadUrl} />
+      )}
+    </>
   )
 }
 
@@ -339,7 +392,7 @@ function FinishedSummary({ st, onRefetch }: { st: SlackSetupStatus; onRefetch: (
   const recreate = async () => {
     const ok = await confirmAction({
       title: 'Recreate the Slack app?',
-      body: 'Clears this app’s credentials so you can create a fresh one (the only way to switch the OAuth redirect to the public URL). You’ll paste a new config token and re-approve the install. The old app stays on Slack until you delete it there.',
+      body: "Clears this app's credentials so you can create a fresh one (the only way to switch the OAuth redirect to the public URL). You'll paste a new config token and re-approve the install. The old app stays on Slack until you delete it there.",
       confirmLabel: 'Recreate',
       danger: true,
     })

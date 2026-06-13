@@ -69,6 +69,11 @@ type Dispatcher struct {
 	// thread messages also go through it instead of direct inbox append.
 	Steerer            MessageObserver
 	SteererOwnsRouting func() bool
+	// ChatSink routes authorized operator commands arriving on the Slack
+	// command channel (the operator↔bot IM) into a durable chat agent session.
+	// nil in CLI contexts and when the command channel feature is off — then
+	// command-channel DMs fall through to normal routing.
+	ChatSink ChatCommandSink
 }
 
 // NewDispatcher constructs a dispatcher bound to db. opener may be nil
@@ -84,6 +89,16 @@ func NewDispatcher(db *sql.DB, opener TaskOpener) *Dispatcher {
 // processed."
 func (d *Dispatcher) Dispatch(ctx context.Context, ev InboundEvent) error {
 	if d == nil || d.DB == nil {
+		return nil
+	}
+	// Drop flow's OWN bot messages that Slack echoes back to the listener. flow
+	// posts command-channel acks and agent replies as its bot (SendAsBot); those
+	// return as inbound message events authored by the bot's own user id. They
+	// are not operator/third-party traffic — dispatching them declines the bot
+	// as a "non-operator" in its own command DM (a spurious reject to the
+	// operator) and surfaces bogus self-acknowledgment attention. This guard sits
+	// above BOTH the command short-circuit and the steerer. See IsSelfAuthoredSlack.
+	if IsSelfAuthoredSlack(ev) {
 		return nil
 	}
 	switch ev.Kind {
@@ -133,6 +148,50 @@ func (d *Dispatcher) dispatchReaction(ctx context.Context, ev InboundEvent) erro
 }
 
 func (d *Dispatcher) dispatchMessage(ctx context.Context, ev InboundEvent) error {
+	// Slack AFK command channel: a DM to the flow bot routes into a durable chat
+	// agent session instead of the task/steering pipeline. This short-circuit is
+	// ABOVE the steererOwnsRouting() gate so bot DMs never leak into the
+	// attention feed. Gated OFF by default (CommandChannelEnabled) — the surface
+	// can run commands on the operator's machine, so it must be opted into.
+	//
+	// IsCommandChannel(ev) confirms (via cached conversations.info membership)
+	// that this im is a DM to the flow BOT, not the operator's DM with a third
+	// party. Only the operator may command it; everyone else gets a static decline
+	// (no agent → injection-proof). An `im` where the bot is NOT a member (the
+	// operator's DM with a colleague) → IsCommandChannel false → falls through to
+	// the steerer UNCHANGED; we must never reply-reject there.
+	//
+	// Run that membership check only when it can matter: the feature is enabled
+	// (operator→command, stranger→reject), OR the author is the operator (so a
+	// DISABLED feature can still nudge the operator to enable it — without making
+	// Slack API calls on unrelated/3rd-party DMs).
+	if ev.ChannelType == "im" {
+		enabled := CommandChannelEnabled()
+		operator := AuthorizedOperator(ev.UserID)
+		if (enabled || operator) && IsCommandChannel(ev) {
+			switch {
+			case !enabled:
+				// Feature off + operator DMed the bot → nudge once to enable it.
+				hintCommandChannelDisabled(ev.Channel)
+			case operator:
+				if d.ChatSink != nil {
+					return d.ChatSink.OpenOrContinueChat(ctx, ev.Channel, ev.Text)
+				}
+			default:
+				// Enabled, sender not recognized as the operator. Only decline
+				// when we KNOW who the operator is — never risk rejecting the
+				// operator when identity is unresolved. Log the mismatch so a
+				// wrong reject is diagnosable.
+				if OperatorIdentityKnown() {
+					fmt.Fprintf(os.Stderr, "monitor: slack command-channel decline: sender %q not an operator (known self IDs: %v, token-operator: %q)\n", ev.UserID, SelfUserIDs(), operatorUserID())
+					rejectUnauthorizedDM(ev.Channel)
+				} else {
+					fmt.Fprintf(os.Stderr, "monitor: slack command-channel: operator identity unknown; not declining sender %q\n", ev.UserID)
+				}
+			}
+			return nil
+		}
+	}
 	if d.steererOwnsRouting() {
 		return d.observeWithSteerer(ctx, ev)
 	}

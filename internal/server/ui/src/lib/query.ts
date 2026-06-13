@@ -8,6 +8,7 @@ import type {
   ActionRequest,
   AskFlowResponse,
   AttentionItem,
+  Chat,
   BrainGraphActionRequest,
   BrainGraphActionResponse,
   AttentionTraceResponse,
@@ -453,6 +454,20 @@ export function useWorkdirs() {
 }
 export function useInbox() {
   return useQuery({ queryKey: ['inbox'], queryFn: () => apiGet<InboxFeed>('/api/inbox') })
+}
+// Adhoc Ask Flow / Slack chat sessions for the Chats screen. include_archived
+// surfaces archived chats too; the server always returns a JSON array (never
+// null). Live `chats` ui_change events refetch just this key (see
+// focusedLiveInvalidationKeys), so the list reflects reopen/archive/delete
+// without a broad UI invalidation.
+export function useChats(includeArchived = false) {
+  return useQuery({
+    queryKey: ['chats', includeArchived],
+    queryFn: () => apiGet<Chat[]>(`/api/chats${qs({ include_archived: includeArchived })}`),
+    // While any chat is live, poll so the agent's latest-response preview and
+    // working state stay fresh; stop polling once everything is idle.
+    refetchInterval: (q) => (q.state.data?.some((c) => c.live) ? 3000 : false),
+  })
 }
 export function useAttention(status: string = 'new') {
   const q = status ? `?status=${encodeURIComponent(status)}` : ''

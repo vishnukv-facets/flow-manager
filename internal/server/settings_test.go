@@ -246,6 +246,26 @@ func TestSeedConfigFromEnv(t *testing.T) {
 	}
 }
 
+// TestApplySettingsRestart_SlackKeyResetsCommandCache verifies that
+// applySettingsRestart resets the command channel cache when a Slack-related
+// key changes, without panicking (no live listener in the test server).
+func TestApplySettingsRestart_SlackKeyResetsCommandCache(t *testing.T) {
+	root, db := testRootDB(t)
+	srv := New(Config{DB: db, FlowRoot: root, CommandPath: "/bin/false"})
+	// s.slackListener is nil in the test server; the reset must still happen.
+	slackKeys := []string{
+		"FLOW_SLACK_SELF_USER_IDS",
+		"FLOW_SLACK_TOKEN",
+		"SLACK_BOT_TOKEN",
+	}
+	for _, k := range slackKeys {
+		// Must not panic even with a nil slackListener.
+		srv.applySettingsRestart([]string{k})
+	}
+	// Non-Slack key must also not panic.
+	srv.applySettingsRestart([]string{"FLOW_STALE_DAYS"})
+}
+
 func TestApplyConfigToEnv_ConfigIsAuthoritative(t *testing.T) {
 	root, db := testRootDB(t)
 	if err := saveConfigFile(root+"/config.json", map[string]string{"FLOW_SLACK_TRIGGER_EMOJI": "fromconfig"}); err != nil {

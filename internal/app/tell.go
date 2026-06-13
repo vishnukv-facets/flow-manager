@@ -147,11 +147,7 @@ func cmdTell(args []string) int {
 // "inbox_changed" event to any WS subscribers. Best-effort: silent
 // failure when the server isn't running.
 func notifyInboxChanged(slug, sender, message string) {
-	endpoint := strings.TrimSpace(os.Getenv("FLOW_UI_URL"))
-	if endpoint == "" {
-		endpoint = "http://127.0.0.1:8787"
-	}
-	url := strings.TrimRight(endpoint, "/") + "/api/inbox/notify"
+	url := flowServerURL("/api/inbox/notify")
 	payload := fmt.Sprintf(`{"task_slug":%q,"sender":%q,"preview":%q,"message":%q,"jsonl_appended":true}`,
 		slug, sender, truncateInboxPreview(message, 200), message)
 	req, err := http.NewRequest(http.MethodPost, url, strings.NewReader(payload))
@@ -164,6 +160,17 @@ func notifyInboxChanged(slug, sender, message string) {
 	if err == nil {
 		resp.Body.Close()
 	}
+}
+
+// flowServerURL resolves the local flow UI server base URL (FLOW_UI_URL, else
+// the default loopback port) and joins the given path. Shared by every CLI
+// command that pokes the running server (tell, slack send).
+func flowServerURL(path string) string {
+	endpoint := strings.TrimSpace(os.Getenv("FLOW_UI_URL"))
+	if endpoint == "" {
+		endpoint = "http://127.0.0.1:8787"
+	}
+	return strings.TrimRight(endpoint, "/") + path
 }
 
 func truncateInboxPreview(s string, n int) string {

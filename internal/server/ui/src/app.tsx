@@ -12,6 +12,7 @@ import { Playbooks } from './screens/Playbooks'
 import { PlaybookDetail } from './screens/PlaybookDetail'
 import { InboxScreen } from './screens/Inbox'
 import { Attention } from './screens/Attention'
+import { Chats } from './screens/Chats'
 import { KnowledgeBase } from './screens/KB'
 import { Memories } from './screens/Memories'
 import { Workdirs } from './screens/Workdirs'
@@ -39,6 +40,7 @@ export function App() {
         <Route path="/playbooks" component={Playbooks} />
         <Route path="/playbook/:slug">{(p) => <PlaybookDetail slug={p.slug} />}</Route>
         <Route path="/inbox" component={InboxScreen} />
+        <Route path="/chats" component={Chats} />
         <Route path="/attention" component={Attention} />
         <Route path="/kb" component={KnowledgeBase} />
         <Route path="/memories" component={Memories} />

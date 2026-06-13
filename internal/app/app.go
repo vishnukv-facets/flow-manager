@@ -83,6 +83,8 @@ func Run(args []string) int {
 		return cmdSpawn(rest)
 	case "tell":
 		return cmdTell(rest)
+	case "slack":
+		return cmdSlack(rest)
 	case "wait":
 		return cmdWait(rest)
 	case "attention":
@@ -172,5 +174,8 @@ Playbooks:
   flow add playbook   "<name>" --work-dir <path> [--slug <s>] [--project <slug>] [--mkdir]
   flow run playbook   <slug> [--agent claude|codex] [--dangerously-skip-permissions] [--auto] [--with "<instruction>"|--with-file <path>]
   flow show playbook  <ref>
-  flow list playbooks [--project <slug>] [--include-archived] [--include-deleted|--deleted]`)
+  flow list playbooks [--project <slug>] [--include-archived] [--include-deleted|--deleted]
+
+Slack:
+  flow slack send --channel <id> --text <message>   (post as bot; requires FLOW_SLACK_WRITES_ENABLED=1)`)
 }

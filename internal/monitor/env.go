@@ -40,6 +40,20 @@ func SlackUserToken() string {
 	)
 }
 
+// SlackSendIdentity reports which Slack identity outbound messages should be
+// posted under: "bot" (the flow app's bot user) or "user" (the operator, via
+// their user token). Controlled by FLOW_SLACK_SEND_AS; defaults to "bot".
+// Anything unrecognized falls back to "bot" — the safe identity that never
+// impersonates the operator.
+func SlackSendIdentity() string {
+	switch strings.ToLower(strings.TrimSpace(os.Getenv("FLOW_SLACK_SEND_AS"))) {
+	case "user":
+		return "user"
+	default:
+		return "bot"
+	}
+}
+
 // slackToken returns the token SlackWriter should use for outbound calls.
 // Explicit write tokens win; otherwise we reuse the read-side token.
 func slackToken() string {

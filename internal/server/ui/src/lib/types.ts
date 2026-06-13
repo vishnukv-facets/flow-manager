@@ -855,6 +855,22 @@ export interface HealthView {
   flow_root: string
 }
 
+// Chat mirrors the server's chatView (internal/server/chats.go) — one adhoc
+// Ask Flow / Slack chat session in the Chats list. `origin` is "ui" | "slack";
+// `live` is true while the chat's session still has a PTY attached.
+export interface Chat {
+  slug: string
+  title: string
+  provider: string
+  origin: string
+  created_at: string
+  last_activity_at: string
+  archived: boolean
+  live: boolean
+  /** One-line preview of the agent's most recent response in this chat. */
+  last_reply?: string
+}
+
 export interface TranscriptEntry {
   type: string
   text?: string
