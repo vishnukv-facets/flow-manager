@@ -135,6 +135,17 @@ var (
 		"mpim:history", // group DMs
 		"channels:history",
 		"groups:history",
+		// channel/DM monitoring rides the operator's membership, not the bot's:
+		// the user-token *:read scopes below let flow enumerate the operator's DMs
+		// (im/mpim:read — without these the DM backfill fails with missing_scope)
+		// and read channel/member metadata on the user token, so a watched channel
+		// is covered even when the bot was never invited to it. Mirrors the
+		// pre-wizard manifest that worked before bot-membership was assumed.
+		"im:read",
+		"mpim:read",
+		"channels:read",
+		"groups:read",
+		"users:read",
 		"files:read", // safe text/PDF extraction for DM file shares
 	}
 	slackManifestBotEvents = []string{
@@ -144,10 +155,17 @@ var (
 		"app_mention",
 	}
 	// Delivered only when subscribed under "events on behalf of users" —
-	// bot-side subscription alone never sees DM traffic.
+	// bot-side subscription alone never sees DM traffic. message.channels/groups
+	// are subscribed here too (not just as bot_events) so the operator's channel
+	// messages reach flow via THEIR membership — covering watched channels the
+	// bot isn't a member of (the live half of the same fix as the user *:read
+	// scopes above). Duplicate deliveries for channels the bot is also in are
+	// deduped downstream by (channel, ts).
 	slackManifestUserEvents = []string{
 		"message.im",
 		"message.mpim",
+		"message.channels",
+		"message.groups",
 	}
 )
 

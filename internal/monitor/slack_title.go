@@ -440,6 +440,19 @@ func newSlackTitleAPIClient() SlackTitleClient {
 	return slackTitleAPIClient{lazy: newLazySlackClient(SlackBotToken)}
 }
 
+// NewSlackTitleUserClient returns a USER-token title client, or nil when no
+// user token is configured. The name resolver uses it as a fallback for
+// channels the bot can't see (private channels it was never invited to →
+// conversations.info returns channel_not_found): the operator's token resolves
+// them because the operator is a member. Token resolved per call (lazy), so a
+// rotated token is picked up without rebuilding the client.
+func NewSlackTitleUserClient() SlackTitleClient {
+	if strings.TrimSpace(SlackUserToken()) == "" {
+		return nil
+	}
+	return slackTitleAPIClient{lazy: newLazySlackClient(SlackUserToken)}
+}
+
 func (c slackTitleAPIClient) ConversationInfo(ctx context.Context, channelID string) (SlackConversation, error) {
 	api := c.lazy.client()
 	if api == nil {

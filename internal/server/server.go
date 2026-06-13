@@ -62,6 +62,10 @@ func New(cfg Config) *Server {
 	// Resolves Slack user/channel IDs to display names for the Inbox UI.
 	// Nil when no Slack token is configured; all uses are nil-safe.
 	s.nameResolver = monitor.NewSlackNameResolver()
+	// Fall back to the operator's user token for channels the bot can't see (a
+	// private channel it was never invited to), so the live/trace/feed views show
+	// "#name" instead of a raw C… id for those too.
+	s.nameResolver.SetFallbackClient(monitor.NewSlackTitleUserClient())
 	// Resolves a real Slack permalink (chat.getPermalink) from channel+ts so the
 	// "Open in Slack" link works for every item — including those captured before
 	// the channel/ts/team_id columns existed (channel+ts are recoverable from
@@ -274,7 +278,13 @@ func (s *Server) ListenAndServe(addr string) int {
 	// Web API (independent of the socket) and is a no-op when no Slack token is
 	// configured.
 	if s.cfg.DB != nil {
-		if rc := monitor.NewSlackRepliesClient(); rc != nil {
+		// Channel-thread reconcile uses the bot token, falling back to the
+		// operator's user token for origin channels the bot isn't a member of —
+		// the same fix as the steerer sweep. Without it, a slack-reply task whose
+		// origin channel the bot can't read (private channel, or never invited)
+		// retries every interval forever (channel_not_found / not_in_channel) and
+		// never recovers, even though the operator's token could read it.
+		if rc := monitor.NewSlackChannelRepliesClient(); rc != nil {
 			backfill := monitor.NewSlackBackfill(s.cfg.DB, rc, 0)
 			if s.cascade != nil {
 				backfill.Observer = s.cascade
@@ -301,16 +311,21 @@ func (s *Server) ListenAndServe(addr string) int {
 	// through the SAME cascade (ObserveBatch, origin=backfill). No-op when no
 	// Slack history client is configured or FLOW_STEERING_BACKFILL=0.
 	if s.cfg.DB != nil && s.cascade != nil && steeringBackfillEnabled() {
-		ch := monitor.NewSlackHistoryClient()
+		// Channel sweep uses the bot token, falling back to the operator's user
+		// token for channels the bot isn't a member of — the operator is a member
+		// of every channel worth watching, so the user token recovers them even
+		// when the bot was never invited (the engg-infra case). DMs stay user-only.
+		ch := monitor.NewSlackChannelHistoryClient()
 		dm := monitor.NewSlackUserHistoryClient()
 		ims := monitor.NewSlackUserIMLister()
 		if ch != nil || (dm != nil && ims != nil) {
 			sbf := steering.NewSteeringBackfill(s.cfg.DB, s.cascade.ObserveBatch, ch, dm, ims, steering.WatchConfigFromEnv, 0, 0, 0)
 			// Follow active threads so replies that landed in a watched channel /
 			// DM while the socket was down (e.g. the laptop slept) are recovered —
-			// a top-level history sweep alone never returns thread replies. Bot
-			// token reads channel threads; user token reads DM threads.
-			if rc := monitor.NewSlackRepliesClient(); rc != nil {
+			// a top-level history sweep alone never returns thread replies. Channel
+			// threads use the bot token (user-token fallback for non-member
+			// channels); DM threads use the user token.
+			if rc := monitor.NewSlackChannelRepliesClient(); rc != nil {
 				sbf.SetRepliesClient(rc)
 			}
 			if drc := monitor.NewSlackUserRepliesClient(); drc != nil {

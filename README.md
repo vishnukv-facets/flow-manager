@@ -384,8 +384,13 @@ oauth_config:
     user:
       - im:history          # receive + backfill 1:1 DMs (DM following)
       - mpim:history        # receive + backfill group DMs (DM following)
-      - channels:history    # optional, user-scoped channel events (overlaps bot)
-      - groups:history      # optional, user-scoped private-channel events
+      - channels:history    # user-scoped channel events + backfill (your membership)
+      - groups:history      # user-scoped private-channel events + backfill
+      - im:read             # enumerate your DMs for backfill (else: missing_scope)
+      - mpim:read           # enumerate your group DMs for backfill
+      - channels:read       # resolve channel metadata on the user token
+      - groups:read         # same, private channels
+      - users:read          # resolve author names on the user token
       - files:read          # read text/PDF file-share bodies in DMs/MPIMs
 settings:
   event_subscriptions:
@@ -397,6 +402,8 @@ settings:
     user_events:
       - message.im
       - message.mpim
+      - message.channels    # channel msgs via YOUR membership (bot need not join)
+      - message.groups
   socket_mode_enabled: true
   org_deploy_enabled: false
   token_rotation_enabled: false
@@ -489,7 +496,9 @@ is incremental.
 | Bot | `im:read`, `mpim:read` | DM metadata lookups (optional — most DM work uses the user token) |
 | Bot | `chat:write`, `reactions:write` | Posting replies / reactions *back* to Slack — only used if you set `FLOW_SLACK_WRITES_ENABLED=1` (off by default) |
 | **User** (`xoxp-`) | `im:history`, `mpim:history` | **DM following** — receiving and backfilling DM replies the bot can't see |
-| User | `channels:history`, `groups:history` | Optional, user-scoped channel events (overlaps the bot's; flow dedups by `(channel, ts)` so it's safe to have both) |
+| User | `im:read`, `mpim:read` | **Enumerating your DMs for backfill** — without these the DM backfill fails with `missing_scope` and only catches DMs that already have a watermark |
+| User | `channels:history`, `groups:history` | Channel events + backfill via **your** membership — covers watched channels the bot was never invited to (flow dedups vs. the bot's by `(channel, ts)`) |
+| User | `channels:read`, `groups:read`, `users:read` | Channel/author metadata resolution on the user token |
 | User | `files:read` | Reading text/PDF file-share bodies in DMs/MPIMs for attention context and security reporting |
 
 #### Event → feature reference

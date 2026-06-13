@@ -221,3 +221,35 @@ func TestMentionedUserIDs(t *testing.T) {
 		t.Error("text with no mentions should return nil")
 	}
 }
+
+// A channel the bot client can't resolve (private channel it isn't in →
+// ConversationInfo errors) must fall back to the user-token client so the UI
+// shows "#name" instead of the raw C… id.
+func TestSlackNameResolverChannelFallback(t *testing.T) {
+	bot := newCountingNameClient() // bot has no C_PRIV → resolves to ""
+	user := newCountingNameClient()
+	user.chans["C_PRIV"] = SlackConversation{ID: "C_PRIV", Name: "secret-infra", IsChannel: true}
+
+	r := NewSlackNameResolverWithClient(bot)
+
+	// Without a fallback, the bot can't resolve it → "".
+	if got := r.ChannelName(context.Background(), "C_PRIV"); got != "" {
+		t.Fatalf("without fallback ChannelName = %q, want empty", got)
+	}
+
+	// With the fallback, it resolves via the user-token client.
+	r2 := NewSlackNameResolverWithClient(bot)
+	r2.SetFallbackClient(user)
+	if got := r2.ChannelName(context.Background(), "C_PRIV"); got != "#secret-infra" {
+		t.Fatalf("with fallback ChannelName = %q, want #secret-infra", got)
+	}
+
+	// A channel the bot CAN resolve never touches the fallback.
+	bot.chans["C_PUB"] = SlackConversation{ID: "C_PUB", Name: "general", IsChannel: true}
+	if got := r2.ChannelName(context.Background(), "C_PUB"); got != "#general" {
+		t.Fatalf("ChannelName = %q, want #general", got)
+	}
+	if user.chanCalls["C_PUB"] != 0 {
+		t.Fatalf("fallback should not be consulted when primary resolves; got %d calls", user.chanCalls["C_PUB"])
+	}
+}

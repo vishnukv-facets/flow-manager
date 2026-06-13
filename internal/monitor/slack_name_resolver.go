@@ -32,11 +32,25 @@ type nameCacheEntry struct {
 // Safe for concurrent use.
 type SlackNameResolver struct {
 	client SlackTitleClient
-	ttl    time.Duration
+	// fallback resolves channels the primary (bot) client can't see — a private
+	// channel the bot was never invited to returns channel_not_found, but the
+	// operator's user token resolves it. Optional; nil → no fallback.
+	fallback SlackTitleClient
+	ttl      time.Duration
 
 	mu    sync.Mutex
 	users map[string]nameCacheEntry
 	chans map[string]nameCacheEntry
+}
+
+// SetFallbackClient installs a secondary client (typically user-token) consulted
+// when the primary fails to resolve a channel name. Nil-safe; nil client is a
+// no-op. Set once at construction, before concurrent use.
+func (r *SlackNameResolver) SetFallbackClient(c SlackTitleClient) {
+	if r == nil || c == nil {
+		return
+	}
+	r.fallback = c
 }
 
 // NewSlackNameResolver builds a resolver backed by the Slack API using the
@@ -96,14 +110,31 @@ func (r *SlackNameResolver) ChannelName(ctx context.Context, channelID string) s
 	if name, ok := r.lookup(r.chans, channelID); ok {
 		return name
 	}
-	name := ""
-	if conv, err := r.client.ConversationInfo(ctx, channelID); err == nil {
-		name = strings.TrimSpace(conv.Name)
-		if name != "" && (conv.IsChannel || conv.IsGroup) && !strings.HasPrefix(name, "#") {
-			name = "#" + name
-		}
+	name := resolveChannelNameVia(ctx, r.client, channelID)
+	// Bot couldn't see it (private channel it isn't in → channel_not_found).
+	// Retry with the user-token fallback, which resolves channels the operator
+	// is a member of — otherwise the UI falls back to the raw C… id.
+	if name == "" && r.fallback != nil {
+		name = resolveChannelNameVia(ctx, r.fallback, channelID)
 	}
 	r.store(r.chans, channelID, name)
+	return name
+}
+
+// resolveChannelNameVia resolves one channel id to a "#"-prefixed name via the
+// given client, or "" on any error/empty.
+func resolveChannelNameVia(ctx context.Context, client SlackTitleClient, channelID string) string {
+	if client == nil {
+		return ""
+	}
+	conv, err := client.ConversationInfo(ctx, channelID)
+	if err != nil {
+		return ""
+	}
+	name := strings.TrimSpace(conv.Name)
+	if name != "" && (conv.IsChannel || conv.IsGroup) && !strings.HasPrefix(name, "#") {
+		name = "#" + name
+	}
 	return name
 }
 
