@@ -58,8 +58,15 @@ type LearnedAttentionPolicyOptions struct {
 
 // LearnedAttentionPolicy is the compact policy overlay consumed by the steering
 // cascade. It is derived on read and does not mutate operator settings.
+//
+// Suppression is learned at the CONVERSATION-THREAD grain, never the channel:
+// dismissing a few cards in one thread means "stop surfacing this conversation",
+// not "blackhole the whole channel". Channel-level auto-mute was too blunt — a
+// handful of dismissals silently muted an explicitly-watched channel and every
+// later message dropped at Stage 0 as "muted channel". Author suppression stays
+// (broadcast-channel noise from one person), DM threads stay excluded.
 type LearnedAttentionPolicy struct {
-	SuppressChannels     map[string]bool
+	SuppressThreads      map[string]bool // thread_key = "<channel>:<thread_ts>"
 	SuppressAuthors      map[string]bool
 	ThresholdAdjustments map[string]float64
 }
@@ -258,14 +265,14 @@ func LearnedAttentionPolicyFromFeedback(db *sql.DB, opts LearnedAttentionPolicyO
 		opts.ThresholdStep = 0.05
 	}
 	out := LearnedAttentionPolicy{
-		SuppressChannels:     map[string]bool{},
+		SuppressThreads:      map[string]bool{},
 		SuppressAuthors:      map[string]bool{},
 		ThresholdAdjustments: map[string]float64{},
 	}
 	if db == nil {
 		return out, nil
 	}
-	if err := learnSuppressions(db, "channel", opts, out.SuppressChannels); err != nil {
+	if err := learnSuppressions(db, "thread_key", opts, out.SuppressThreads); err != nil {
 		return out, err
 	}
 	if err := learnSuppressions(db, "author", opts, out.SuppressAuthors); err != nil {
@@ -306,6 +313,8 @@ func feedbackGroupExpr(groupBy string) (string, error) {
 		return "COALESCE(NULLIF(channel, ''), '(none)')", nil
 	case "author":
 		return "COALESCE(NULLIF(author, ''), '(none)')", nil
+	case "thread_key":
+		return "thread_key", nil
 	case "thread_type":
 		return "COALESCE(NULLIF(thread_type, ''), '(none)')", nil
 	case "suggested_action":

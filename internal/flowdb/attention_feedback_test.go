@@ -107,8 +107,8 @@ func TestLearnedAttentionPolicyNeverSuppressesDirectMessages(t *testing.T) {
 	if err != nil {
 		t.Fatalf("LearnedAttentionPolicyFromFeedback: %v", err)
 	}
-	if policy.SuppressChannels["D_TEAMMATE"] {
-		t.Errorf("a DM channel must never be learned-suppressed (would silence the teammate): %+v", policy.SuppressChannels)
+	if policy.SuppressThreads["D_TEAMMATE:1"] {
+		t.Errorf("a DM thread must never be learned-suppressed (would silence the teammate): %+v", policy.SuppressThreads)
 	}
 	if policy.SuppressAuthors["U_TEAMMATE"] {
 		t.Errorf("an author must not be learned-suppressed from DM-only dismissals: %+v", policy.SuppressAuthors)
@@ -144,8 +144,8 @@ func TestLearnedAttentionPolicySuppressesDismissedSourcesAndAdjustsThresholds(t 
 	if err != nil {
 		t.Fatalf("LearnedAttentionPolicyFromFeedback: %v", err)
 	}
-	if !policy.SuppressChannels["C_NOISE"] {
-		t.Errorf("expected C_NOISE to be learned as a suppressed channel: %+v", policy.SuppressChannels)
+	if !policy.SuppressThreads["C_NOISE:1"] {
+		t.Errorf("expected thread C_NOISE:1 to be learned as a suppressed thread: %+v", policy.SuppressThreads)
 	}
 	if !policy.SuppressAuthors["U_NOISE"] {
 		t.Errorf("expected U_NOISE to be learned as a suppressed author: %+v", policy.SuppressAuthors)

@@ -60,7 +60,12 @@ func WatchConfigFnWithMutes(db *sql.DB) func() WatchConfig {
 		if err != nil {
 			return cfg
 		}
-		cfg.MutedChannels = mergeBoolSet(cfg.MutedChannels, learned.SuppressChannels)
+		// Learned suppression is THREAD-scoped, never channel-scoped: a thread the
+		// operator keeps dismissing is muted on its own, without blackholing the
+		// whole (often explicitly watched) channel. Overlays onto MutedThreads,
+		// which Stage 0 already honors. Explicit channel mutes (env / steering_mutes)
+		// are unaffected. Author suppression is broadcast-noise specific and stays.
+		cfg.MutedThreads = mergeBoolSet(cfg.MutedThreads, learned.SuppressThreads)
 		cfg.MutedAuthors = mergeBoolSet(cfg.MutedAuthors, learned.SuppressAuthors)
 		return cfg
 	}

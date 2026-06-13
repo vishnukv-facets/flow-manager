@@ -62,11 +62,55 @@ func TestWatchConfigFnWithMutesOverlaysLearnedSuppressions(t *testing.T) {
 	}
 
 	cfg := WatchConfigFnWithMutes(db)()
-	if !cfg.MutedChannels["C_NOISE"] {
-		t.Errorf("learned dismissed channel not overlaid into MutedChannels: %+v", cfg.MutedChannels)
+	if !cfg.MutedThreads["C_NOISE:1"] {
+		t.Errorf("learned dismissed thread not overlaid into MutedThreads: %+v", cfg.MutedThreads)
+	}
+	// Learned suppression must NOT mute the whole channel — only the thread.
+	if cfg.MutedChannels["C_NOISE"] {
+		t.Errorf("learned suppression must not mute the channel, only the thread: %+v", cfg.MutedChannels)
 	}
 	if !cfg.MutedAuthors["U_NOISE"] {
 		t.Errorf("learned dismissed author not overlaid into MutedAuthors: %+v", cfg.MutedAuthors)
+	}
+}
+
+func TestWatchConfigFnWithMutesLearnsThreadNotChannel(t *testing.T) {
+	db, err := flowdb.OpenDB(filepath.Join(t.TempDir(), "flow.db"))
+	if err != nil {
+		t.Fatalf("OpenDB: %v", err)
+	}
+	defer db.Close()
+
+	// Repeated dismissals in ONE thread of a watched channel.
+	for i := 0; i < 3; i++ {
+		if err := flowdb.RecordAttentionFeedback(db, flowdb.AttentionFeedback{
+			ID: "thread-learn-" + string(rune('a'+i)), FeedItemID: "feed", Source: "slack",
+			Channel: "C_WATCHED", Author: "U_X", ThreadType: "channel", ThreadKey: "C_WATCHED:111.1",
+			SuggestedAction: "reply", FinalAction: "dismiss", Outcome: "dismissed",
+			Confidence: 0.85, ConfidenceBand: "0.80-0.89", CreatedAt: "2026-06-05T10:00:00Z",
+		}); err != nil {
+			t.Fatalf("record feedback %d: %v", i, err)
+		}
+	}
+
+	t.Setenv("FLOW_STEERING_WATCH_CHANNELS", "C_WATCHED")
+	cfg := WatchConfigFnWithMutes(db)()
+	// The dismissed THREAD is muted...
+	if !cfg.MutedThreads["C_WATCHED:111.1"] {
+		t.Errorf("repeatedly dismissed thread should be learned-suppressed: %+v", cfg.MutedThreads)
+	}
+	// ...but the channel as a whole is NOT — other threads in it still surface.
+	if cfg.MutedChannels["C_WATCHED"] {
+		t.Errorf("learned suppression must never mute the whole channel: %+v", cfg.MutedChannels)
+	}
+
+	// An explicit channel mute still wins.
+	if err := flowdb.AddSteeringMute(db, flowdb.MuteScopeChannel, "C_WATCHED"); err != nil {
+		t.Fatalf("AddSteeringMute: %v", err)
+	}
+	cfg = WatchConfigFnWithMutes(db)()
+	if !cfg.MutedChannels["C_WATCHED"] {
+		t.Errorf("explicit channel mute should still apply: %+v", cfg.MutedChannels)
 	}
 }
 
