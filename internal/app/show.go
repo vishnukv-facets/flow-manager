@@ -683,6 +683,30 @@ func printPlaybookMetadata(db *sql.DB, pb *flowdb.Playbook, root string) {
 	}
 	fmt.Printf("work_dir:    %s\n", wdLine)
 
+	if pb.ScheduleSpec.Valid && pb.ScheduleSpec.String != "" {
+		label := pb.ScheduleSpec.String
+		if pb.ScheduleInput.Valid && pb.ScheduleInput.String != "" {
+			label = fmt.Sprintf("%s  [%s]", pb.ScheduleInput.String, pb.ScheduleSpec.String)
+		}
+		state := ""
+		if pb.SchedulePausedAt.Valid {
+			state = "  (paused)"
+		}
+		fmt.Printf("schedule:    %s%s\n", label, state)
+		if pb.SchedulePausedAt.Valid {
+			fmt.Printf("next fire:   (paused since %s)\n", pb.SchedulePausedAt.String)
+		} else if pb.NextFireAt.Valid && pb.NextFireAt.String != "" {
+			fmt.Printf("next fire:   %s\n", pb.NextFireAt.String)
+		}
+		if pb.LastFiredAt.Valid && pb.LastFiredAt.String != "" {
+			last := pb.LastFiredAt.String
+			if pb.LastFireRunSlug.Valid && pb.LastFireRunSlug.String != "" {
+				last = fmt.Sprintf("%s  (%s)", last, pb.LastFireRunSlug.String)
+			}
+			fmt.Printf("last fire:   %s\n", last)
+		}
+	}
+
 	fmt.Printf("created:     %s\n", pb.CreatedAt)
 	fmt.Printf("updated:     %s\n", pb.UpdatedAt)
 	if pb.ArchivedAt.Valid {

@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"errors"
 	"flow/internal/flowdb"
+	"flow/internal/schedule"
 	"fmt"
 	"io"
 	"os"
@@ -830,15 +831,36 @@ func cmdUpdatePlaybook(args []string) int {
 	mkdir := fs.Bool("mkdir", false, "create --work-dir if it does not exist")
 	project := fs.String("project", "", "attach this playbook to a project (slug); applies to future runs only")
 	clearProject := fs.Bool("clear-project", false, "detach from any project (playbook becomes floating); applies to future runs only")
+	scheduleSpec := fs.String("schedule", "", "recurring schedule: English (\"every 6 hours\", \"Wednesday at 1pm\") or a cron expression; scheduled runs fire in --auto mode")
+	clearSchedule := fs.Bool("clear-schedule", false, "remove the recurring schedule")
+	pauseSchedule := fs.Bool("pause-schedule", false, "keep the schedule but stop it firing")
+	resumeSchedule := fs.Bool("resume-schedule", false, "re-arm a paused schedule")
 	if err := fs.Parse(args[1:]); err != nil {
 		return 2
 	}
-	if *newSlug == "" && *newName == "" && *workDir == "" && *project == "" && !*clearProject {
-		fmt.Fprintln(os.Stderr, "error: give at least one of --slug, --name, --work-dir, --project, --clear-project")
+	scheduleOps := 0
+	if *scheduleSpec != "" {
+		scheduleOps++
+	}
+	if *clearSchedule {
+		scheduleOps++
+	}
+	if *pauseSchedule {
+		scheduleOps++
+	}
+	if *resumeSchedule {
+		scheduleOps++
+	}
+	if *newSlug == "" && *newName == "" && *workDir == "" && *project == "" && !*clearProject && scheduleOps == 0 {
+		fmt.Fprintln(os.Stderr, "error: give at least one of --slug, --name, --work-dir, --project, --clear-project, --schedule, --clear-schedule, --pause-schedule, --resume-schedule")
 		return 2
 	}
 	if *clearProject && *project != "" {
 		fmt.Fprintln(os.Stderr, "error: --project and --clear-project are mutually exclusive")
+		return 2
+	}
+	if scheduleOps > 1 {
+		fmt.Fprintln(os.Stderr, "error: --schedule, --clear-schedule, --pause-schedule, and --resume-schedule are mutually exclusive")
 		return 2
 	}
 	if *newSlug != "" {
@@ -944,6 +966,66 @@ func cmdUpdatePlaybook(args []string) int {
 			return 1
 		}
 		fmt.Println("project cleared")
+	}
+	if rc := applyPlaybookScheduleUpdate(db, pb.Slug, *scheduleSpec, *clearSchedule, *pauseSchedule, *resumeSchedule); rc != 0 {
+		return rc
+	}
+	return 0
+}
+
+// applyPlaybookScheduleUpdate performs whichever single schedule mutation was
+// requested (caller has already enforced mutual exclusivity). Returns a
+// process exit code: 0 = nothing to do or success.
+func applyPlaybookScheduleUpdate(db *sql.DB, slug, spec string, clear, pause, resume bool) int {
+	switch {
+	case spec != "":
+		s, err := schedule.Parse(spec)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "error: %v\n", err)
+			return 2
+		}
+		next, err := schedule.Next(s.Cron, time.Now())
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "error: compute next fire: %v\n", err)
+			return 1
+		}
+		if err := flowdb.SetPlaybookSchedule(db, slug, s.Cron, s.Input, next.Format(time.RFC3339)); err != nil {
+			fmt.Fprintf(os.Stderr, "error: %v\n", err)
+			return 1
+		}
+		fmt.Printf("schedule → %s (next fire %s)\n", s.Input, next.Format("Mon 2006-01-02 15:04"))
+	case clear:
+		if err := flowdb.ClearPlaybookSchedule(db, slug); err != nil {
+			fmt.Fprintf(os.Stderr, "error: %v\n", err)
+			return 1
+		}
+		fmt.Println("schedule cleared")
+	case pause:
+		if err := flowdb.PausePlaybookSchedule(db, slug); err != nil {
+			fmt.Fprintf(os.Stderr, "error: %v\n", err)
+			return 1
+		}
+		fmt.Println("schedule paused")
+	case resume:
+		pb, err := flowdb.GetPlaybook(db, slug)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "error: %v\n", err)
+			return 1
+		}
+		if !pb.ScheduleSpec.Valid {
+			fmt.Fprintf(os.Stderr, "error: playbook %q has no schedule to resume\n", slug)
+			return 1
+		}
+		next, err := schedule.Next(pb.ScheduleSpec.String, time.Now())
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "error: compute next fire: %v\n", err)
+			return 1
+		}
+		if err := flowdb.ResumePlaybookSchedule(db, slug, next.Format(time.RFC3339)); err != nil {
+			fmt.Fprintf(os.Stderr, "error: %v\n", err)
+			return 1
+		}
+		fmt.Printf("schedule resumed (next fire %s)\n", next.Format("Mon 2006-01-02 15:04"))
 	}
 	return 0
 }

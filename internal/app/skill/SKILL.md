@@ -1414,6 +1414,13 @@ same prompt.
 - `--mkdir` if work_dir doesn't exist — use `AskUserQuestion`
   (header: "Create dir?", options: "Yes, create it" / "No, fix the
   path") same as §6 step 6.
+- **Schedule (optional).** If the user wants this playbook to run on a
+  recurring cadence, capture it now and pass `--schedule "<phrase>"`.
+  Accepts plain English ("every hour", "every 6 hours", "weekly",
+  "Wednesday at 1pm", "daily at 9am") or a raw cron expression. A
+  scheduled playbook fires **autonomously in `--auto` mode** when due
+  (headless, no tab); manual `flow run playbook` runs still open a
+  visible session. Leave it unset for manual-only playbooks. See §4.13a.
 
 **Draft the brief, show to the user**, then use `AskUserQuestion`
 (header: "Brief", options: "Save it" / "Revise") to confirm. Do not
@@ -1448,9 +1455,58 @@ stop.
    runs detached through the task provider (`claude -p` or `codex exec`) and
    completes only when the run calls `flow done`.
 
-**Anti-pattern (per §8):** never auto-fire. Manual trigger only. Even if
-the user mentions a playbook name in passing, do not run it without an
-explicit verb ("run", "trigger", "fire", "start").
+**Anti-pattern (per §8):** never *ad-hoc* auto-fire. A bare `flow run
+playbook` happens only on an explicit verb ("run", "trigger", "fire",
+"start") — mentioning a playbook name in passing is not a trigger.
+(Recurring **scheduled** firing is different: it's an explicit, persisted
+schedule the user configured via §4.13a, and the scheduler fires it in
+`--auto` mode when due. Setting up a schedule still requires the user to
+ask for it.)
+
+### 4.13a Schedule a playbook (recurring runs)
+
+**Triggers:** "run X every day", "schedule the X playbook", "fire X every
+6 hours", "run X weekly", "set X to run Wednesday at 1pm", "stop scheduling
+X", "pause the X schedule".
+
+A playbook can carry a recurring schedule so it fires unattended on a
+cadence, in addition to manual triggering. **Scheduled runs always run in
+`--auto` mode** (headless, self-closing, no terminal tab); a manual
+`flow run playbook` still opens a visible session. The scheduler lives in
+`flow ui serve` (an in-process heartbeat), so schedules fire whenever
+Mission Control is running; a `flow playbook tick-due` entry also exists
+for host cron when the server isn't running.
+
+**Schedule expressions** — pass any of these as `--schedule "<phrase>"`:
+- Presets: "every hour" / "hourly", "every day" / "daily", "weekly".
+- Intervals: "every 6 hours", "every 30 minutes".
+- Day-and-time: "Wednesday at 1pm", "every monday at 9am", "daily at 18:00".
+- Raw cron: "0 13 * * 1-5".
+
+**Recipe:**
+- **Set / change** a schedule: `flow update playbook <slug> --schedule
+  "<phrase>"` (or set it at creation with `flow add playbook ... --schedule`).
+  If the phrase isn't understood, the command errors with examples —
+  relay that and ask the user to rephrase; do not guess a cron.
+- **Pause** (keep the schedule, stop firing): `flow update playbook <slug>
+  --pause-schedule`. **Resume:** `--resume-schedule`.
+- **Remove** entirely: `flow update playbook <slug> --clear-schedule`.
+- **Inspect:** `flow show playbook <slug>` prints the schedule, next fire,
+  and last fire. Mission Control's playbook detail shows the same with
+  inline edit/pause/resume/clear controls.
+
+**Behavior the user should know (surface only if relevant):**
+- **Overlap:** if a prior scheduled run is still in flight when the next
+  fire is due, the scheduler **skips** that fire and advances to the next.
+- **Catch-up:** a schedule that came due while the machine was asleep /
+  the server was down fires **once** on the next check, not once per
+  missed interval.
+- **Timezone:** day-and-time schedules use the machine's local timezone.
+
+**Anti-patterns:**
+- Do not invent or hand-edit schedule columns / `next_fire_at` in the DB —
+  use the `flow update playbook` flags so next-fire is recomputed correctly.
+- Do not set a schedule the user didn't ask for. Scheduling is opt-in.
 
 #### Persisting in-run adjustments back to the playbook
 
@@ -2175,16 +2231,19 @@ instead.
   `AskUserQuestion` and offer to branch into a new task. Letting
   unrelated work accumulate under the wrong task poisons that task's
   transcript and buries decisions the user will later want to find.
-- **Do not auto-fire `flow run playbook`.** Playbooks are
-  manual-trigger only. Even if a user mentions a playbook by name in
-  passing, do NOT run it without an explicit verb ("run", "trigger",
-  "fire", "start").
+- **Do not *ad-hoc* auto-fire `flow run playbook`.** A bare manual run
+  happens only on an explicit verb ("run", "trigger", "fire", "start") —
+  mentioning a playbook by name in passing is not a trigger. (This is
+  separate from a configured recurring **schedule**, which the user
+  set up explicitly and the scheduler fires in `--auto` mode — see §4.13a.)
 - **Do not edit a run-task's `brief.md` to change the playbook's
   behavior for future runs.** That brief is a frozen snapshot. To
   change behavior, edit the playbook's `brief.md` and start a new
   run.
-- **Do not propose scheduling during playbook intake.** Scheduled
-  invocation is out of scope for v1; playbooks are manual.
+- **Do not set or change a playbook schedule the user didn't ask for,
+  and never hand-edit schedule columns in the DB.** Scheduling is opt-in;
+  use the `flow add/update playbook --schedule` flags (§4.13a) so the
+  next fire time is computed correctly.
 
 ## 9. The execution-session bootstrap contract
 

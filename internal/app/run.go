@@ -78,56 +78,10 @@ func cmdRunPlaybook(args []string) int {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
 		return 1
 	}
-	pbBriefPath := filepath.Join(root, "playbooks", pb.Slug, "brief.md")
-	pbBriefBytes, err := os.ReadFile(pbBriefPath)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "error: read playbook brief %s: %v\n", pbBriefPath, err)
-		return 1
-	}
 
-	runSlug, err := generateRunSlug(db, pb.Slug, time.Now())
+	runSlug, err := createPlaybookRun(db, root, pb, requestedProvider)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
-		return 1
-	}
-
-	// Insert the run-task row.
-	now := flowdb.NowISO()
-	sessionProvider := requestedProvider
-	if sessionProvider == "" {
-		sessionProvider = sessionProviderClaude
-	}
-	harnessName, err := harnessNameForProvider(sessionProvider)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "error: %v\n", err)
-		return 2
-	}
-	_, err = db.Exec(
-		`INSERT INTO tasks (slug, name, project_slug, status, kind, playbook_slug, priority, work_dir, permission_mode, session_provider, harness, status_changed_at, created_at, updated_at)
-		 VALUES (?, ?, ?, 'backlog', 'playbook_run', ?, 'medium', ?, ?, ?, ?, ?, ?, ?)`,
-		runSlug,
-		fmt.Sprintf("%s run %s", pb.Slug, runSlug),
-		pb.ProjectSlug,
-		pb.Slug,
-		pb.WorkDir,
-		flowdb.DefaultPermissionMode,
-		sessionProvider,
-		harnessName,
-		now, now, now,
-	)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "error: insert run task: %v\n", err)
-		return 1
-	}
-
-	// Materialize tasks/<run-slug>/ and snapshot brief.md.
-	runDir := filepath.Join(root, "tasks", runSlug)
-	if err := os.MkdirAll(filepath.Join(runDir, "updates"), 0o755); err != nil {
-		fmt.Fprintf(os.Stderr, "error: mkdir %s: %v\n", runDir, err)
-		return 1
-	}
-	if err := os.WriteFile(filepath.Join(runDir, "brief.md"), pbBriefBytes, 0o644); err != nil {
-		fmt.Fprintf(os.Stderr, "error: write run brief.md: %v\n", err)
 		return 1
 	}
 
@@ -152,6 +106,60 @@ func cmdRunPlaybook(args []string) int {
 		doArgs = append(doArgs, "--with-file", *withFile)
 	}
 	return cmdDo(doArgs)
+}
+
+// createPlaybookRun inserts the run-task row for a playbook and snapshots the
+// playbook's brief into tasks/<run-slug>/brief.md. It is the single shared
+// path for materializing a run, used by both the manual `flow run playbook`
+// command and the scheduler (flow playbook tick-due). The caller spawns the
+// session (interactive or --auto) afterward. requestedProvider may be empty,
+// in which case the run defaults to Claude.
+func createPlaybookRun(db *sql.DB, root string, pb *flowdb.Playbook, requestedProvider string) (string, error) {
+	pbBriefPath := filepath.Join(root, "playbooks", pb.Slug, "brief.md")
+	pbBriefBytes, err := os.ReadFile(pbBriefPath)
+	if err != nil {
+		return "", fmt.Errorf("read playbook brief %s: %w", pbBriefPath, err)
+	}
+
+	runSlug, err := generateRunSlug(db, pb.Slug, time.Now())
+	if err != nil {
+		return "", err
+	}
+
+	sessionProvider := requestedProvider
+	if sessionProvider == "" {
+		sessionProvider = sessionProviderClaude
+	}
+	harnessName, err := harnessNameForProvider(sessionProvider)
+	if err != nil {
+		return "", err
+	}
+
+	now := flowdb.NowISO()
+	if _, err := db.Exec(
+		`INSERT INTO tasks (slug, name, project_slug, status, kind, playbook_slug, priority, work_dir, permission_mode, session_provider, harness, status_changed_at, created_at, updated_at)
+		 VALUES (?, ?, ?, 'backlog', 'playbook_run', ?, 'medium', ?, ?, ?, ?, ?, ?, ?)`,
+		runSlug,
+		fmt.Sprintf("%s run %s", pb.Slug, runSlug),
+		pb.ProjectSlug,
+		pb.Slug,
+		pb.WorkDir,
+		flowdb.DefaultPermissionMode,
+		sessionProvider,
+		harnessName,
+		now, now, now,
+	); err != nil {
+		return "", fmt.Errorf("insert run task: %w", err)
+	}
+
+	runDir := filepath.Join(root, "tasks", runSlug)
+	if err := os.MkdirAll(filepath.Join(runDir, "updates"), 0o755); err != nil {
+		return "", fmt.Errorf("mkdir %s: %w", runDir, err)
+	}
+	if err := os.WriteFile(filepath.Join(runDir, "brief.md"), pbBriefBytes, 0o644); err != nil {
+		return "", fmt.Errorf("write run brief.md: %w", err)
+	}
+	return runSlug, nil
 }
 
 // generateRunSlug computes the unique slug for a new playbook run.

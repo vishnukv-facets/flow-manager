@@ -1,13 +1,14 @@
 import { useState } from 'react'
 import { useLocation } from 'wouter'
-import { ArrowLeft, Check, Loader2, Pencil, Play, X } from 'lucide-react'
+import { ArrowLeft, CalendarClock, Check, Clock, Loader2, Pause, Pencil, Play, Trash2, X } from 'lucide-react'
 import { usePlaybook, useAction } from '../lib/query'
 import { useDocumentTitle } from '../lib/useDocumentTitle'
 import { BriefPanel } from '../components/BriefPanel'
 import { ErrorNote, Loading } from '../components/ui'
 import { useFloatTip } from '../components/FloatTip'
-import { ago } from '../lib/format'
+import { ago, dateTime } from '../lib/format'
 import { clickable } from '../lib/a11y'
+import type { PlaybookView } from '../lib/types'
 
 const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
 const WEEKDAYS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat']
@@ -48,6 +49,112 @@ function RunBars({ days }: { days: number[] }) {
         )
       })}
     </div>
+  )
+}
+
+// SchedulePanel shows and edits a playbook's recurring schedule. All mutations
+// route through the set-playbook-schedule action, which shells out to
+// `flow update playbook` so parsing + next-fire computation stay server-side.
+function SchedulePanel({ pb, action }: { pb: PlaybookView; action: ReturnType<typeof useAction> }) {
+  const [editing, setEditing] = useState(false)
+  const [value, setValue] = useState('')
+  const scheduled = !!pb.schedule
+
+  const save = () => {
+    const v = value.trim()
+    if (!v) {
+      setEditing(false)
+      return
+    }
+    action.mutate(
+      { kind: 'set-playbook-schedule', target: pb.slug, schedule_op: 'set', schedule: v },
+      { onSuccess: () => setEditing(false) },
+    )
+  }
+  const op = (schedule_op: 'clear' | 'pause' | 'resume') =>
+    action.mutate({ kind: 'set-playbook-schedule', target: pb.slug, schedule_op })
+
+  return (
+    <section className="card" style={{ padding: '16px 18px', marginBottom: 24 }}>
+      <div className="bento-head" style={{ marginBottom: 12 }}>
+        <span className="eyebrow">Schedule</span>
+        <div className="spacer" />
+        {scheduled && !editing && (
+          <span className={`badge ${pb.schedule_paused ? 'warn' : 'ok'}`}>
+            {pb.schedule_paused ? 'paused' : 'active'}
+          </span>
+        )}
+      </div>
+
+      {editing ? (
+        <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+          <input
+            className="input"
+            style={{ flex: 1, minWidth: 240 }}
+            autoFocus
+            placeholder='e.g. "every 6 hours", "Wednesday at 1pm", or a cron expression'
+            value={value}
+            onChange={(e) => setValue(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter') {
+                e.preventDefault()
+                save()
+              } else if (e.key === 'Escape') {
+                e.preventDefault()
+                setEditing(false)
+              }
+            }}
+          />
+          <button className="btn primary sm" onClick={save} disabled={action.isPending}>
+            {action.isPending ? <Loader2 size={14} className="spin" /> : <Check size={14} />} Save
+          </button>
+          <button className="btn ghost sm" onClick={() => setEditing(false)} disabled={action.isPending}>
+            Cancel
+          </button>
+        </div>
+      ) : scheduled ? (
+        <>
+          <div className="meta-v" style={{ fontSize: 15 }}>
+            {pb.schedule} {pb.schedule_spec && <span className="faint mono" style={{ fontSize: 12 }}>· {pb.schedule_spec}</span>}
+          </div>
+          <div className="faint" style={{ fontSize: 12, marginTop: 6 }}>
+            {pb.schedule_paused
+              ? 'Paused — will not fire until resumed.'
+              : pb.next_fire_at
+                ? `Next run ${dateTime(pb.next_fire_at)}`
+                : 'No next run scheduled.'}
+            {pb.last_fired_at && ` · last ran ${ago(pb.last_fired_at)}`}
+          </div>
+          <div style={{ display: 'flex', gap: 8, marginTop: 12, flexWrap: 'wrap' }}>
+            <button className="btn ghost sm" onClick={() => { setValue(pb.schedule || ''); setEditing(true) }} disabled={action.isPending}>
+              <Pencil size={13} /> Edit
+            </button>
+            {pb.schedule_paused ? (
+              <button className="btn ghost sm" onClick={() => op('resume')} disabled={action.isPending}>
+                <Play size={13} /> Resume
+              </button>
+            ) : (
+              <button className="btn ghost sm" onClick={() => op('pause')} disabled={action.isPending}>
+                <Pause size={13} /> Pause
+              </button>
+            )}
+            <button className="btn ghost sm danger" onClick={() => op('clear')} disabled={action.isPending}>
+              <Trash2 size={13} /> Clear
+            </button>
+          </div>
+          <div className="faint" style={{ fontSize: 11, marginTop: 10 }}>
+            Scheduled runs fire automatically in headless (--auto) mode — no terminal tab.
+          </div>
+        </>
+      ) : (
+        <>
+          <div className="faint">Not scheduled — this playbook runs only when you trigger it.</div>
+          <button className="btn ghost sm" style={{ marginTop: 10 }} onClick={() => { setValue(''); setEditing(true) }} disabled={action.isPending}>
+            <CalendarClock size={14} /> Add schedule
+          </button>
+        </>
+      )}
+    </section>
   )
 }
 
@@ -154,6 +261,8 @@ export function PlaybookDetail({ slug }: { slug: string }) {
         </div>
         <RunBars days={pb.run_days_30 ?? []} />
       </section>
+
+      <SchedulePanel pb={pb} action={action} />
 
       <div className="grid two">
         <section className="section">

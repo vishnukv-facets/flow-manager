@@ -362,9 +362,10 @@ func TestSkillMentionsPlaybooks(t *testing.T) {
 		"## Playbook activity",
 		"Each run does",
 		"Signals to watch for",
-		"Do not auto-fire `flow run playbook`",
+		"Do not *ad-hoc* auto-fire `flow run playbook`",
 		"snapshot",
-		"Do not propose scheduling during playbook intake",
+		"Schedule a playbook (recurring runs)",
+		"autonomously in `--auto` mode",
 		"the bootstrapped task\" includes playbook-run tasks",
 	} {
 		if !strings.Contains(got, want) {

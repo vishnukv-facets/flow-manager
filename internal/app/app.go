@@ -43,6 +43,8 @@ func Run(args []string) int {
 		return cmdDo(rest)
 	case "run":
 		return cmdRun(rest)
+	case "playbook":
+		return cmdPlaybook(rest)
 	case "done":
 		return cmdDone(rest)
 	case "show":

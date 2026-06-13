@@ -213,9 +213,9 @@ type uiTokenTask struct {
 // 12-week heatmap shown on the dashboard) and how many context tokens each
 // provider has in play across all tracked sessions.
 type uiStats struct {
-	CurrentStreak  int `json:"current_streak"` // consecutive active days ending today
-	LongestStreak  int `json:"longest_streak"` // longest active-day run in the window
-	ActiveDays     int `json:"active_days"`    // active days within the 12-week window
+	CurrentStreak  int     `json:"current_streak"` // consecutive active days ending today
+	LongestStreak  int     `json:"longest_streak"` // longest active-day run in the window
+	ActiveDays     int     `json:"active_days"`    // active days within the 12-week window
 	TokensTotal    int     `json:"tokens_total"`
 	TokensClaude   int     `json:"tokens_claude"`
 	TokensCodex    int     `json:"tokens_codex"`
@@ -400,6 +400,10 @@ type uiPlaybook struct {
 	Spark    []int           `json:"spark"`
 	Runs     []uiPlaybookRun `json:"runs"`
 	WorkDir  string          `json:"work_dir"`
+	// Scheduling (nil/false when unscheduled).
+	Schedule       *string `json:"schedule"`
+	SchedulePaused bool    `json:"schedule_paused"`
+	NextFireAt     *string `json:"next_fire_at"`
 }
 
 // uiPlaybookRun is one run shown as a hoverable bar in the Active Playbooks
@@ -1322,7 +1326,7 @@ func withTaskWorkDir(tv TaskView, workDir string) TaskView {
 type taskSessionInsights struct {
 	ActivityAt    string
 	LastAction    string
-	TokensUsed    int     // current context-window occupancy (latest turn)
+	TokensUsed    int // current context-window occupancy (latest turn)
 	TokensMax     int
 	TokensSession int     // cumulative tokens used this session (the CLI's Σ)
 	CostSession   float64 // estimated USD for this session's full billed usage, cache included (all-time)
@@ -1616,14 +1620,17 @@ func (s *Server) uiPlaybooks() ([]uiPlaybook, error) {
 			runs = append(runs, uiPlaybookRun{Name: r.Name, Status: r.Status, CreatedAt: r.CreatedAt})
 		}
 		out = append(out, uiPlaybook{
-			Slug:     p.Slug,
-			Name:     p.Name,
-			Project:  p.ProjectSlug,
-			RunsWeek: p.RunCount7d,
-			LastMin:  lastMin,
-			Spark:    lastSevenFromThirty(p.RunDays30),
-			Runs:     runs,
-			WorkDir:  p.WorkDir,
+			Slug:           p.Slug,
+			Name:           p.Name,
+			Project:        p.ProjectSlug,
+			RunsWeek:       p.RunCount7d,
+			LastMin:        lastMin,
+			Spark:          lastSevenFromThirty(p.RunDays30),
+			Runs:           runs,
+			WorkDir:        p.WorkDir,
+			Schedule:       p.Schedule,
+			SchedulePaused: p.SchedulePaused,
+			NextFireAt:     p.NextFireAt,
 		})
 	}
 	return out, nil
