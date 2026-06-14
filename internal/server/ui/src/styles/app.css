@@ -5043,6 +5043,168 @@ a.orch-pr:hover {
 .trend-row .spark {
   flex: 1;
 }
+
+/* Flow balance — created (ghost) vs done (solid accent) paired bars. Reuses
+   .spark.flex geometry; each week is a .flowpair of two bars sharing one peak. */
+.flowbars .flowpair {
+  flex: 1 1 0;
+  display: flex;
+  align-items: flex-end;
+  gap: 1px;
+  min-width: 0;
+  height: 100%;
+}
+/* Beat the .spark.flex i baseline rule (which also sets background). */
+.flowbars .flowpair i.fb-created {
+  background: color-mix(in srgb, var(--text-3) 45%, transparent);
+}
+.flowbars .flowpair i.fb-done {
+  background: var(--accent);
+}
+/* Net summary in the trend label: positive = clearing, negative = growing. */
+.trend-label .mono.flow-pos {
+  color: var(--ok);
+}
+.trend-label .mono.flow-neg {
+  color: var(--warn);
+}
+
+/* Efficiency stat strip — 4 plain stats, evenly gridded, no card tiling so it
+   sits flush on the rail-card surface like the original 3-stat row did. */
+.trend-stats {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 4px 8px;
+}
+.trend-stats .stat {
+  background: transparent;
+  padding: 2px 0;
+}
+.trend-stats .stat-value {
+  font-size: 18px;
+}
+
+/* Composition strip — Engine / Priority as 100%-stacked bars with a
+   color-coded dot legend above each. */
+.trend-mix {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.mixrow {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.mixrow-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.mix-leg {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 3px 10px;
+  font-size: 11px;
+  color: var(--text-2);
+}
+.mix-leg-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  white-space: nowrap;
+}
+.mix-leg-item b {
+  color: var(--text);
+  font-weight: 600;
+}
+.mix-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 2px;
+  flex: none;
+  display: inline-block;
+}
+.mixbar {
+  display: flex;
+  height: 7px;
+  gap: 2px;
+  border-radius: var(--r-pill);
+  overflow: hidden;
+  background: var(--bg-3);
+}
+.mixseg {
+  min-width: 2px;
+  transition: flex var(--dur-2) var(--ease);
+}
+
+/* Top-tasks-by-cost leaderboard — ranked rows with a proportional cost bar. */
+.toptask-list {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+.toptask {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 4px;
+  border-radius: var(--r-sm);
+  cursor: pointer;
+}
+.toptask:hover {
+  background: var(--surface-hover);
+}
+.toptask-rank {
+  width: 15px;
+  flex: none;
+  text-align: right;
+  font-size: 11px;
+  color: var(--text-3);
+}
+.toptask-main {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.toptask-name {
+  font-size: 12.5px;
+}
+.toptask-bar {
+  height: 4px;
+  border-radius: var(--r-pill);
+  background: var(--bg-3);
+  overflow: hidden;
+}
+.toptask-fill {
+  height: 100%;
+  border-radius: var(--r-pill);
+  background: var(--accent);
+  transition: width var(--dur-2) var(--ease);
+}
+.toptask:hover .toptask-fill {
+  background: var(--accent-hi);
+}
+.toptask-vals {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 1px;
+  flex: none;
+  min-width: 56px;
+}
+.toptask-cost {
+  font-size: 12px;
+  color: var(--text);
+  font-variant-numeric: tabular-nums;
+}
+.toptask-tok {
+  font-size: 10.5px;
+}
+
 .proj-prog {
   cursor: pointer;
 }

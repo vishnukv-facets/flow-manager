@@ -1,17 +1,34 @@
 import { useEffect, useMemo, useState, type ReactNode } from 'react'
 import { Link, useLocation } from 'wouter'
-import { ArrowRight, Activity, BarChart3, CalendarClock, Coins, Repeat, AlertTriangle, Snowflake, TerminalSquare, TrendingUp, Flame, Inbox as InboxIcon, MessagesSquare } from 'lucide-react'
+import { ArrowRight, Activity, BarChart3, CalendarClock, Coins, Repeat, AlertTriangle, Snowflake, TerminalSquare, TrendingUp, Flame, Inbox as InboxIcon, MessagesSquare, Scale, Timer, Layers, PieChart, Trophy } from 'lucide-react'
 import { useChats, useInbox, useOverview, useQuote, useTasks, useUiData } from '../lib/query'
 import { useDocumentTitle } from '../lib/useDocumentTitle'
 import { AgentCard } from '../components/AgentCard'
 import { EmptyState, ErrorNote, Loading, ProviderIcon, SourceIcon, Sparkline, Stat } from '../components/ui'
 import { useFloatTip } from '../components/FloatTip'
-import { ago, compact, compactTokens, dueTone, fmtUSD } from '../lib/format'
+import { ago, compactTokens, dueTone, fmtUSD } from '../lib/format'
 import { agendaCount, bucketByDue, type DueBuckets } from '../lib/agenda'
-import { throughputByWeek, timeToDone, tokensByWeek, type WeekPoint } from '../lib/analytics'
+import {
+  throughputByWeek,
+  timeToDone,
+  tokensByWeek,
+  flowBalanceByWeek,
+  doneByProvider,
+  doneByPriority,
+  doneBySource,
+  modelSegments,
+  autonomyRate,
+  cycleTimeByWeek,
+  wipByWeek,
+  type WeekPoint,
+  type FlowWeek,
+  type Segment,
+  type CycleWeek,
+  type WipWeek,
+} from '../lib/analytics'
 import { clickable } from '../lib/a11y'
 import { workEventLinkHref } from '../lib/workEventLinks'
-import type { ActivityDay, Briefing, BriefingItem, InboxFeedEntry, PlaybookRun, ProjectMC, TaskView, TokenDay, UiStats } from '../lib/types'
+import type { ActivityDay, Briefing, BriefingItem, InboxFeedEntry, ModelCount, PlaybookRun, ProjectMC, TaskView, TokenDay, TopTask, UiStats } from '../lib/types'
 
 const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
 const WEEKDAYS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat']
@@ -552,38 +569,161 @@ function tokenWeekTip(w: WeekPoint): ReactNode {
   )
 }
 
+// Signed net for a flow-balance week: done − created. Positive = the week
+// cleared more than it took on. Uses a real minus sign for negatives.
+function netLabel(net: number): string {
+  if (net === 0) return 'net even'
+  return net > 0 ? `net +${net}` : `net −${Math.abs(net)}`
+}
+
+function flowWeekTip(w: FlowWeek): ReactNode {
+  return (
+    <div className="ftip-head">
+      <span className="ftip-count">{w.created} created · {w.done} done · {netLabel(w.done - w.created)}</span>
+      <span className="ftip-date">{weekRangeLabel(w.weekStart)}</span>
+    </div>
+  )
+}
+
+function cycleWeekTip(w: CycleWeek): ReactNode {
+  return (
+    <div className="ftip-head">
+      <span className="ftip-count">{w.count ? `median ${fmtDays(w.medianDays)} · ${w.count} done` : 'No completions'}</span>
+      <span className="ftip-date">{weekRangeLabel(w.weekStart)}</span>
+    </div>
+  )
+}
+function wipWeekTip(w: WipWeek): ReactNode {
+  return (
+    <div className="ftip-head">
+      <span className="ftip-count">{w.open} task{w.open === 1 ? '' : 's'} open</span>
+      <span className="ftip-date">{weekRangeLabel(w.weekStart)}</span>
+    </div>
+  )
+}
+
 // Weekly sparkbars with per-bar hover tooltips — same bar geometry as
-// <Sparkline> but driven by WeekPoint[] so each bar can surface its week range
-// and total. Mirrors the FloatTip wiring used by ActivityBars / MiniCalendar.
-function TrendSparkbars({ points, tip }: { points: WeekPoint[]; tip: (w: WeekPoint) => ReactNode }) {
+// <Sparkline>, generic over the point type so each trend (throughput, tokens,
+// cycle-time, WIP) supplies its own value accessor and tooltip. Mirrors the
+// FloatTip wiring used by ActivityBars / MiniCalendar.
+function TrendSparkbars<T>({ points, value, tip }: { points: T[]; value: (p: T) => number; tip: (p: T) => ReactNode }) {
   const { show, hide, portal } = useFloatTip()
-  const peak = Math.max(1, ...points.map((p) => p.value))
+  const peak = Math.max(1, ...points.map(value))
   return (
     <span className="spark flex">
       {portal}
-      {points.map((p, i) => (
-        <i
+      {points.map((p, i) => {
+        const v = value(p)
+        return (
+          <i
+            key={i}
+            className={v > 0 ? 'on' : ''}
+            style={{ height: `${Math.max(2, Math.round((v / peak) * 22))}px` }}
+            onMouseEnter={(e) => show(e.currentTarget, tip(p))}
+            onMouseLeave={hide}
+          />
+        )
+      })}
+    </span>
+  )
+}
+
+// Created-vs-done flow balance: per week, a ghost bar (tasks created) paired
+// with a solid accent bar (tasks completed). Both series share one peak so the
+// heights are directly comparable. Nests inside .spark.flex to inherit the same
+// bar geometry as the other trend rows.
+function FlowBalanceBars({ weeks }: { weeks: FlowWeek[] }) {
+  const { show, hide, portal } = useFloatTip()
+  const peak = Math.max(1, ...weeks.flatMap((w) => [w.created, w.done]))
+  return (
+    <span className="spark flex flowbars">
+      {portal}
+      {weeks.map((w, i) => (
+        <span
           key={i}
-          className={p.value > 0 ? 'on' : ''}
-          style={{ height: `${Math.max(2, Math.round((p.value / peak) * 22))}px` }}
-          onMouseEnter={(e) => show(e.currentTarget, tip(p))}
+          className="flowpair"
+          onMouseEnter={(e) => show(e.currentTarget, flowWeekTip(w))}
           onMouseLeave={hide}
-        />
+        >
+          <i className="fb-created" style={{ height: `${Math.max(2, Math.round((w.created / peak) * 22))}px` }} />
+          <i className="fb-done" style={{ height: `${Math.max(2, Math.round((w.done / peak) * 22))}px` }} />
+        </span>
       ))}
     </span>
   )
 }
 
-// Mission Control trends: throughput (tasks done/week) and token cost
-// (fresh work tokens/week) as 12-week sparklines, plus median/avg time-to-done.
-// All derived client-side from the task list + server TOKEN_SERIES.
-function TrendsCard({ doneTasks, tokenSeries }: { doneTasks: TaskView[]; tokenSeries: TokenDay[] }) {
+// A 100%-stacked composition bar with a color-coded legend (dot + label +
+// count) above it. Empty sets collapse to a neutral track so the row never
+// renders as a broken/blank bar. Segment widths are flex-proportional.
+function MixBar({ label, segments }: { label: string; segments: Segment[] }) {
+  const total = segments.reduce((s, x) => s + x.value, 0)
+  const shown = segments.filter((s) => s.value > 0)
+  return (
+    <div className="mixrow">
+      <div className="mixrow-head">
+        <span className="eyebrow">{label}</span>
+        <div className="spacer" />
+        <span className="mix-leg">
+          {total === 0 ? (
+            <span className="faint">no data</span>
+          ) : (
+            shown.map((s) => (
+              <span key={s.key} className="mix-leg-item">
+                <i className="mix-dot" style={{ background: s.tone }} />
+                {s.label} <b className="mono">{s.value}</b>
+              </span>
+            ))
+          )}
+        </span>
+      </div>
+      <div className="mixbar">
+        {total === 0 ? (
+          <span className="mixseg" style={{ flex: 1, background: 'var(--border)' }} />
+        ) : (
+          shown.map((s) => (
+            <span
+              key={s.key}
+              className="mixseg"
+              style={{ flex: s.value, background: s.tone }}
+              title={`${s.label}: ${s.value} (${Math.round((s.value / total) * 100)}%)`}
+            />
+          ))
+        )}
+      </div>
+    </div>
+  )
+}
+
+// Mission Control time-series trends, all 12-week, all derived client-side from
+// the task list + server TOKEN_SERIES: throughput, token cost, created-vs-done
+// flow balance, cycle-time, and WIP — plus an efficiency stat strip
+// (time-to-done, $/task, autonomy).
+function TrendsCard({ tasks, tokenSeries }: { tasks: TaskView[]; tokenSeries: TokenDay[] }) {
+  const doneTasks = useMemo(() => tasks.filter((t) => t.status === 'done'), [tasks])
   const throughput = useMemo(() => throughputByWeek(doneTasks, new Date()), [doneTasks])
+  const flow = useMemo(() => flowBalanceByWeek(tasks, new Date()), [tasks])
+  const cycle = useMemo(() => cycleTimeByWeek(doneTasks, new Date()), [doneTasks])
+  const wip = useMemo(() => wipByWeek(tasks, new Date()), [tasks])
   const tokens = useMemo(() => tokensByWeek(tokenSeries), [tokenSeries])
   const ttd = useMemo(() => timeToDone(doneTasks), [doneTasks])
+  const auto = useMemo(() => autonomyRate(doneTasks), [doneTasks])
+
   const doneTotal = throughput.reduce((s, w) => s + w.value, 0)
   const tokenTotal = tokens.reduce((s, w) => s + w.value, 0)
   const costTotal = tokens.reduce((s, w) => s + (w.cost ?? 0), 0)
+  const createdTotal = flow.reduce((s, w) => s + w.created, 0)
+  const net = doneTotal - createdTotal // window-level: + clearing, − growing
+  const flowSummary =
+    createdTotal === 0 && doneTotal === 0
+      ? 'no flow yet'
+      : net > 0
+        ? `${netLabel(net)} · clearing`
+        : net < 0
+          ? `${netLabel(net)} · growing`
+          : 'net even'
+  const costPerTask = doneTotal > 0 ? costTotal / doneTotal : null
+
   return (
     <section className="card rail-card">
       <div className="bento-head">
@@ -596,7 +736,7 @@ function TrendsCard({ doneTasks, tokenSeries }: { doneTasks: TaskView[]; tokenSe
           <span className="eyebrow">Throughput</span>
           <span className="faint mono">{doneTotal} done</span>
         </div>
-        <TrendSparkbars points={throughput} tip={throughputWeekTip} />
+        <TrendSparkbars points={throughput} value={(w) => w.value} tip={throughputWeekTip} />
       </div>
       <div className="hairline" style={{ margin: '12px 0' }} />
       <div className="trend-row">
@@ -604,13 +744,107 @@ function TrendsCard({ doneTasks, tokenSeries }: { doneTasks: TaskView[]; tokenSe
           <span className="eyebrow"><Coins size={11} /> Token cost</span>
           <span className="faint mono">{compactTokens(tokenTotal)} fresh · ~{fmtUSD(costTotal)}</span>
         </div>
-        <TrendSparkbars points={tokens} tip={tokenWeekTip} />
+        <TrendSparkbars points={tokens} value={(w) => w.value} tip={tokenWeekTip} />
       </div>
       <div className="hairline" style={{ margin: '12px 0' }} />
-      <div className="row" style={{ gap: 0 }}>
+      <div className="trend-row">
+        <div className="trend-label">
+          <span className="eyebrow"><Scale size={11} /> Flow balance</span>
+          <span className={`mono ${net > 0 ? 'flow-pos' : net < 0 ? 'flow-neg' : 'faint'}`}>{flowSummary}</span>
+        </div>
+        <FlowBalanceBars weeks={flow} />
+      </div>
+      <div className="hairline" style={{ margin: '12px 0' }} />
+      <div className="trend-row">
+        <div className="trend-label">
+          <span className="eyebrow"><Timer size={11} /> Cycle time</span>
+          <span className="faint mono">{ttd.count ? `${fmtDays(ttd.medianDays)} median` : '—'}</span>
+        </div>
+        <TrendSparkbars points={cycle} value={(w) => w.medianDays} tip={cycleWeekTip} />
+      </div>
+      <div className="hairline" style={{ margin: '12px 0' }} />
+      <div className="trend-row">
+        <div className="trend-label">
+          <span className="eyebrow"><Layers size={11} /> WIP</span>
+          <span className="faint mono">{wip.length ? `${wip[wip.length - 1].open} open now` : '—'}</span>
+        </div>
+        <TrendSparkbars points={wip} value={(w) => w.open} tip={wipWeekTip} />
+      </div>
+      <div className="hairline" style={{ margin: '12px 0' }} />
+      <div className="trend-stats">
         <Stat label="median to done" value={ttd.count ? fmtDays(ttd.medianDays) : '—'} />
         <Stat label="avg to done" value={ttd.count ? fmtDays(ttd.avgDays) : '—'} />
-        <Stat label="closed" value={ttd.count} />
+        <Stat label="$ / task" value={costPerTask != null ? `~${fmtUSD(costPerTask)}` : '—'} />
+        <Stat label="autonomy" value={auto.total ? `${auto.pct}%` : '—'} />
+      </div>
+    </section>
+  )
+}
+
+// Composition of all closed work, four 100%-stacked bars: which engine ran it
+// (Claude/Codex), priority, what triggered it (Slack/GitHub/manual), and which
+// model tier. All client-side from the task list.
+function CompositionCard({ tasks, modelMix }: { tasks: TaskView[]; modelMix: ModelCount[] }) {
+  const done = useMemo(() => tasks.filter((t) => t.status === 'done'), [tasks])
+  const byProvider = useMemo(() => doneByProvider(done), [done])
+  const byPriority = useMemo(() => doneByPriority(done), [done])
+  const bySource = useMemo(() => doneBySource(done), [done])
+  const byModel = useMemo(() => modelSegments(modelMix), [modelMix])
+  return (
+    <section className="card rail-card">
+      <div className="bento-head">
+        <span className="eyebrow"><PieChart size={13} /> Composition</span>
+        <div className="spacer" />
+        <span className="faint mono" style={{ fontSize: 12 }}>{done.length} closed</span>
+      </div>
+      <div className="trend-mix">
+        <MixBar label="Engine" segments={byProvider} />
+        <MixBar label="Priority" segments={byPriority} />
+        <MixBar label="Source" segments={bySource} />
+        <MixBar label="Model" segments={byModel} />
+      </div>
+    </section>
+  )
+}
+
+// Top tasks by estimated cost across the 12-week window. The ranking is server-
+// computed (TOP_TASKS) from full per-task totals — not the truncated daily
+// breakdown — so it's accurate. Each row deep-links to its session.
+function TopTasksCard({ tasks, onOpen }: { tasks: TopTask[]; onOpen: (slug: string) => void }) {
+  if (tasks.length === 0) return null
+  const maxCost = Math.max(1, ...tasks.map((t) => t.cost_usd ?? 0))
+  return (
+    <section className="card rail-card">
+      <div className="bento-head">
+        <span className="eyebrow"><Trophy size={13} /> Top tasks by cost</span>
+        <div className="spacer" />
+        <span className="faint mono" style={{ fontSize: 12 }}>12 weeks</span>
+      </div>
+      <div className="toptask-list">
+        {tasks.map((t, i) => {
+          const cost = t.cost_usd ?? 0
+          return (
+            <div
+              key={t.slug || i}
+              className="toptask"
+              aria-label={`Open ${t.name}`}
+              {...clickable(() => onOpen(t.slug))}
+            >
+              <span className="toptask-rank mono">{i + 1}</span>
+              <ProviderIcon provider={t.provider || 'claude'} size={13} />
+              <div className="toptask-main">
+                <div className="toptask-name clip">{t.name}</div>
+                <div className="toptask-bar">
+                  <div className="toptask-fill" style={{ width: `${Math.round((cost / maxCost) * 100)}%` }} />
+                </div>
+              </div>
+              <div className="toptask-vals">
+                <span className="toptask-cost mono">~{fmtUSD(cost)}</span>
+                <span className="toptask-tok mono faint">{compactTokens(t.tokens)}</span>
+              </div>
+            </div>
+          )
+        })}
       </div>
     </section>
   )
@@ -662,11 +896,10 @@ export function Overview() {
   // (the API already orders by last_activity_at desc); show the top few.
   const recentChats = useMemo(() => (chats ?? []).slice(0, 5), [chats])
   // One task fetch (incl. done) feeds both the agenda lens and the analytics
-  // trends: open tasks drive the due buckets, done tasks drive throughput and
-  // time-to-done. A done task with a past due date must NOT show as "overdue",
-  // so the agenda is built from the open subset only.
+  // trends: open tasks drive the due buckets, the full set drives throughput,
+  // flow balance, and composition. A done task with a past due date must NOT
+  // show as "overdue", so the agenda is built from the open subset only.
   const { data: allTasks } = useTasks({ include_done: true })
-  const doneTasks = useMemo(() => (allTasks ?? []).filter((t) => t.status === 'done'), [allTasks])
   const due = useMemo(
     () => bucketByDue((allTasks ?? []).filter((t) => t.status !== 'done')),
     [allTasks],
@@ -906,7 +1139,11 @@ export function Overview() {
             <StatsPanel stats={ui.STATS} />
           </section>
 
-          <TrendsCard doneTasks={doneTasks} tokenSeries={ui.TOKEN_SERIES ?? []} />
+          <TrendsCard tasks={allTasks ?? []} tokenSeries={ui.TOKEN_SERIES ?? []} />
+
+          <CompositionCard tasks={allTasks ?? []} modelMix={ui.MODEL_MIX ?? []} />
+
+          <TopTasksCard tasks={ui.TOP_TASKS ?? []} onOpen={(slug) => navigate(`/session/${slug}`)} />
 
           <ProjectProgressCard projects={ui.PROJECTS_MC} onOpen={(slug) => navigate(`/project/${slug}`)} />
 

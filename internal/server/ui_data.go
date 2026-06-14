@@ -35,6 +35,8 @@ type uiData struct {
 	Projects         []uiProject      `json:"PROJECTS_MC"`
 	ActivityHeatmap  []uiActivityDay  `json:"ACTIVITY_HEATMAP"`
 	TokenSeries      []uiTokenDay     `json:"TOKEN_SERIES"`
+	TopTasks         []uiTopTask      `json:"TOP_TASKS,omitempty"`
+	ModelMix         []uiModelCount   `json:"MODEL_MIX,omitempty"`
 	Stats            uiStats          `json:"STATS"`
 	Capabilities     uiCapabilities   `json:"CAPABILITIES"`
 	Trash            uiTrash          `json:"TRASH"`
@@ -206,6 +208,28 @@ type uiTokenTask struct {
 	Name    string  `json:"name"`
 	Tokens  int     `json:"tokens"`
 	CostUSD float64 `json:"cost_usd,omitempty"`
+}
+
+// uiTopTask is one task's total token + estimated-cost contribution across the
+// whole 12-week window — the source for the "Top tasks by cost" leaderboard.
+// Unlike uiTokenTask (per-day, truncated to a daily top-5), this is summed over
+// every day so the ranking is accurate, and it carries the slug so the row can
+// deep-link to the session.
+type uiTopTask struct {
+	Slug     string  `json:"slug"`
+	Name     string  `json:"name"`
+	Provider string  `json:"provider,omitempty"`
+	Tokens   int     `json:"tokens"`
+	CostUSD  float64 `json:"cost_usd,omitempty"`
+}
+
+// uiModelCount is how many done tasks actually ran on a given model — taken
+// from the session transcript (the model the assistant messages report), NOT
+// the task's explicit model pin (which is empty for auto-resolved tasks). The
+// client normalizes the raw model id to a tier label for the Composition bar.
+type uiModelCount struct {
+	Model string `json:"model"`
+	Count int    `json:"count"`
 }
 
 // uiStats are the at-a-glance Mission Control analytics: how consistently the
@@ -611,7 +635,7 @@ func (s *Server) buildUIData() (uiData, error) {
 		}
 	}
 	heatmap := buildActivityHeatmap(taskViews, time.Now())
-	tokenSeries := s.buildTokenSeries(taskViews, time.Now())
+	tokenSeries, topTasks, modelMix := s.buildTokenSeries(taskViews, time.Now())
 	return uiData{
 		Agents:           agents,
 		DeadAgent:        dead,
@@ -625,6 +649,8 @@ func (s *Server) buildUIData() (uiData, error) {
 		Projects:         projects,
 		ActivityHeatmap:  heatmap,
 		TokenSeries:      tokenSeries,
+		TopTasks:         topTasks,
+		ModelMix:         modelMix,
 		Stats:            buildUIStats(agents, doneCandidates, s.chatStatAgents(), heatmap, time.Now()),
 		Capabilities:     s.uiCapabilities(),
 		Trash:            s.uiTrash(),
@@ -1853,7 +1879,7 @@ func localDay(ts string) string {
 // usage, so for sessions already parsed this tick the lookups are warm; done
 // sessions never change and stay cached. The window and Sunday alignment match
 // buildActivityHeatmap so the two dashboards line up day-for-day.
-func (s *Server) buildTokenSeries(tasks []TaskView, now time.Time) []uiTokenDay {
+func (s *Server) buildTokenSeries(tasks []TaskView, now time.Time) ([]uiTokenDay, []uiTopTask, []uiModelCount) {
 	now = now.In(time.Local)
 	today := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, now.Location())
 	weekdayOffset := int(today.Weekday())
@@ -1874,6 +1900,12 @@ func (s *Server) buildTokenSeries(tasks []TaskView, now time.Time) []uiTokenDay 
 	// One session may back several task rows (e.g. a worktree clone); dedupe by
 	// resolved transcript path so a day's tokens aren't double-counted.
 	seen := map[string]bool{}
+	// topAgg accumulates each task's window-total tokens + cost (across all 84
+	// days) for the leaderboard, keyed by slug so names that repeat don't merge.
+	topAgg := map[string]*uiTopTask{}
+	// modelCounts tallies which model done tasks actually ran on, read from the
+	// transcript (entry.usage.Model) rather than the mostly-empty task pin.
+	modelCounts := map[string]int{}
 	for _, tv := range tasks {
 		if tv.SessionID == nil || strings.TrimSpace(*tv.SessionID) == "" {
 			continue
@@ -1899,27 +1931,50 @@ func (s *Server) buildTokenSeries(tasks []TaskView, now time.Time) []uiTokenDay 
 		if err != nil {
 			continue
 		}
+		// Real model the session ran on (from the transcript), for the
+		// Composition card's Model bar — only for closed tasks.
+		if tv.Status == "done" {
+			if m := strings.TrimSpace(entry.usage.Model); m != "" {
+				modelCounts[m]++
+			}
+		}
 		label := strings.TrimSpace(tv.Name)
 		if label == "" {
 			label = tv.Slug
 		}
+		var sessTokens int
+		var sessCost float64
 		for day, tok := range entry.usage.TokensByDay {
 			i, ok := index[day]
 			if !ok || tok <= 0 {
 				continue
 			}
 			days[i].Tokens += tok
+			sessTokens += tok
 			if perTask[i] == nil {
 				perTask[i] = map[string]int{}
 			}
 			perTask[i][label] += tok
 			if cost := entry.usage.CostByDay[day]; cost > 0 {
 				days[i].CostUSD += cost
+				sessCost += cost
 				if perTaskCost[i] == nil {
 					perTaskCost[i] = map[string]float64{}
 				}
 				perTaskCost[i][label] += cost
 			}
+		}
+		// Roll the session's window totals into the leaderboard accumulator. A
+		// slug seen across multiple task rows is already deduped by `seen[path]`,
+		// so this adds each transcript's tokens exactly once.
+		if sessTokens > 0 || sessCost > 0 {
+			agg := topAgg[tv.Slug]
+			if agg == nil {
+				agg = &uiTopTask{Slug: tv.Slug, Name: label, Provider: provider}
+				topAgg[tv.Slug] = agg
+			}
+			agg.Tokens += sessTokens
+			agg.CostUSD += sessCost
 		}
 	}
 	// Finalize each day's per-task breakdown: total contributing tasks plus the
@@ -1947,7 +2002,36 @@ func (s *Server) buildTokenSeries(tasks []TaskView, now time.Time) []uiTokenDay 
 		}
 		days[i].Tasks = ranked
 	}
-	return days
+	// Rank the leaderboard by estimated cost (the bill is the decision-driver),
+	// then tokens, then name; keep the top few for the "Top tasks by cost" card.
+	topTasks := make([]uiTopTask, 0, len(topAgg))
+	for _, t := range topAgg {
+		topTasks = append(topTasks, *t)
+	}
+	sort.Slice(topTasks, func(a, b int) bool {
+		if topTasks[a].CostUSD != topTasks[b].CostUSD {
+			return topTasks[a].CostUSD > topTasks[b].CostUSD
+		}
+		if topTasks[a].Tokens != topTasks[b].Tokens {
+			return topTasks[a].Tokens > topTasks[b].Tokens
+		}
+		return topTasks[a].Name < topTasks[b].Name
+	})
+	const maxTop = 8
+	if len(topTasks) > maxTop {
+		topTasks = topTasks[:maxTop]
+	}
+	modelMix := make([]uiModelCount, 0, len(modelCounts))
+	for m, c := range modelCounts {
+		modelMix = append(modelMix, uiModelCount{Model: m, Count: c})
+	}
+	sort.Slice(modelMix, func(a, b int) bool {
+		if modelMix[a].Count != modelMix[b].Count {
+			return modelMix[a].Count > modelMix[b].Count
+		}
+		return modelMix[a].Model < modelMix[b].Model
+	})
+	return days, topTasks, modelMix
 }
 
 func buildActivityHeatmap(tasks []TaskView, now time.Time) []uiActivityDay {

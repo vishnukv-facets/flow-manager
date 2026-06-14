@@ -752,6 +752,24 @@ export interface TokenTask {
   cost_usd?: number
 }
 
+// One task's window-total token + estimated-cost usage, ranked for the
+// "Top tasks by cost" leaderboard. Carries the slug for deep-linking.
+export interface TopTask {
+  slug: string
+  name: string
+  provider?: string
+  tokens: number
+  cost_usd?: number
+}
+
+// How many done tasks actually ran on a given model, read from the transcript
+// (the real run-model, not the task's explicit pin). The client normalizes the
+// raw model id to a tier label for the Composition bar.
+export interface ModelCount {
+  model: string
+  count: number
+}
+
 export interface QuoteView {
   quote: string
   anime: string
@@ -839,6 +857,8 @@ export interface UiData {
   PROJECTS_MC: ProjectMC[]
   ACTIVITY_HEATMAP: ActivityDay[]
   TOKEN_SERIES: TokenDay[]
+  TOP_TASKS?: TopTask[]
+  MODEL_MIX?: ModelCount[]
   STATS: UiStats
   CAPABILITIES: Capabilities
   TRASH: { tasks: TrashItem[]; projects: TrashItem[]; playbooks: TrashItem[]; total: number }
