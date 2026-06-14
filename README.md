@@ -400,6 +400,8 @@ oauth_config:
       - groups:read         # same, private channels
       - users:read          # resolve author names on the user token
       - files:read          # read text/PDF file-share bodies in DMs/MPIMs
+      - chat:write          # post AS you (FLOW_SLACK_SEND_AS=user / --as user) — only if you enable writes
+      - files:write         # upload attachments AS you (flow slack send --as user --file) — only if you enable writes
 settings:
   event_subscriptions:
     bot_events:
@@ -509,6 +511,7 @@ is incremental.
 | User | `channels:history`, `groups:history` | Channel events + backfill via **your** membership — covers watched channels the bot was never invited to (flow dedups vs. the bot's by `(channel, ts)`) |
 | User | `channels:read`, `groups:read`, `users:read` | Channel/author metadata resolution on the user token |
 | User | `files:read` | Reading text/PDF file-share bodies in DMs/MPIMs for attention context and security reporting |
+| User | `chat:write`, `files:write` | Posting messages / uploading attachments *as you* (`FLOW_SLACK_SEND_AS=user`, `flow slack send --as user [--file]`) — only used if you set `FLOW_SLACK_WRITES_ENABLED=1` |
 
 #### Event → feature reference
 
