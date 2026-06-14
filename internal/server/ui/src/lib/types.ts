@@ -347,6 +347,7 @@ export interface RunSummary {
   name: string
   status: string
   priority: string
+  provider: string
   created_at: string
   updated_at: string
   started_at: string | null
@@ -366,6 +367,12 @@ export interface PlaybookView {
   recent_runs: RunSummary[]
   run_count_7d: number
   run_days_30: number[]
+  schedule: string | null
+  schedule_spec: string | null
+  schedule_paused: boolean
+  next_fire_at: string | null
+  last_fired_at: string | null
+  last_fire_run_slug: string | null
 }
 
 export interface KBFileView {
@@ -688,6 +695,9 @@ export interface PlaybookMC {
   spark: number[]
   runs?: PlaybookRun[]
   work_dir: string
+  schedule: string | null
+  schedule_paused: boolean
+  next_fire_at: string | null
 }
 
 export interface KBFile {
@@ -1140,6 +1150,8 @@ export interface ActionRequest {
   attention_action?: string
   reply_text?: string
   reply_instructions?: string
+  schedule?: string
+  schedule_op?: string
 }
 
 export interface AttentionItem {

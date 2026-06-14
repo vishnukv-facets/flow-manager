@@ -50,13 +50,16 @@ func TestSlackAppManifest(t *testing.T) {
 	scopes := oauth["scopes"].(map[string]any)
 	bot := scopes["bot"].([]string)
 	user := scopes["user"].([]string)
-	for _, want := range []string{"reactions:read", "channels:history", "files:read", "chat:write"} {
+	// Bot write scopes (chat:write, files:write) back the default send identity
+	// and `flow slack send [--file]`.
+	for _, want := range []string{"reactions:read", "channels:history", "files:read", "chat:write", "files:write"} {
 		if !containsString(bot, want) {
 			t.Fatalf("bot scopes missing %q: %v", want, bot)
 		}
 	}
 	// DM following is the whole point of the user token — regression-pin it.
-	for _, want := range []string{"im:history", "mpim:history", "files:read"} {
+	// chat:write/files:write let `--as user` post + upload as the operator.
+	for _, want := range []string{"im:history", "mpim:history", "files:read", "chat:write", "files:write"} {
 		if !containsString(user, want) {
 			t.Fatalf("user scopes missing %q: %v", want, user)
 		}
@@ -451,7 +454,7 @@ func TestSlackSetupStatus_NeedsReinstall(t *testing.T) {
 	t.Setenv("FLOW_SLACK_APP_ID", "A123")
 	t.Setenv("FLOW_SLACK_CLIENT_ID", "C123")
 	t.Setenv("FLOW_SLACK_USER_TOKEN", "xoxp-x") // installed
-	t.Setenv("FLOW_SLACK_MANIFEST_REV", "")      // installed before DM-able revision
+	t.Setenv("FLOW_SLACK_MANIFEST_REV", "")     // installed before DM-able revision
 	s := &Server{}
 	st := s.computeSlackSetupStatus()
 	if !st.NeedsReinstall {

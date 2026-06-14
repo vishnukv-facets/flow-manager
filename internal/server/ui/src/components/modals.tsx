@@ -479,6 +479,7 @@ export function CreatePlaybookModal({ open, onClose }: { open: boolean; onClose:
   const [project, setProject] = useState('__none')
   const [workDir, setWorkDir] = useState('')
   const [definition, setDefinition] = useState('')
+  const [schedule, setSchedule] = useState('')
   const [busy, setBusy] = useState(false)
 
   const projectWorkdir = projects?.find((p) => p.slug === project)?.work_dir
@@ -489,6 +490,7 @@ export function CreatePlaybookModal({ open, onClose }: { open: boolean; onClose:
     setProject('__none')
     setWorkDir('')
     setDefinition('')
+    setSchedule('')
     setBusy(false)
   }
 
@@ -511,6 +513,7 @@ export function CreatePlaybookModal({ open, onClose }: { open: boolean; onClose:
         project: project === '__none' ? '' : project,
         work_dir: effectiveWorkdir,
         description: definition,
+        schedule: schedule.trim() || undefined,
       })
       pushToast('ok', resp.message || `created playbook ${slug}`)
       queryClient.invalidateQueries()
@@ -572,6 +575,15 @@ export function CreatePlaybookModal({ open, onClose }: { open: boolean; onClose:
             value={definition}
             placeholder={'## Each run does\n- Inspect the queue\n- Capture decisions back into the playbook'}
             onChange={(e) => setDefinition(e.target.value)}
+          />
+        </Field>
+        <Field label="Schedule" hint="Optional. Scheduled runs fire automatically in headless (--auto) mode.">
+          <input
+            className="input"
+            aria-label="Playbook schedule"
+            value={schedule}
+            placeholder={'e.g. "every 6 hours", "Wednesday at 1pm", or a cron expression'}
+            onChange={(e) => setSchedule(e.target.value)}
           />
         </Field>
       </div>

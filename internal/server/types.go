@@ -61,6 +61,10 @@ type Server struct {
 	// set of tasks that need one (origin/branch-linked + active), restoring
 	// them on boot and recreating any that die.
 	monitorReconcile *monitorReconciler
+	// playbookSched is the in-process heartbeat that fires due scheduled
+	// playbook runs by shelling out to `flow playbook tick-due`. Nil when
+	// disabled or when there's no flow binary to invoke.
+	playbookSched *playbookScheduler
 	// respawn debounces agent respawns triggered by inbox events.
 	respawn *respawnGate
 
@@ -470,6 +474,7 @@ type RunSummary struct {
 	Name       string  `json:"name"`
 	Status     string  `json:"status"`
 	Priority   string  `json:"priority"`
+	Provider   string  `json:"provider"`
 	CreatedAt  string  `json:"created_at"`
 	UpdatedAt  string  `json:"updated_at"`
 	StartedAt  *string `json:"started_at"`
@@ -492,6 +497,15 @@ type PlaybookView struct {
 	RecentRuns  []RunSummary `json:"recent_runs"`
 	RunCount7d  int          `json:"run_count_7d"`
 	RunDays30   []int        `json:"run_days_30"`
+	// Scheduling. Schedule is the operator's phrase ("every 6 hours"),
+	// ScheduleSpec the canonical cron. SchedulePaused => retained but not
+	// firing. All nil/false when the playbook has no schedule.
+	Schedule        *string `json:"schedule"`
+	ScheduleSpec    *string `json:"schedule_spec"`
+	SchedulePaused  bool    `json:"schedule_paused"`
+	NextFireAt      *string `json:"next_fire_at"`
+	LastFiredAt     *string `json:"last_fired_at"`
+	LastFireRunSlug *string `json:"last_fire_run_slug"`
 }
 
 type KBFileView struct {

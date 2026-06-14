@@ -45,6 +45,13 @@ type actionRequest struct {
 	Model          string `json:"model"`
 	Mkdir          bool   `json:"mkdir"`
 
+	// Schedule is the recurring-schedule phrase ("every 6 hours",
+	// "Wednesday at 1pm", or cron) for the set-playbook-schedule action.
+	Schedule string `json:"schedule,omitempty"`
+	// ScheduleOp selects the schedule mutation: set | clear | pause | resume.
+	// Empty with a non-empty Schedule is treated as "set".
+	ScheduleOp string `json:"schedule_op,omitempty"`
+
 	// NoOpen, on create-flow, creates the task in backlog without opening an
 	// agent session (no browser-terminal bridge). Defaults false → the legacy
 	// "create & open session" behaviour is preserved for callers that omit it.
@@ -288,6 +295,8 @@ func (s *Server) runAction(req actionRequest) (actionResponse, int) {
 		return s.updateProject(req)
 	case "update-playbook":
 		return s.updatePlaybook(req)
+	case "set-playbook-schedule":
+		return s.updatePlaybookSchedule(req)
 	case "pause":
 		return s.pauseTask(target)
 	case "clear-waiting":
@@ -913,6 +922,9 @@ func (s *Server) createPlaybook(req actionRequest) (actionResponse, int) {
 	if req.Mkdir {
 		args = append(args, "--mkdir")
 	}
+	if sched := strings.TrimSpace(req.Schedule); sched != "" {
+		args = append(args, "--schedule", sched)
+	}
 	out, err := s.runFlowCommand(args...)
 	if err != nil {
 		return actionResponse{OK: false, Message: err.Error(), Output: out}, http.StatusInternalServerError
@@ -1231,6 +1243,42 @@ func (s *Server) updatePlaybook(req actionRequest) (actionResponse, int) {
 		return actionResponse{OK: false, Message: err.Error()}, http.StatusInternalServerError
 	}
 	return actionResponse{OK: true, Message: "playbook name updated"}, http.StatusOK
+}
+
+// updatePlaybookSchedule sets, clears, pauses, or resumes a playbook's
+// recurring schedule. Like createPlaybook it shells out to the flow binary
+// (`flow update playbook ... --schedule/--clear-schedule/...`) so schedule
+// parsing and next-fire computation live in exactly one place — the CLI.
+func (s *Server) updatePlaybookSchedule(req actionRequest) (actionResponse, int) {
+	target := firstNonEmpty(req.Target, req.Slug)
+	if err := validateSlug(target); err != nil {
+		return actionResponse{OK: false, Message: err.Error()}, http.StatusBadRequest
+	}
+	op := strings.TrimSpace(req.ScheduleOp)
+	if op == "" && strings.TrimSpace(req.Schedule) != "" {
+		op = "set"
+	}
+	args := []string{"update", "playbook", target}
+	switch op {
+	case "set":
+		if strings.TrimSpace(req.Schedule) == "" {
+			return actionResponse{OK: false, Message: "schedule is required"}, http.StatusBadRequest
+		}
+		args = append(args, "--schedule", req.Schedule)
+	case "clear":
+		args = append(args, "--clear-schedule")
+	case "pause":
+		args = append(args, "--pause-schedule")
+	case "resume":
+		args = append(args, "--resume-schedule")
+	default:
+		return actionResponse{OK: false, Message: "unknown schedule op: " + op}, http.StatusBadRequest
+	}
+	out, err := s.runFlowCommand(args...)
+	if err != nil {
+		return actionResponse{OK: false, Message: strings.TrimSpace(firstNonEmpty(out, err.Error())), Output: out}, http.StatusInternalServerError
+	}
+	return actionResponse{OK: true, Message: "playbook schedule updated", Output: out}, http.StatusOK
 }
 
 func (s *Server) pauseTask(target string) (actionResponse, int) {

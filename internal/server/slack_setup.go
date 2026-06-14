@@ -59,7 +59,7 @@ const slackSetupDefaultOAuthPort = 8790
 // re-approve). Persisted as FLOW_SLACK_MANIFEST_REV after create-app and
 // successful OAuth; status compares the stored value to this constant and sets
 // NeedsReinstall when they differ.
-const slackManifestRev = "2"
+const slackManifestRev = "4"
 
 // slackOAuthCallbackPath is the path component of the registered redirect URL.
 const slackOAuthCallbackPath = "/api/slack/oauth/callback"
@@ -138,6 +138,7 @@ var (
 		"mpim:read",
 		"chat:write",      // only used when FLOW_SLACK_WRITES_ENABLED=1
 		"reactions:write", // same gate
+		"files:write",     // upload attachments via `flow slack send --file` (same gate)
 	}
 	slackManifestUserScopes = []string{
 		"im:history",   // DM following + backfill — the bot can't see your DMs
@@ -155,7 +156,9 @@ var (
 		"channels:read",
 		"groups:read",
 		"users:read",
-		"files:read", // safe text/PDF extraction for DM file shares
+		"files:read",  // safe text/PDF extraction for DM file shares
+		"chat:write",  // post replies/messages AS the operator (FLOW_SLACK_SEND_AS=user / `--as user`); gated by FLOW_SLACK_WRITES_ENABLED
+		"files:write", // upload attachments AS the operator (`flow slack send --as user --file`); same gate
 	}
 	slackManifestBotEvents = []string{
 		"reaction_added",

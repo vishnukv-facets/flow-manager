@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"sync"
 	"testing"
+	"time"
 )
 
 func openTempDB(t *testing.T) *sql.DB {
@@ -739,6 +740,95 @@ func TestPlaybookCRUD(t *testing.T) {
 	}
 	if len(pbs) != 1 {
 		t.Errorf("ListPlaybooks: got %d, want 1", len(pbs))
+	}
+}
+
+func TestPlaybookScheduleLifecycle(t *testing.T) {
+	db, err := OpenDB(filepath.Join(t.TempDir(), "flow.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+
+	wd := t.TempDir()
+	if err := UpsertPlaybook(db, &Playbook{Slug: "digest", Name: "Daily digest", WorkDir: wd}); err != nil {
+		t.Fatal(err)
+	}
+
+	now := time.Now()
+	past := now.Add(-time.Minute).Format(time.RFC3339)
+	future := now.Add(time.Hour).Format(time.RFC3339)
+
+	// Unscheduled => not due.
+	if due, err := DuePlaybooks(db, now.Format(time.RFC3339)); err != nil || len(due) != 0 {
+		t.Fatalf("unscheduled DuePlaybooks: due=%d err=%v", len(due), err)
+	}
+
+	// Arm with a past next-fire => due.
+	if err := SetPlaybookSchedule(db, "digest", "@every 6h", "every 6 hours", past); err != nil {
+		t.Fatal(err)
+	}
+	due, err := DuePlaybooks(db, now.Format(time.RFC3339))
+	if err != nil || len(due) != 1 || due[0].Slug != "digest" {
+		t.Fatalf("armed DuePlaybooks: due=%d err=%v", len(due), err)
+	}
+	pb, _ := GetPlaybook(db, "digest")
+	if pb.ScheduleSpec.String != "@every 6h" || pb.ScheduleInput.String != "every 6 hours" {
+		t.Errorf("schedule not stored: %+v", pb)
+	}
+
+	// Future next-fire => not due.
+	if err := SetPlaybookSchedule(db, "digest", "@every 6h", "every 6 hours", future); err != nil {
+		t.Fatal(err)
+	}
+	if due, _ := DuePlaybooks(db, now.Format(time.RFC3339)); len(due) != 0 {
+		t.Fatalf("future fire should not be due, got %d", len(due))
+	}
+
+	// Pause => not due even when armed in the past.
+	if err := SetPlaybookSchedule(db, "digest", "@every 6h", "every 6 hours", past); err != nil {
+		t.Fatal(err)
+	}
+	if err := PausePlaybookSchedule(db, "digest"); err != nil {
+		t.Fatal(err)
+	}
+	if due, _ := DuePlaybooks(db, now.Format(time.RFC3339)); len(due) != 0 {
+		t.Fatalf("paused should not be due, got %d", len(due))
+	}
+	pb, _ = GetPlaybook(db, "digest")
+	if !pb.SchedulePausedAt.Valid || pb.NextFireAt.Valid {
+		t.Errorf("pause should set paused_at and clear next_fire: %+v", pb)
+	}
+
+	// Resume re-arms.
+	if err := ResumePlaybookSchedule(db, "digest", past); err != nil {
+		t.Fatal(err)
+	}
+	if due, _ := DuePlaybooks(db, now.Format(time.RFC3339)); len(due) != 1 {
+		t.Fatalf("resumed should be due, got %d", len(due))
+	}
+
+	// Record a fire advances next_fire and stamps history.
+	if err := RecordPlaybookFired(db, "digest", now.Format(time.RFC3339), future, "digest--run-1"); err != nil {
+		t.Fatal(err)
+	}
+	pb, _ = GetPlaybook(db, "digest")
+	if pb.LastFireRunSlug.String != "digest--run-1" || pb.NextFireAt.String != future {
+		t.Errorf("record fired not stamped: %+v", pb)
+	}
+
+	// Clear removes the schedule.
+	if err := ClearPlaybookSchedule(db, "digest"); err != nil {
+		t.Fatal(err)
+	}
+	pb, _ = GetPlaybook(db, "digest")
+	if pb.ScheduleSpec.Valid || pb.NextFireAt.Valid {
+		t.Errorf("clear should null schedule: %+v", pb)
+	}
+
+	// Pause without a schedule errors (no matching row).
+	if err := PausePlaybookSchedule(db, "digest"); err == nil {
+		t.Error("pause without schedule should error")
 	}
 }
 

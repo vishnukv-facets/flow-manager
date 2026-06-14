@@ -62,6 +62,7 @@ func New(cfg Config) *Server {
 	s.zrok = &zrokManager{}
 	s.inboxMonitors = newInboxMonitorManager(inboxWakeTarget{server: s})
 	s.monitorReconcile = newMonitorReconciler(s)
+	s.playbookSched = newPlaybookScheduler(s)
 	// Resolves Slack user/channel IDs to display names for the Inbox UI.
 	// Nil when no Slack token is configured; all uses are nil-safe.
 	s.nameResolver = monitor.NewSlackNameResolver()
@@ -281,6 +282,13 @@ func (s *Server) ListenAndServe(addr string) int {
 	if s.monitorReconcile != nil {
 		s.monitorReconcile.start()
 		defer s.monitorReconcile.stop()
+	}
+	// Drive scheduled playbook runs: each tick shells out to
+	// `flow playbook tick-due`, which fires any due playbook as an autonomous
+	// run. Stops cleanly on shutdown.
+	if s.playbookSched != nil {
+		s.playbookSched.start()
+		defer s.playbookSched.stop()
 	}
 	// Watch SQLite data_version so writes from external processes
 	// (notably the flow CLI) trigger an SSE refresh within ~1s without

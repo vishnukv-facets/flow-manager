@@ -25,6 +25,19 @@ export function ago(iso: string | null | undefined): string {
   return sec < 45 ? 'just now' : `${fromSeconds(sec)} ago`
 }
 
+// Future-relative time, the mirror of ago(): "in 4m", "in 2h", "in 3d".
+// Returns "now" when the instant is within a minute, and "due" once it's past
+// (a schedule whose next fire is overdue but hasn't been picked up yet).
+export function until(iso: string | null | undefined): string {
+  if (!iso) return '—'
+  const t = Date.parse(iso)
+  if (Number.isNaN(t)) return '—'
+  const sec = Math.floor((t - Date.now()) / 1000)
+  if (sec <= 0) return 'due'
+  if (sec < 60) return 'in <1m'
+  return `in ${fromSeconds(sec)}`
+}
+
 export function shortDate(iso: string | null | undefined): string {
   if (!iso) return '—'
   const d = new Date(iso)
@@ -41,6 +54,7 @@ export function dateTime(iso: string | null | undefined): string {
     day: 'numeric',
     hour: 'numeric',
     minute: '2-digit',
+    hour12: true, // always show AM/PM rather than depending on locale (24h)
   })
 }
 

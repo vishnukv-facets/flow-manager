@@ -565,6 +565,13 @@ func BuildPlaybookView(db *sql.DB, root string, pb *flowdb.Playbook) (PlaybookVi
 		Updates:     markdownFiles(filepath.Join(root, "playbooks", pb.Slug, "updates"), true),
 		AuxFiles:    auxFiles(filepath.Join(root, "playbooks", pb.Slug)),
 		RunDays30:   make([]int, 30),
+
+		Schedule:        nullStringPtr(pb.ScheduleInput),
+		ScheduleSpec:    nullStringPtr(pb.ScheduleSpec),
+		SchedulePaused:  pb.SchedulePausedAt.Valid,
+		NextFireAt:      nullStringPtr(pb.NextFireAt),
+		LastFiredAt:     nullStringPtr(pb.LastFiredAt),
+		LastFireRunSlug: nullStringPtr(pb.LastFireRunSlug),
 	}
 	if view.Updates == nil {
 		view.Updates = []FileRef{}
@@ -588,6 +595,7 @@ func BuildPlaybookView(db *sql.DB, root string, pb *flowdb.Playbook) (PlaybookVi
 			Name:       r.Name,
 			Status:     r.Status,
 			Priority:   r.Priority,
+			Provider:   r.SessionProvider,
 			CreatedAt:  r.CreatedAt,
 			UpdatedAt:  r.UpdatedAt,
 			StartedAt:  nullStringPtr(r.SessionStarted),

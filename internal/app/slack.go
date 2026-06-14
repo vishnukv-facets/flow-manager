@@ -11,9 +11,13 @@ import (
 	"flow/internal/monitor"
 )
 
-// slackSendFn is the in-process fallback path (resolves a token locally).
-// Stubbable in tests.
-var slackSendFn = monitor.SendAsBot
+// slackSendFn is the in-process fallback for a text post (resolves a token
+// locally). Stubbable in tests. identity is "" (global), "bot", or "user".
+var slackSendFn = monitor.SendAs
+
+// slackFileSendFn is the in-process fallback for a file upload: (channel,
+// comment, filePath, identity). Stubbable in tests.
+var slackFileSendFn = monitor.SendFileAs
 
 // postSlackSendFn POSTs {channel,text} to the running flow server, which holds
 // the freshly-validated Slack token. Returns:
@@ -22,9 +26,9 @@ var slackSendFn = monitor.SendAsBot
 //     no server, timeout) — the caller falls back to slackSendFn.
 //
 // Stubbable in tests.
-var postSlackSendFn = func(channel, text string) (status int, body string, err error) {
+var postSlackSendFn = func(channel, text, identity, file string) (status int, body string, err error) {
 	url := flowServerURL("/api/slack/send")
-	payload := fmt.Sprintf(`{"channel":%q,"text":%q}`, channel, text)
+	payload := fmt.Sprintf(`{"channel":%q,"text":%q,"as":%q,"file":%q}`, channel, text, identity, file)
 	req, err := http.NewRequest(http.MethodPost, url, strings.NewReader(payload))
 	if err != nil {
 		return 0, "", err
@@ -58,12 +62,24 @@ func cmdSlack(args []string) int {
 func cmdSlackSend(args []string) int {
 	fs := flagSet("slack send")
 	channel := fs.String("channel", "", "Slack channel/DM id to post to")
-	text := fs.String("text", "", "message body")
+	text := fs.String("text", "", "message body (or, with --file, the attachment's initial comment)")
+	as := fs.String("as", "", "send identity: bot or user (default: server's FLOW_SLACK_SEND_AS). Use 'bot' for automation — the bot token carries chat:write/files:write.")
+	file := fs.String("file", "", "local path to a file (image, PDF, …) to upload as an attachment")
 	if err := fs.Parse(args); err != nil {
 		return 2
 	}
-	if strings.TrimSpace(*channel) == "" || strings.TrimSpace(*text) == "" {
-		fmt.Fprintln(os.Stderr, "error: --channel and --text are required")
+	filePath := strings.TrimSpace(*file)
+	if strings.TrimSpace(*channel) == "" {
+		fmt.Fprintln(os.Stderr, "error: --channel is required")
+		return 2
+	}
+	if strings.TrimSpace(*text) == "" && filePath == "" {
+		fmt.Fprintln(os.Stderr, "error: --text or --file is required")
+		return 2
+	}
+	identity := strings.ToLower(strings.TrimSpace(*as))
+	if identity != "" && identity != "bot" && identity != "user" {
+		fmt.Fprintln(os.Stderr, "error: --as must be 'bot' or 'user'")
 		return 2
 	}
 
@@ -72,7 +88,7 @@ func cmdSlackSend(args []string) int {
 	// token in its environment, so resolving locally would fail
 	// (account_inactive). Only fall back to the in-process path when the
 	// server is unreachable.
-	status, body, err := postSlackSendFn(*channel, *text)
+	status, body, err := postSlackSendFn(*channel, *text, identity, filePath)
 	if err == nil {
 		if status >= 200 && status < 300 {
 			return 0
@@ -87,7 +103,14 @@ func cmdSlackSend(args []string) int {
 
 	// Server unreachable (no server / connection refused / timeout) — fall
 	// back to the in-process send so `flow slack send` still works standalone.
-	if err := slackSendFn(*channel, *text); err != nil {
+	if filePath != "" {
+		if err := slackFileSendFn(*channel, *text, filePath, identity); err != nil {
+			fmt.Fprintf(os.Stderr, "error: %v\n", err)
+			return 1
+		}
+		return 0
+	}
+	if err := slackSendFn(*channel, *text, identity); err != nil {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
 		return 1
 	}

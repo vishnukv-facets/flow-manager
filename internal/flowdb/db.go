@@ -37,14 +37,20 @@ CREATE TABLE IF NOT EXISTS projects (
 );
 
 CREATE TABLE IF NOT EXISTS playbooks (
-    slug          TEXT PRIMARY KEY,
-    name          TEXT NOT NULL,
-    project_slug  TEXT REFERENCES projects(slug),
-    work_dir      TEXT NOT NULL,
-    created_at    TEXT NOT NULL,
-    updated_at    TEXT NOT NULL,
-    archived_at   TEXT,
-    deleted_at    TEXT
+    slug                TEXT PRIMARY KEY,
+    name                TEXT NOT NULL,
+    project_slug        TEXT REFERENCES projects(slug),
+    work_dir            TEXT NOT NULL,
+    schedule_spec       TEXT,
+    schedule_input      TEXT,
+    schedule_paused_at  TEXT,
+    next_fire_at        TEXT,
+    last_fired_at       TEXT,
+    last_fire_run_slug  TEXT,
+    created_at          TEXT NOT NULL,
+    updated_at          TEXT NOT NULL,
+    archived_at         TEXT,
+    deleted_at          TEXT
 );
 
 CREATE TABLE IF NOT EXISTS tasks (
@@ -1331,8 +1337,24 @@ func runMigrations(db *sql.DB) error {
 		}
 	}
 
-	// playbooks table: created via schemaDDL on every OpenDB, so no ALTER needed
-	// for the table itself. Just ensure tasks columns are present.
+	// playbooks table: the table itself is created via schemaDDL on every
+	// OpenDB, but CREATE TABLE IF NOT EXISTS never adds NEW columns to an
+	// existing table — so the scheduling columns need explicit ALTERs for DBs
+	// that predate them. (Fresh DBs already have them from schemaDDL.)
+	for _, col := range []string{
+		"schedule_spec", "schedule_input", "schedule_paused_at",
+		"next_fire_at", "last_fired_at", "last_fire_run_slug",
+	} {
+		has, err = columnExists(db, "playbooks", col)
+		if err != nil {
+			return err
+		}
+		if !has {
+			if _, err := db.Exec(`ALTER TABLE playbooks ADD COLUMN ` + col + ` TEXT`); err != nil {
+				return fmt.Errorf("add playbooks.%s: %w", col, err)
+			}
+		}
+	}
 
 	has, err = columnExists(db, "tasks", "kind")
 	if err != nil {
@@ -2448,10 +2470,20 @@ type Playbook struct {
 	Name        string
 	ProjectSlug sql.NullString
 	WorkDir     string
-	CreatedAt   string
-	UpdatedAt   string
-	ArchivedAt  sql.NullString
-	DeletedAt   sql.NullString
+	// Scheduling (all nullable). ScheduleSpec is the canonical cron/descriptor
+	// (see internal/schedule); ScheduleInput is the operator's original phrase.
+	// SchedulePausedAt set => schedule retained but not firing. NextFireAt is
+	// the computed next fire; NULL when unscheduled or paused.
+	ScheduleSpec     sql.NullString
+	ScheduleInput    sql.NullString
+	SchedulePausedAt sql.NullString
+	NextFireAt       sql.NullString
+	LastFiredAt      sql.NullString
+	LastFireRunSlug  sql.NullString
+	CreatedAt        string
+	UpdatedAt        string
+	ArchivedAt       sql.NullString
+	DeletedAt        sql.NullString
 }
 
 // PlaybookFilter holds optional filters for ListPlaybooks.
@@ -2464,11 +2496,15 @@ type PlaybookFilter struct {
 
 // ---------- playbook queries ----------
 
-const PlaybookCols = "slug, name, project_slug, work_dir, created_at, updated_at, archived_at, deleted_at"
+const PlaybookCols = "slug, name, project_slug, work_dir, schedule_spec, schedule_input, schedule_paused_at, next_fire_at, last_fired_at, last_fire_run_slug, created_at, updated_at, archived_at, deleted_at"
 
 func ScanPlaybook(row interface{ Scan(dest ...any) error }) (*Playbook, error) {
 	var p Playbook
-	err := row.Scan(&p.Slug, &p.Name, &p.ProjectSlug, &p.WorkDir, &p.CreatedAt, &p.UpdatedAt, &p.ArchivedAt, &p.DeletedAt)
+	err := row.Scan(
+		&p.Slug, &p.Name, &p.ProjectSlug, &p.WorkDir,
+		&p.ScheduleSpec, &p.ScheduleInput, &p.SchedulePausedAt, &p.NextFireAt, &p.LastFiredAt, &p.LastFireRunSlug,
+		&p.CreatedAt, &p.UpdatedAt, &p.ArchivedAt, &p.DeletedAt,
+	)
 	if err != nil {
 		return nil, err
 	}
@@ -2716,6 +2752,121 @@ func UpsertPlaybook(db *sql.DB, pb *Playbook) error {
 	`, pb.Slug, pb.Name, pb.ProjectSlug, pb.WorkDir, pb.CreatedAt, pb.UpdatedAt)
 	if err != nil {
 		return fmt.Errorf("upsert playbook %s: %w", pb.Slug, err)
+	}
+	return nil
+}
+
+// ---------- playbook schedule operations ----------
+
+// SetPlaybookSchedule attaches (or replaces) a recurring schedule. spec is the
+// canonical cron/descriptor, input the operator's original phrase, nextFireAt
+// the precomputed next fire (RFC3339). Setting a schedule clears any paused
+// flag — re-scheduling a paused playbook is an implicit resume.
+func SetPlaybookSchedule(db *sql.DB, slug, spec, input, nextFireAt string) error {
+	res, err := db.Exec(
+		`UPDATE playbooks SET schedule_spec=?, schedule_input=?, schedule_paused_at=NULL, next_fire_at=?, updated_at=? WHERE slug=?`,
+		spec, input, nextFireAt, NowISO(), slug,
+	)
+	return affectedPlaybookRow(res, err, "set schedule", slug)
+}
+
+// ClearPlaybookSchedule removes the schedule entirely (keeps last-fired
+// history for display).
+func ClearPlaybookSchedule(db *sql.DB, slug string) error {
+	res, err := db.Exec(
+		`UPDATE playbooks SET schedule_spec=NULL, schedule_input=NULL, schedule_paused_at=NULL, next_fire_at=NULL, updated_at=? WHERE slug=?`,
+		NowISO(), slug,
+	)
+	return affectedPlaybookRow(res, err, "clear schedule", slug)
+}
+
+// PausePlaybookSchedule retains the schedule but stops it firing (next_fire_at
+// cleared so DuePlaybooks skips it).
+func PausePlaybookSchedule(db *sql.DB, slug string) error {
+	now := NowISO()
+	res, err := db.Exec(
+		`UPDATE playbooks SET schedule_paused_at=?, next_fire_at=NULL, updated_at=? WHERE slug=? AND schedule_spec IS NOT NULL`,
+		now, now, slug,
+	)
+	return affectedPlaybookRow(res, err, "pause schedule", slug)
+}
+
+// ResumePlaybookSchedule clears the paused flag and arms the next fire.
+func ResumePlaybookSchedule(db *sql.DB, slug, nextFireAt string) error {
+	res, err := db.Exec(
+		`UPDATE playbooks SET schedule_paused_at=NULL, next_fire_at=?, updated_at=? WHERE slug=? AND schedule_spec IS NOT NULL`,
+		nextFireAt, NowISO(), slug,
+	)
+	return affectedPlaybookRow(res, err, "resume schedule", slug)
+}
+
+// SetPlaybookNextFire advances only the next-fire time, without stamping a
+// fire. Used when the scheduler skips (overlap) or a fire errors, so a single
+// due playbook doesn't hot-loop the scheduler.
+func SetPlaybookNextFire(db *sql.DB, slug, nextFireAt string) error {
+	res, err := db.Exec(
+		`UPDATE playbooks SET next_fire_at=?, updated_at=? WHERE slug=?`,
+		nextFireAt, NowISO(), slug,
+	)
+	return affectedPlaybookRow(res, err, "set next fire", slug)
+}
+
+// RecordPlaybookFired stamps a fire: records last fire time + run slug and
+// advances next_fire_at to the recomputed value.
+func RecordPlaybookFired(db *sql.DB, slug, firedAt, nextFireAt, runSlug string) error {
+	res, err := db.Exec(
+		`UPDATE playbooks SET last_fired_at=?, last_fire_run_slug=?, next_fire_at=?, updated_at=? WHERE slug=?`,
+		firedAt, runSlug, nextFireAt, NowISO(), slug,
+	)
+	return affectedPlaybookRow(res, err, "record fired", slug)
+}
+
+// DuePlaybooks returns active (non-archived, non-deleted) playbooks whose
+// schedule is armed (spec set, not paused) and whose next_fire_at is at or
+// before now.
+func DuePlaybooks(db *sql.DB, nowISO string) ([]*Playbook, error) {
+	now, err := time.Parse(time.RFC3339, nowISO)
+	if err != nil {
+		return nil, fmt.Errorf("due playbooks: parse now %q: %w", nowISO, err)
+	}
+	rows, err := db.Query(
+		"SELECT " + PlaybookCols + ` FROM playbooks
+		 WHERE archived_at IS NULL AND deleted_at IS NULL
+		   AND schedule_spec IS NOT NULL AND schedule_paused_at IS NULL
+		   AND next_fire_at IS NOT NULL
+		 ORDER BY slug`,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("due playbooks: %w", err)
+	}
+	defer rows.Close()
+	var out []*Playbook
+	for rows.Next() {
+		p, err := ScanPlaybook(rows)
+		if err != nil {
+			return nil, fmt.Errorf("due playbooks: scan: %w", err)
+		}
+		fire, err := time.Parse(time.RFC3339, p.NextFireAt.String)
+		if err != nil {
+			continue
+		}
+		if !fire.After(now) {
+			out = append(out, p)
+		}
+	}
+	return out, rows.Err()
+}
+
+func affectedPlaybookRow(res sql.Result, err error, op, slug string) error {
+	if err != nil {
+		return fmt.Errorf("%s playbook %s: %w", op, slug, err)
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if n == 0 {
+		return fmt.Errorf("%s playbook %s: no matching playbook (missing, or no schedule set)", op, slug)
 	}
 	return nil
 }

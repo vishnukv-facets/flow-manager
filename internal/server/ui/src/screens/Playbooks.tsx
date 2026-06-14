@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react'
 import { useLocation } from 'wouter'
-import { Archive, ChevronDown, Play, Plus, Repeat, Search, Trash2 } from 'lucide-react'
+import { Archive, CalendarClock, ChevronDown, Play, Plus, Repeat, Search, Trash2 } from 'lucide-react'
 import { usePlaybooks, useAction, useUiData } from '../lib/query'
 import { useDocumentTitle } from '../lib/useDocumentTitle'
 import { confirmAction } from '../lib/confirm'
@@ -8,7 +8,7 @@ import { AgentPicker, PermissionPicker } from '../components/pickers'
 import { EmptyState, ErrorNote, Loading, Sparkline } from '../components/ui'
 import { clickable } from '../lib/a11y'
 import { CreatePlaybookModal } from '../components/modals'
-import { ago } from '../lib/format'
+import { ago, until } from '../lib/format'
 import type { ToolCapability } from '../lib/types'
 
 const SORTS = [
@@ -203,6 +203,16 @@ export function Playbooks() {
               </div>
               {p.recent_runs?.[0] && (
                 <div className="faint" style={{ fontSize: 11.5 }}>last run {ago(p.recent_runs[0].created_at)}</div>
+              )}
+              {p.schedule && (
+                <div className="faint" style={{ fontSize: 11.5, display: 'flex', alignItems: 'center', gap: 5 }}>
+                  <CalendarClock size={11} />
+                  {p.schedule_paused
+                    ? <>schedule paused</>
+                    : p.next_fire_at
+                      ? <>{p.schedule} · next {until(p.next_fire_at)}</>
+                      : <>{p.schedule}</>}
+                </div>
               )}
             </article>
             )

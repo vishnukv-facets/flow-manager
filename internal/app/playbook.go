@@ -4,10 +4,12 @@ import (
 	"database/sql"
 	"errors"
 	"flow/internal/flowdb"
+	"flow/internal/schedule"
 	"flow/internal/workdirreg"
 	"fmt"
 	"os"
 	"path/filepath"
+	"time"
 )
 
 const playbookBriefStub = `# %s
@@ -43,6 +45,7 @@ func addPlaybook(args []string) int {
 	project := fs.String("project", "", "parent project slug (optional)")
 	workDir := fs.String("work-dir", "", "absolute path to the playbook's work directory (required)")
 	mkdir := fs.Bool("mkdir", false, "create --work-dir if it does not exist")
+	scheduleSpec := fs.String("schedule", "", "recurring schedule: English (\"every 6 hours\", \"Wednesday at 1pm\") or cron; scheduled runs fire in --auto mode")
 	if leadingHelpArg(args) {
 		fs.Usage()
 		return 0
@@ -59,6 +62,18 @@ func addPlaybook(args []string) int {
 	if *workDir == "" {
 		fmt.Fprintln(os.Stderr, "error: --work-dir is required for playbooks")
 		return 2
+	}
+
+	// Parse the schedule up-front so a bad expression fails before we create
+	// anything on disk or in the DB.
+	var sched schedule.Spec
+	if *scheduleSpec != "" {
+		s, err := schedule.Parse(*scheduleSpec)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "error: %v\n", err)
+			return 2
+		}
+		sched = s
 	}
 	abs, err := resolveWorkDir(*workDir, *mkdir)
 	if err != nil {
@@ -120,6 +135,18 @@ func addPlaybook(args []string) int {
 		return 1
 	}
 
+	if sched.Cron != "" {
+		next, err := schedule.Next(sched.Cron, time.Now())
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "error: compute next fire: %v\n", err)
+			return 1
+		}
+		if err := flowdb.SetPlaybookSchedule(db, slug, sched.Cron, sched.Input, next.Format(time.RFC3339)); err != nil {
+			fmt.Fprintf(os.Stderr, "error: set schedule: %v\n", err)
+			return 1
+		}
+	}
+
 	root, err := flowRoot()
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
@@ -148,6 +175,9 @@ func addPlaybook(args []string) int {
 	fmt.Printf("Brief: %s\n", briefPath)
 	if projectSlug.Valid {
 		fmt.Printf("Project: %s\n", projectSlug.String)
+	}
+	if sched.Cron != "" {
+		fmt.Printf("Schedule: %s (runs fire automatically in --auto mode)\n", sched.Input)
 	}
 	fmt.Printf("Next: flow run playbook %s\n", slug)
 	return 0
