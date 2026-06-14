@@ -3118,11 +3118,27 @@ func TestOverviewChatPreparesFloatingLaunchWithoutTask(t *testing.T) {
 	if launch.WorkDir != root || launch.Provider != "codex" || launch.PermissionMode != flowdb.DefaultPermissionMode {
 		t.Fatalf("floating launch = %+v", launch)
 	}
-	if !launch.Created || launch.NeedsCapture {
+	// Codex mints its own session id on launch (the flow-generated stub never
+	// matches a rollout file), so a Codex Ask Flow chat MUST capture — otherwise
+	// the chats sidebar can never resolve its transcript / last-reply preview.
+	if !launch.Created || !launch.NeedsCapture {
 		t.Fatalf("floating launch lifecycle fields = %+v", launch)
 	}
 	if !strings.Contains(strings.Join(launch.Args, "\n"), "What should I do today?") {
 		t.Fatalf("overview prompt missing from args = %#v", launch.Args)
+	}
+
+	// Claude accepts the flow-generated --session-id, so its stub IS the real id;
+	// no post-launch capture is needed (and starting one would be wasted work).
+	claudeLaunch, err := srv.prepareOverviewFloatingLaunch(actionRequest{
+		Prompt:   "What should I do today?",
+		Provider: "claude",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !claudeLaunch.Created || claudeLaunch.NeedsCapture {
+		t.Fatalf("claude floating launch lifecycle fields = %+v", claudeLaunch)
 	}
 	if _, err := flowdb.GetTask(db, overviewTaskSlug); !errors.Is(err, sql.ErrNoRows) {
 		t.Fatalf("overview task should not exist, err = %v", err)

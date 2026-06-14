@@ -1708,8 +1708,13 @@ func (s *Server) prepareOverviewFloatingLaunch(req actionRequest) (terminalLaunc
 		Args:           args,
 		FreeAgent:      true,
 		Created:        true,
-		NeedsCapture:   false,
-		StartedAt:      time.Now().Add(-2 * time.Second),
+		// Codex mints its own session id on launch and ignores the flow-generated
+		// one, so the stub above never resolves to a rollout file — capture must
+		// overwrite it (via captureCodexChatSession) or the Chats sidebar can never
+		// show this chat's last-reply preview. Claude accepts --session-id, so its
+		// stub is already correct and no capture is needed. Mirrors openNewSlackChat.
+		NeedsCapture: provider == agents.ProviderCodex,
+		StartedAt:    time.Now().Add(-2 * time.Second),
 	}, nil
 }
 
