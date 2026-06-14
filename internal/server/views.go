@@ -595,6 +595,7 @@ func BuildPlaybookView(db *sql.DB, root string, pb *flowdb.Playbook) (PlaybookVi
 			Name:       r.Name,
 			Status:     r.Status,
 			Priority:   r.Priority,
+			Provider:   r.SessionProvider,
 			CreatedAt:  r.CreatedAt,
 			UpdatedAt:  r.UpdatedAt,
 			StartedAt:  nullStringPtr(r.SessionStarted),

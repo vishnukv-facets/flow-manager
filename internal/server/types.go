@@ -471,6 +471,7 @@ type RunSummary struct {
 	Name       string  `json:"name"`
 	Status     string  `json:"status"`
 	Priority   string  `json:"priority"`
+	Provider   string  `json:"provider"`
 	CreatedAt  string  `json:"created_at"`
 	UpdatedAt  string  `json:"updated_at"`
 	StartedAt  *string `json:"started_at"`

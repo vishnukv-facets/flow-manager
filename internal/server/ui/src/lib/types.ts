@@ -347,6 +347,7 @@ export interface RunSummary {
   name: string
   status: string
   priority: string
+  provider: string
   created_at: string
   updated_at: string
   started_at: string | null
