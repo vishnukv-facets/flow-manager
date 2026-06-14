@@ -15,6 +15,9 @@ type slackSendRequest struct {
 	// FLOW_SLACK_SEND_AS. `flow slack send --as bot` sets this so automation
 	// posts as the bot (which carries chat:write).
 	As string `json:"as"`
+	// File is an optional local path to upload as an attachment; when set, Text
+	// becomes the initial comment. Requires files:write (bot scope).
+	File string `json:"file"`
 }
 
 // handleSlackSend posts a Slack message as the flow bot using the SERVER's
@@ -36,15 +39,23 @@ func (s *Server) handleSlackSend(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "channel is required", http.StatusBadRequest)
 		return
 	}
-	if strings.TrimSpace(req.Text) == "" {
-		http.Error(w, "text is required", http.StatusBadRequest)
+	hasFile := strings.TrimSpace(req.File) != ""
+	if strings.TrimSpace(req.Text) == "" && !hasFile {
+		http.Error(w, "text or file is required", http.StatusBadRequest)
 		return
 	}
-	if err := monitor.SendAs(req.Channel, req.Text, req.As); err != nil {
+	var sendErr error
+	if hasFile {
+		// File upload; Text (if any) rides along as the initial comment.
+		sendErr = monitor.SendFileAs(req.Channel, req.Text, req.File, req.As)
+	} else {
+		sendErr = monitor.SendAs(req.Channel, req.Text, req.As)
+	}
+	if sendErr != nil {
 		// 502: we reached the server but Slack (or the writes gate) rejected
 		// the send. The CLI surfaces this and must NOT fall back to its own
 		// (potentially stale) token.
-		writeError(w, err, http.StatusBadGateway)
+		writeError(w, sendErr, http.StatusBadGateway)
 		return
 	}
 	writeJSON(w, map[string]any{"ok": true})

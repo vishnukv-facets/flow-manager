@@ -20,7 +20,7 @@ func TestCmdSlackUnknownSubcommand(t *testing.T) {
 }
 
 // stubPostSlackSend swaps postSlackSendFn for the test and restores it.
-func stubPostSlackSend(t *testing.T, fn func(channel, text, identity string) (int, string, error)) {
+func stubPostSlackSend(t *testing.T, fn func(channel, text, identity, file string) (int, string, error)) {
 	t.Helper()
 	orig := postSlackSendFn
 	t.Cleanup(func() { postSlackSendFn = orig })
@@ -38,7 +38,7 @@ func stubSlackSend(t *testing.T, fn func(channel, text, identity string) error) 
 // Server POST succeeds -> rc 0, no fallback to in-process slackSendFn.
 func TestCmdSlackSendViaServerSuccess(t *testing.T) {
 	var gotChannel, gotText string
-	stubPostSlackSend(t, func(channel, text, identity string) (int, string, error) {
+	stubPostSlackSend(t, func(channel, text, identity, file string) (int, string, error) {
 		gotChannel, gotText = channel, text
 		return 200, `{"ok":true}`, nil
 	})
@@ -58,7 +58,7 @@ func TestCmdSlackSendViaServerSuccess(t *testing.T) {
 
 // Server reached but Slack rejected (e.g. account_inactive) -> rc 1, no fallback.
 func TestCmdSlackSendViaServerSlackError(t *testing.T) {
-	stubPostSlackSend(t, func(channel, text, identity string) (int, string, error) {
+	stubPostSlackSend(t, func(channel, text, identity, file string) (int, string, error) {
 		return 502, `{"error":"account_inactive"}`, nil
 	})
 	stubSlackSend(t, func(channel, text, identity string) error {
@@ -74,7 +74,7 @@ func TestCmdSlackSendViaServerSlackError(t *testing.T) {
 
 // Server unreachable -> fall back to in-process slackSendFn.
 func TestCmdSlackSendFallsBackWhenServerUnreachable(t *testing.T) {
-	stubPostSlackSend(t, func(channel, text, identity string) (int, string, error) {
+	stubPostSlackSend(t, func(channel, text, identity, file string) (int, string, error) {
 		return 0, "", fmt.Errorf("connection refused")
 	})
 	var fellBack bool
@@ -99,7 +99,7 @@ func TestCmdSlackSendFallsBackWhenServerUnreachable(t *testing.T) {
 
 // Server unreachable AND in-process fallback fails -> rc 1.
 func TestCmdSlackSendFallbackError(t *testing.T) {
-	stubPostSlackSend(t, func(channel, text, identity string) (int, string, error) {
+	stubPostSlackSend(t, func(channel, text, identity, file string) (int, string, error) {
 		return 0, "", fmt.Errorf("connection refused")
 	})
 	stubSlackSend(t, func(channel, text, identity string) error {
@@ -115,7 +115,7 @@ func TestCmdSlackSendFallbackError(t *testing.T) {
 // --as bot forwards the identity override to the server POST.
 func TestCmdSlackSendForwardsAsBot(t *testing.T) {
 	var gotIdentity string
-	stubPostSlackSend(t, func(channel, text, identity string) (int, string, error) {
+	stubPostSlackSend(t, func(channel, text, identity, file string) (int, string, error) {
 		gotIdentity = identity
 		return 200, `{"ok":true}`, nil
 	})
@@ -131,13 +131,65 @@ func TestCmdSlackSendForwardsAsBot(t *testing.T) {
 }
 
 func TestCmdSlackSendRejectsBadAs(t *testing.T) {
-	stubPostSlackSend(t, func(channel, text, identity string) (int, string, error) {
+	stubPostSlackSend(t, func(channel, text, identity, file string) (int, string, error) {
 		t.Fatal("must not POST when --as is invalid")
 		return 0, "", nil
 	})
 	rc := cmdSlack([]string{"send", "--channel", "C1", "--text", "hi", "--as", "nonsense"})
 	if rc != 2 {
 		t.Errorf("rc = %d, want 2 for invalid --as", rc)
+	}
+}
+
+// --file forwards the path to the server POST (text rides along as comment).
+func TestCmdSlackSendForwardsFile(t *testing.T) {
+	var gotFile, gotText string
+	stubPostSlackSend(t, func(channel, text, identity, file string) (int, string, error) {
+		gotFile, gotText = file, text
+		return 200, `{"ok":true}`, nil
+	})
+	rc := cmdSlack([]string{"send", "--channel", "C1", "--file", "/tmp/x.pdf", "--text", "see attached", "--as", "bot"})
+	if rc != 0 {
+		t.Fatalf("rc = %d, want 0", rc)
+	}
+	if gotFile != "/tmp/x.pdf" || gotText != "see attached" {
+		t.Errorf("forwarded file=%q text=%q, want /tmp/x.pdf/see attached", gotFile, gotText)
+	}
+}
+
+// --file with no --text is allowed (attachment without a comment).
+func TestCmdSlackSendFileNoTextAllowed(t *testing.T) {
+	stubPostSlackSend(t, func(channel, text, identity, file string) (int, string, error) {
+		return 200, `{"ok":true}`, nil
+	})
+	rc := cmdSlack([]string{"send", "--channel", "C1", "--file", "/tmp/x.png"})
+	if rc != 0 {
+		t.Errorf("rc = %d, want 0 (file without text is valid)", rc)
+	}
+}
+
+// Server unreachable with --file -> fall back to slackFileSendFn, not slackSendFn.
+func TestCmdSlackSendFileFallsBack(t *testing.T) {
+	stubPostSlackSend(t, func(channel, text, identity, file string) (int, string, error) {
+		return 0, "", fmt.Errorf("connection refused")
+	})
+	stubSlackSend(t, func(channel, text, identity string) error {
+		t.Fatal("text fallback must not be used for a file send")
+		return nil
+	})
+	var gotFile string
+	orig := slackFileSendFn
+	t.Cleanup(func() { slackFileSendFn = orig })
+	slackFileSendFn = func(channel, comment, filePath, identity string) error {
+		gotFile = filePath
+		return nil
+	}
+	rc := cmdSlack([]string{"send", "--channel", "C1", "--file", "/tmp/x.pdf"})
+	if rc != 0 {
+		t.Fatalf("rc = %d, want 0", rc)
+	}
+	if gotFile != "/tmp/x.pdf" {
+		t.Errorf("file fallback path = %q, want /tmp/x.pdf", gotFile)
 	}
 }
 

@@ -1,7 +1,10 @@
 package monitor
 
 import (
+	"context"
 	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 
 	"github.com/slack-go/slack"
@@ -75,4 +78,65 @@ func SendAs(channel, text, identity string) error {
 // the bot regardless of the setting. Gated by FLOW_SLACK_WRITES_ENABLED.
 func SendAsBot(channel, text string) error {
 	return SendAs(channel, text, "")
+}
+
+// uploadFileFn performs the file upload; a package var so tests don't hit Slack.
+// It uses Slack's external-upload flow (getUploadURLExternal → upload bytes →
+// completeUploadExternal), since the legacy files.upload is being sunset.
+// Uploads require the files:write scope, which the manifest grants to the BOT
+// token — pass identity "bot" (e.g. `flow slack send --as bot --file ...`).
+var uploadFileFn = func(channel, comment, filePath, identity string) error {
+	token, _ := resolveSendIdentity(channel, identity)
+	if strings.TrimSpace(token) == "" {
+		return fmt.Errorf("no slack token configured (FLOW_SLACK_TOKEN / user token)")
+	}
+	info, err := os.Stat(filePath)
+	if err != nil {
+		return fmt.Errorf("stat %s: %w", filePath, err)
+	}
+	if info.IsDir() {
+		return fmt.Errorf("%s is a directory, not a file", filePath)
+	}
+	api := slack.New(token)
+	ctx := context.Background()
+	name := filepath.Base(filePath)
+	up, err := api.GetUploadURLExternalContext(ctx, slack.GetUploadURLExternalParameters{
+		FileName: name,
+		FileSize: int(info.Size()),
+	})
+	if err != nil {
+		return fmt.Errorf("get upload url: %w", err)
+	}
+	if err := api.UploadToURL(ctx, slack.UploadToURLParameters{
+		UploadURL: up.UploadURL,
+		File:      filePath,
+		Filename:  name,
+	}); err != nil {
+		return fmt.Errorf("upload file bytes: %w", err)
+	}
+	if _, err := api.CompleteUploadExternalContext(ctx, slack.CompleteUploadExternalParameters{
+		Files:          []slack.FileSummary{{ID: up.FileID, Title: name}},
+		Channel:        channel,
+		InitialComment: comment,
+	}); err != nil {
+		return fmt.Errorf("complete upload: %w", err)
+	}
+	return nil
+}
+
+// SendFileAs uploads a local file as an attachment to a Slack channel/DM, with
+// an optional initial comment. Identity selection matches SendAs ("bot"|"user"|
+// ""), but note only the bot token carries files:write — automation should pass
+// "bot". Gated by FLOW_SLACK_WRITES_ENABLED.
+func SendFileAs(channel, comment, filePath, identity string) error {
+	if !slackWritesEnabled() {
+		return fmt.Errorf("slack writes disabled (set FLOW_SLACK_WRITES_ENABLED=1)")
+	}
+	if strings.TrimSpace(channel) == "" {
+		return fmt.Errorf("channel is required")
+	}
+	if strings.TrimSpace(filePath) == "" {
+		return fmt.Errorf("file is required")
+	}
+	return uploadFileFn(channel, comment, filePath, identity)
 }

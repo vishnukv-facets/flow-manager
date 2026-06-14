@@ -166,6 +166,50 @@ func TestResolveSendIdentity(t *testing.T) {
 	})
 }
 
+func TestSendFileAsWritesDisabled(t *testing.T) {
+	called := false
+	orig := uploadFileFn
+	defer func() { uploadFileFn = orig }()
+	uploadFileFn = func(channel, comment, filePath, identity string) error { called = true; return nil }
+
+	if err := SendFileAs("C1", "caption", "/tmp/x.pdf", "bot"); err == nil {
+		t.Fatal("expected error when writes disabled")
+	}
+	if called {
+		t.Fatal("uploadFileFn must not be called when writes disabled")
+	}
+}
+
+func TestSendFileAsForwardsToFn(t *testing.T) {
+	t.Setenv("FLOW_SLACK_WRITES_ENABLED", "1")
+	var gotChannel, gotComment, gotPath, gotIdentity string
+	orig := uploadFileFn
+	defer func() { uploadFileFn = orig }()
+	uploadFileFn = func(channel, comment, filePath, identity string) error {
+		gotChannel, gotComment, gotPath, gotIdentity = channel, comment, filePath, identity
+		return nil
+	}
+	if err := SendFileAs("C1", "caption", "/tmp/x.pdf", "bot"); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if gotChannel != "C1" || gotComment != "caption" || gotPath != "/tmp/x.pdf" || gotIdentity != "bot" {
+		t.Errorf("forwarded (%q,%q,%q,%q)", gotChannel, gotComment, gotPath, gotIdentity)
+	}
+}
+
+func TestSendFileAsRequiresChannelAndFile(t *testing.T) {
+	t.Setenv("FLOW_SLACK_WRITES_ENABLED", "1")
+	orig := uploadFileFn
+	defer func() { uploadFileFn = orig }()
+	uploadFileFn = func(channel, comment, filePath, identity string) error { return nil }
+	if err := SendFileAs("", "c", "/tmp/x", "bot"); err == nil {
+		t.Error("expected error for empty channel")
+	}
+	if err := SendFileAs("C1", "c", "", "bot"); err == nil {
+		t.Error("expected error for empty file")
+	}
+}
+
 func TestSendAsBotPropagatesFnError(t *testing.T) {
 	t.Setenv("FLOW_SLACK_WRITES_ENABLED", "1")
 
