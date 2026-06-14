@@ -152,6 +152,23 @@ func storeSlackSecret(account, value string) error {
 	return storeKeyringSecret(slackKeyringService, account, slackSecretAccounts[account], value)
 }
 
+// secretKeyringRouteForEnv reports whether a setting/config env key is routed to
+// the OS keyring (a Slack or GitHub secret), returning its keyring service and
+// account. Used to keep keyring-backed secrets out of config.json on EVERY write
+// path — the connect wizards, the generic Settings save (updateSettings), and the
+// boot-time migration — so no path can leave a token in plaintext (audit P2-2).
+func secretKeyringRouteForEnv(envKey string) (service, account string, ok bool) {
+	if acct, found := slackSecretAccountForEnv(envKey); found {
+		return slackKeyringService, acct, true
+	}
+	for acct, env := range githubSecretAccounts {
+		if env == envKey {
+			return githubKeyringService, acct, true
+		}
+	}
+	return "", "", false
+}
+
 // loadSlackSecretsFromKeyring hydrates the process env from the Slack keyring
 // service at boot.
 func loadSlackSecretsFromKeyring() {

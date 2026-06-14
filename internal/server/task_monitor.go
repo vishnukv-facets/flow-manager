@@ -231,6 +231,20 @@ func taskSessionUnattended(t *flowdb.Task) bool {
 	return false
 }
 
+// withholdUnattendedRespawn reports whether the monitor must refuse to
+// auto-respawn a dead session to deliver this batch. The live-inject paths
+// (wakeTask/wakeSharedTask) already withhold untrusted bodies for unattended
+// sessions via inboxWakePrompt — but the respawn path resurrects the agent with
+// NO wake prompt, so the bootstrapping agent reads the raw inbox.jsonl bodies
+// itself. Auto-resurrecting an unattended (bypass/auto) session to ingest
+// untrusted connector content would therefore feed attacker-influenced text to a
+// no-human-approval agent at bootstrap. In that case we leave the events queued
+// in inbox.jsonl for a supervised (human-initiated) open instead. Mirrors the
+// fail-closed live-path gate (security audit P1-1, respawn path).
+func withholdUnattendedRespawn(task *flowdb.Task, entries []monitor.InboxEntry) bool {
+	return entriesIncludeUntrusted(entries) && taskSessionUnattended(task)
+}
+
 // deliverInboxEvents routes new actionable inbox events to a task's agent:
 //   - flow-managed PTY live  → inject the wake prompt (existing behavior)
 //   - native session live    → leave events in the inbox (no PTY, no duplicate)
@@ -265,6 +279,14 @@ func (s *Server) deliverInboxEvents(slug string, entries []monitor.InboxEntry) e
 	}
 	if task.Status != "backlog" && task.Status != "in-progress" {
 		return nil // finished — don't recreate
+	}
+	if withholdUnattendedRespawn(task, entries) {
+		// Don't resurrect a no-human-approval session to ingest untrusted
+		// connector content — the respawned agent would read the raw inbox
+		// bodies at bootstrap with no one to approve resulting tool calls. Leave
+		// them queued in inbox.jsonl for a supervised open (security audit P1-1).
+		log.Printf("flow monitor: withholding auto-respawn of %s — untrusted inbox content for an unattended (bypass/auto) session; open it manually to review", slug)
+		return nil
 	}
 	provider := task.SessionProvider
 	if provider == "" {

@@ -43,6 +43,10 @@ func New(cfg Config) *Server {
 	// so it survives a restart launched without those exports (otherwise e.g.
 	// GitHub polling silently reverts to off).
 	s.seedConfigFromEnv()
+	// Move any keyring-routed secret still living in config.json plaintext (an
+	// install created before secrets were keyring-backed) into the OS keyring and
+	// strip the plaintext copy, before the hydration below reads it (audit P2-2).
+	s.migrateConfigSecretsToKeyring()
 	// Hydrate GitHub App credentials (PEM, client + webhook secrets) from the OS
 	// keyring into the process env. Runs after applyConfigToEnv so the keyring —
 	// the authoritative at-rest store — wins over a stale config/shell value,
