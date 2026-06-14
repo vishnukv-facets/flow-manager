@@ -6,7 +6,7 @@ import { useDocumentTitle } from '../lib/useDocumentTitle'
 import { BriefPanel } from '../components/BriefPanel'
 import { ErrorNote, Loading } from '../components/ui'
 import { useFloatTip } from '../components/FloatTip'
-import { ago, dateTime } from '../lib/format'
+import { ago, dateTime, until } from '../lib/format'
 import { clickable } from '../lib/a11y'
 import type { PlaybookView } from '../lib/types'
 
@@ -121,7 +121,7 @@ function SchedulePanel({ pb, action }: { pb: PlaybookView; action: ReturnType<ty
             {pb.schedule_paused
               ? 'Paused — will not fire until resumed.'
               : pb.next_fire_at
-                ? `Next run ${dateTime(pb.next_fire_at)}`
+                ? `Next run ${until(pb.next_fire_at)} · ${dateTime(pb.next_fire_at)}`
                 : 'No next run scheduled.'}
             {pb.last_fired_at && ` · last ran ${ago(pb.last_fired_at)}`}
           </div>

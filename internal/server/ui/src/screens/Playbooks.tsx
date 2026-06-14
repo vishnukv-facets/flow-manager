@@ -8,7 +8,7 @@ import { AgentPicker, PermissionPicker } from '../components/pickers'
 import { EmptyState, ErrorNote, Loading, Sparkline } from '../components/ui'
 import { clickable } from '../lib/a11y'
 import { CreatePlaybookModal } from '../components/modals'
-import { ago, shortDate } from '../lib/format'
+import { ago, until } from '../lib/format'
 import type { ToolCapability } from '../lib/types'
 
 const SORTS = [
@@ -210,7 +210,7 @@ export function Playbooks() {
                   {p.schedule_paused
                     ? <>schedule paused</>
                     : p.next_fire_at
-                      ? <>{p.schedule} · next {shortDate(p.next_fire_at)}</>
+                      ? <>{p.schedule} · next {until(p.next_fire_at)}</>
                       : <>{p.schedule}</>}
                 </div>
               )}
