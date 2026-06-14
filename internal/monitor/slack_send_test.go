@@ -11,7 +11,7 @@ func TestSendAsBotWritesDisabled(t *testing.T) {
 	called := false
 	orig := sendAsBotFn
 	defer func() { sendAsBotFn = orig }()
-	sendAsBotFn = func(channel, text string) error {
+	sendAsBotFn = func(channel, text, identity string) error {
 		called = true
 		return nil
 	}
@@ -30,7 +30,7 @@ func TestSendAsBotEmptyChannelError(t *testing.T) {
 
 	orig := sendAsBotFn
 	defer func() { sendAsBotFn = orig }()
-	sendAsBotFn = func(channel, text string) error { return nil }
+	sendAsBotFn = func(channel, text, identity string) error { return nil }
 
 	if err := SendAsBot("", "hello"); err == nil {
 		t.Fatal("expected error for empty channel")
@@ -45,7 +45,7 @@ func TestSendAsBotEmptyTextError(t *testing.T) {
 
 	orig := sendAsBotFn
 	defer func() { sendAsBotFn = orig }()
-	sendAsBotFn = func(channel, text string) error { return nil }
+	sendAsBotFn = func(channel, text, identity string) error { return nil }
 
 	if err := SendAsBot("D123", ""); err == nil {
 		t.Fatal("expected error for empty text")
@@ -61,7 +61,7 @@ func TestSendAsBotForwardsToFn(t *testing.T) {
 	var gotChannel, gotText string
 	orig := sendAsBotFn
 	defer func() { sendAsBotFn = orig }()
-	sendAsBotFn = func(channel, text string) error {
+	sendAsBotFn = func(channel, text, identity string) error {
 		gotChannel = channel
 		gotText = text
 		return nil
@@ -110,21 +110,21 @@ func TestResolveSendIdentity(t *testing.T) {
 	t.Run("default identity is bot", func(t *testing.T) {
 		t.Setenv("FLOW_SLACK_SEND_AS", "")
 		resetCommandChannelCache()
-		if tok, asUser := resolveSendIdentity("C123"); tok != "xoxb-bot" || asUser {
+		if tok, asUser := resolveSendIdentity("C123", ""); tok != "xoxb-bot" || asUser {
 			t.Errorf("default = (%q,%v), want (xoxb-bot,false)", tok, asUser)
 		}
 	})
 	t.Run("user identity posts as user in a channel", func(t *testing.T) {
 		t.Setenv("FLOW_SLACK_SEND_AS", "user")
 		resetCommandChannelCache()
-		if tok, asUser := resolveSendIdentity("C123"); tok != "xoxp-user" || !asUser {
+		if tok, asUser := resolveSendIdentity("C123", ""); tok != "xoxp-user" || !asUser {
 			t.Errorf("user/channel = (%q,%v), want (xoxp-user,true)", tok, asUser)
 		}
 	})
 	t.Run("command IM is always the bot even when user is set", func(t *testing.T) {
 		t.Setenv("FLOW_SLACK_SEND_AS", "user")
 		resetCommandChannelCache()
-		if tok, asUser := resolveSendIdentity("Dcmd"); tok != "xoxb-bot" || asUser {
+		if tok, asUser := resolveSendIdentity("Dcmd", ""); tok != "xoxb-bot" || asUser {
 			t.Errorf("user/command-IM = (%q,%v), want (xoxb-bot,false) — never impersonate operator in the command DM", tok, asUser)
 		}
 	})
@@ -135,8 +135,33 @@ func TestResolveSendIdentity(t *testing.T) {
 		t.Setenv("FLOW_SLACK_TOKEN", "")
 		t.Setenv("SLACK_TOKEN", "")
 		resetCommandChannelCache()
-		if tok, asUser := resolveSendIdentity("C123"); tok != "xoxb-bot" || asUser {
+		if tok, asUser := resolveSendIdentity("C123", ""); tok != "xoxb-bot" || asUser {
 			t.Errorf("user/no-user-token = (%q,%v), want (xoxb-bot,false) fallback", tok, asUser)
+		}
+	})
+	t.Run("override bot wins over global user", func(t *testing.T) {
+		t.Setenv("FLOW_SLACK_SEND_AS", "user") // global says user...
+		resetCommandChannelCache()
+		// ...but an explicit "bot" override forces the bot token (the path
+		// `flow slack send --as bot` uses so automation gets chat:write).
+		if tok, asUser := resolveSendIdentity("C123", "bot"); tok != "xoxb-bot" || asUser {
+			t.Errorf("override-bot = (%q,%v), want (xoxb-bot,false)", tok, asUser)
+		}
+	})
+	t.Run("override user wins over global bot", func(t *testing.T) {
+		t.Setenv("FLOW_SLACK_SEND_AS", "bot") // global says bot...
+		resetCommandChannelCache()
+		// ...but an explicit "user" override posts as the operator.
+		if tok, asUser := resolveSendIdentity("C123", "user"); tok != "xoxp-user" || !asUser {
+			t.Errorf("override-user = (%q,%v), want (xoxp-user,true)", tok, asUser)
+		}
+	})
+	t.Run("override cannot impersonate operator in command IM", func(t *testing.T) {
+		t.Setenv("FLOW_SLACK_SEND_AS", "bot")
+		resetCommandChannelCache()
+		// Even an explicit user override is overruled for the command IM.
+		if tok, asUser := resolveSendIdentity("Dcmd", "user"); tok != "xoxb-bot" || asUser {
+			t.Errorf("override-user/command-IM = (%q,%v), want (xoxb-bot,false)", tok, asUser)
 		}
 	})
 }
@@ -147,7 +172,7 @@ func TestSendAsBotPropagatesFnError(t *testing.T) {
 	boom := errors.New("network error")
 	orig := sendAsBotFn
 	defer func() { sendAsBotFn = orig }()
-	sendAsBotFn = func(channel, text string) error { return boom }
+	sendAsBotFn = func(channel, text, identity string) error { return boom }
 
 	err := SendAsBot("D123", "hello")
 	if !errors.Is(err, boom) {

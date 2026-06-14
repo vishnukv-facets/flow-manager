@@ -11,6 +11,10 @@ import (
 type slackSendRequest struct {
 	Channel string `json:"channel"`
 	Text    string `json:"text"`
+	// As forces the send identity ("bot" | "user"); empty honors the server's
+	// FLOW_SLACK_SEND_AS. `flow slack send --as bot` sets this so automation
+	// posts as the bot (which carries chat:write).
+	As string `json:"as"`
 }
 
 // handleSlackSend posts a Slack message as the flow bot using the SERVER's
@@ -36,7 +40,7 @@ func (s *Server) handleSlackSend(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "text is required", http.StatusBadRequest)
 		return
 	}
-	if err := monitor.SendAsBot(req.Channel, req.Text); err != nil {
+	if err := monitor.SendAs(req.Channel, req.Text, req.As); err != nil {
 		// 502: we reached the server but Slack (or the writes gate) rejected
 		// the send. The CLI surfaces this and must NOT fall back to its own
 		// (potentially stale) token.
